@@ -45,5 +45,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Aplikacja wymaga dostępu do aparatu w celu transmisji i nagrywania meczów sportowych.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Aplikacja wymaga dostępu do mikrofonu w celu rejestracji dźwięku podczas transmisji meczu.</string>
 </dict>
 </plist>

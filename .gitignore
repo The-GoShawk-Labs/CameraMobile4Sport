@@ -1,9 +1,12 @@
-# Miscellaneous
+# Miscellaneous & OS
 *.class
 *.log
 *.pyc
 *.swp
 .DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 .atom/
 .build/
 .buildlog/
@@ -18,28 +21,60 @@ migrate_working_dir/
 *.iws
 .idea/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+# VS Code related
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
 
 # Flutter/Dart/Pub related
 **/doc/api/
 **/ios/Flutter/.last_build_id
 .dart_tool/
+.flutter-plugins
 .flutter-plugins-dependencies
+.packages
 .pub-cache/
 .pub/
-/build/
+build/
+**/build/
 /coverage/
 
-# Symbolication related
-app.*.symbols
+# Ephemeral platform directories
+**/flutter/ephemeral/
+**/Flutter/ephemeral/
 
-# Obfuscation related
+# Symbolication & Obfuscation related
+app.*.symbols
 app.*.map.json
 
-# Android Studio will place build artifacts here
+# Android build artifacts and local configs
 /android/app/debug
 /android/app/profile
 /android/app/release
+android/local.properties
+android/.gradle/
+.gradle/
+captures/
+*.hprof
+hs_err_pid*
+
+# Cybersecurity: Secrets, Keys, Credentials, and Environment files
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*.pepk
+*.keystore
+*.jks
+key.properties
+*secrets*.json
+*credentials*.json
+**/google-services.json
+**/GoogleService-Info.plist
+
