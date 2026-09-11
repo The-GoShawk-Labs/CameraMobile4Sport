@@ -734,9 +734,14 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
         color: isOutdoor ? Colors.black : const Color(0xE60A0E17),
         border: const Border(bottom: BorderSide(color: Colors.white10)),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
+      child: LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minWidth: constraints.maxWidth),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
           // LEWA SEKCJA
           Row(
             mainAxisSize: MainAxisSize.min,
@@ -1013,7 +1018,10 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
           ),
         ],
       ),
-    );
+    ),
+  ),
+),
+);
   }
 
   Widget _buildFullCameraBackground(

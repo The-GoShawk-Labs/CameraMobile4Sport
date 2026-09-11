@@ -8,6 +8,7 @@ import 'package:volleylive/core/services/wakelock_service.dart';
 import 'package:volleylive/core/theme/app_theme.dart';
 import 'package:volleylive/domain/models/camera_config.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
+import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/providers/match_provider.dart';
 import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
@@ -81,6 +82,124 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
     final minutes = twoDigits(d.inMinutes.remainder(60));
     final seconds = twoDigits(d.inSeconds.remainder(60));
     return '$hours:$minutes:$seconds';
+  }
+
+  Future<void> _onToggleRecording(BuildContext context, CameraProvider camera) async {
+    final wasRecording = camera.recordingState == RecordingState.recording;
+    await camera.toggleMasterRecording();
+    if (!context.mounted) return;
+
+    if (wasRecording) {
+      if (camera.recordingState == RecordingState.saved && camera.lastRecordingResult != null) {
+        _showRecordingSummaryDialog(context, camera.lastRecordingResult!);
+      } else if (camera.recordingState == RecordingState.failed) {
+        _showRecordingErrorNotice(context, camera.recordingErrorMessage ?? 'Nie udało się zapisać pliku wideo Master REC.');
+      }
+    } else {
+      if (camera.recordingState == RecordingState.failed) {
+        _showRecordingErrorNotice(context, camera.recordingErrorMessage ?? 'Nie udało się rozpocząć nagrywania.');
+      }
+    }
+  }
+
+  void _showRecordingErrorNotice(BuildContext context, String error) {
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xFFE53935),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+        content: Row(
+          children: [
+            const Icon(Icons.error_outline, color: Colors.white, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                error,
+                style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRecordingSummaryDialog(BuildContext context, MasterRecordingResult result) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161F30),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: AppTheme.cyanAccent, width: 1),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.check_circle, color: AppTheme.greenLive, size: 22),
+            SizedBox(width: 8),
+            Text(
+              'Master REC Zapisany',
+              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Sprzętowy plik MP4 został pomyślnie zarchiwizowany na urządzeniu:',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+            ),
+            const SizedBox(height: 14),
+            _buildSummaryRow(Icons.movie_outlined, 'Plik', result.fileName),
+            const SizedBox(height: 8),
+            _buildSummaryRow(Icons.timer_outlined, 'Czas nagrania', result.formattedDuration),
+            const SizedBox(height: 8),
+            _buildSummaryRow(Icons.data_usage, 'Rozmiar', result.formattedSize),
+            const SizedBox(height: 8),
+            _buildSummaryRow(Icons.folder_outlined, 'Ścieżka zapisu', result.filePath, isSmall: true),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.cyanAccent,
+              foregroundColor: Colors.black,
+            ),
+            child: const Text('ZAMKNIJ', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryRow(IconData icon, String label, String value, {bool isSmall = false}) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: AppTheme.cyanAccent, size: 16),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: isSmall ? 10 : 12,
+                  color: Colors.white,
+                  fontWeight: isSmall ? FontWeight.normal : FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   void _showBackgroundRecNotice(BuildContext context, CameraProvider camera) {
@@ -531,32 +650,64 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
               child: Row(
                 children: [
                   // MASTER REC STATUS
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: isRecording ? AppTheme.redLive.withValues(alpha: 0.9) : Colors.black54,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: isRecording ? Colors.white70 : Colors.white24,
-                        width: 1,
+                  InkWell(
+                    onTap: () {
+                      if (camera.recordingState == RecordingState.saved && camera.lastRecordingResult != null) {
+                        _showRecordingSummaryDialog(context, camera.lastRecordingResult!);
+                      } else if (camera.recordingState == RecordingState.failed && camera.recordingErrorMessage != null) {
+                        _showRecordingErrorNotice(context, camera.recordingErrorMessage!);
+                      }
+                    },
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isRecording
+                            ? AppTheme.redLive.withValues(alpha: 0.9)
+                            : camera.recordingState == RecordingState.failed
+                                ? Colors.red.shade900.withValues(alpha: 0.9)
+                                : Colors.black54,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isRecording
+                              ? Colors.white70
+                              : camera.recordingState == RecordingState.saved
+                                  ? AppTheme.greenLive
+                                  : Colors.white24,
+                          width: 1,
+                        ),
                       ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.fiber_manual_record,
-                          color: isRecording ? Colors.white : AppTheme.greenLive,
-                          size: 10,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          isRecording
-                              ? 'REC: ${_formatDuration(camera.masterRecDuration)}'
-                              : 'REC: GOTOWY',
-                          style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Colors.white),
-                        ),
-                      ],
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            camera.recordingState == RecordingState.saved
+                                ? Icons.check_circle
+                                : camera.recordingState == RecordingState.failed
+                                    ? Icons.error_outline
+                                    : Icons.fiber_manual_record,
+                            color: isRecording
+                                ? Colors.white
+                                : camera.recordingState == RecordingState.saved
+                                    ? AppTheme.greenLive
+                                    : camera.recordingState == RecordingState.failed
+                                        ? Colors.white
+                                        : AppTheme.greenLive,
+                            size: 10,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            isRecording
+                                ? 'REC: ${_formatDuration(camera.masterRecDuration)}'
+                                : camera.recordingState == RecordingState.saved && camera.lastRecordingResult != null
+                                    ? 'REC: ZAPISANO (${camera.lastRecordingResult!.formattedSize})'
+                                    : camera.recordingState == RecordingState.failed
+                                        ? 'REC: BŁĄD'
+                                        : 'REC: GOTOWY',
+                            style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                   const SizedBox(width: 6),
@@ -749,7 +900,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                         Icon(Icons.fullscreen, color: Colors.white70, size: 14),
                         SizedBox(width: 4),
                         Text(
-                          'KADR',
+                          'CZYSTY KADR',
                           style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white70),
                         ),
                       ],
@@ -761,32 +912,64 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
             const SizedBox(width: 8),
 
             // MASTER REC WSKAŹNIK STANU
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: isRecording ? AppTheme.redLive.withValues(alpha: 0.9) : Colors.black54,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: isRecording ? Colors.white70 : Colors.white24,
-                  width: 1,
+            InkWell(
+              onTap: () {
+                if (camera.recordingState == RecordingState.saved && camera.lastRecordingResult != null) {
+                  _showRecordingSummaryDialog(context, camera.lastRecordingResult!);
+                } else if (camera.recordingState == RecordingState.failed && camera.recordingErrorMessage != null) {
+                  _showRecordingErrorNotice(context, camera.recordingErrorMessage!);
+                }
+              },
+              borderRadius: BorderRadius.circular(20),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: isRecording
+                      ? AppTheme.redLive.withValues(alpha: 0.9)
+                      : camera.recordingState == RecordingState.failed
+                          ? Colors.red.shade900.withValues(alpha: 0.9)
+                          : Colors.black54,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: isRecording
+                        ? Colors.white70
+                        : camera.recordingState == RecordingState.saved
+                            ? AppTheme.greenLive
+                            : Colors.white24,
+                    width: 1,
+                  ),
                 ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.fiber_manual_record,
-                    color: isRecording ? Colors.white : AppTheme.greenLive,
-                    size: 11,
-                  ),
-                  const SizedBox(width: 5),
-                  Text(
-                    isRecording
-                        ? 'REC: ${_formatDuration(camera.masterRecDuration)}'
-                        : 'REC: GOTOWY',
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
-                  ),
-                ],
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      camera.recordingState == RecordingState.saved
+                          ? Icons.check_circle
+                          : camera.recordingState == RecordingState.failed
+                              ? Icons.error_outline
+                              : Icons.fiber_manual_record,
+                      color: isRecording
+                          ? Colors.white
+                          : camera.recordingState == RecordingState.saved
+                              ? AppTheme.greenLive
+                              : camera.recordingState == RecordingState.failed
+                                  ? Colors.white
+                                  : AppTheme.greenLive,
+                      size: 11,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      isRecording
+                          ? 'REC: ${_formatDuration(camera.masterRecDuration)}'
+                          : camera.recordingState == RecordingState.saved && camera.lastRecordingResult != null
+                              ? 'REC: ZAPISANO (${camera.lastRecordingResult!.formattedSize})'
+                              : camera.recordingState == RecordingState.failed
+                                  ? 'REC: BŁĄD'
+                                  : 'MASTER REC: GOTOWY',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(width: 8),
@@ -890,7 +1073,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                 // GŁÓWNY PRZYCISK: DUŻY, CZYTELNY, W PEŁNI WIDOCZNY NA SMARTFONIE
                 Expanded(
                   child: InkWell(
-                    onTap: () => camera.toggleMasterRecording(),
+                    onTap: () => _onToggleRecording(context, camera),
                     borderRadius: BorderRadius.circular(16),
                     child: Container(
                       height: 48,
@@ -919,7 +1102,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                           ),
                           const SizedBox(width: 8),
                           Text(
-                            isRecording ? 'ZAKOŃCZ NAGRYWANIE' : 'START TRANSMISJI / REC',
+                            isRecording ? 'ZAKOŃCZ NAGRYWANIE' : 'START TRANSMISJI / ZAPISU',
                             style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w900,
@@ -1034,7 +1217,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
           // GŁÓWNY PRZYCISK: "START TRANSMISJI / ZAPISU"
           Expanded(
             child: InkWell(
-              onTap: () => camera.toggleMasterRecording(),
+              onTap: () => _onToggleRecording(context, camera),
               borderRadius: BorderRadius.circular(14),
               child: Container(
                 height: 44,
@@ -1054,26 +1237,29 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                     ),
                   ],
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      isRecording ? Icons.stop_circle : Icons.fiber_smart_record,
-                      color: isRecording ? Colors.white : Colors.black,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      isRecording ? 'ZAKOŃCZ' : 'START TRANSMISJI / REC',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        isRecording ? Icons.stop_circle : Icons.fiber_smart_record,
                         color: isRecording ? Colors.white : Colors.black,
-                        letterSpacing: 0.3,
+                        size: 20,
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 6),
+                      Text(
+                        isRecording ? 'ZAKOŃCZ' : 'START TRANSMISJI / ZAPISU',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: isRecording ? Colors.white : Colors.black,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

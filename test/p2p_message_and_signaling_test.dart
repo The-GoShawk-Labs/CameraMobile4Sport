@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:volleylive/core/utils/pairing_scheme_helper.dart';
 import 'package:volleylive/data/models/p2p_message.dart';
 import 'package:volleylive/data/repositories/p2p_connection_repository.dart';
 import 'package:volleylive/data/services/local_signaling_service.dart';
@@ -200,6 +201,136 @@ void main() {
       expect(provider.currentRole.idName, equals('phone_b_controller'));
 
       provider.dispose();
+    });
+
+    test('LocalSignalingService detects valid IPv4 address', () async {
+      final service = LocalSignalingService();
+      final ip = await service.getLocalIpAddress();
+      expect(ip, isNotEmpty);
+      // Musi być prawidłowym formatem IPv4
+      final parts = ip.split('.');
+      expect(parts.length, equals(4));
+      for (final part in parts) {
+        final num = int.tryParse(part);
+        expect(num, isNotNull);
+        expect(num! >= 0 && num <= 255, isTrue);
+      }
+      service.dispose();
+    });
+  });
+
+  group('Zero-Config QR Pairing & URI Scheme Tests', () {
+    test('PairingSchemeHelper builds and parses full URI correctly', () {
+      final uri = PairingSchemeHelper.buildUri(
+        host: '192.168.43.1',
+        port: 8080,
+        code: 'VL-9922',
+      );
+      expect(uri, equals('volleylive://192.168.43.1:8080/VL-9922'));
+
+      final parsed = PairingSchemeHelper.parse(uri);
+      expect(parsed, isNotNull);
+      expect(parsed!.host, equals('192.168.43.1'));
+      expect(parsed.port, equals(8080));
+      expect(parsed.code, equals('VL-9922'));
+      expect(parsed.uri, equals(uri));
+    });
+
+    test('PairingSchemeHelper handles URI without port with default 8080', () {
+      final parsed = PairingSchemeHelper.parse('volleylive://192.168.1.200/VL-5544');
+      expect(parsed, isNotNull);
+      expect(parsed!.host, equals('192.168.1.200'));
+      expect(parsed.port, equals(8080));
+      expect(parsed.code, equals('VL-5544'));
+    });
+
+    test('PairingSchemeHelper handles legacy volleylive://<PIN> format', () {
+      final parsed = PairingSchemeHelper.parse('volleylive://VL-8492');
+      expect(parsed, isNotNull);
+      expect(parsed!.host, equals('127.0.0.1'));
+      expect(parsed.port, equals(8080));
+      expect(parsed.code, equals('VL-8492'));
+    });
+
+    test('PairingSchemeHelper handles raw PIN text entry', () {
+      final parsed = PairingSchemeHelper.parse('VL-1234');
+      expect(parsed, isNotNull);
+      expect(parsed!.host, equals('127.0.0.1'));
+      expect(parsed.port, equals(8080));
+      expect(parsed.code, equals('VL-1234'));
+    });
+
+    test('PairingSchemeHelper handles null, whitespace and empty input', () {
+      expect(PairingSchemeHelper.parse(null), isNull);
+      expect(PairingSchemeHelper.parse(''), isNull);
+      expect(PairingSchemeHelper.parse('   '), isNull);
+    });
+
+    test('Autonomous Zero-Config pairing handshake between Host and Client', () async {
+      final hostTransport = WebRtcTransportService();
+      final hostRepo = P2PConnectionRepository(transportService: hostTransport);
+      final hostProvider = P2PConnectionProvider(repository: hostRepo);
+
+      final clientTransport = WebRtcTransportService();
+      final clientRepo = P2PConnectionRepository(transportService: clientTransport);
+      final clientProvider = P2PConnectionProvider(repository: clientRepo);
+
+      const testPort = 18992;
+      const testCode = 'VL-3388';
+
+      // 1. Phone B (Host) uruchamia sesję na wybranym porcie
+      await hostProvider.hostSession(pairingCode: testCode, port: testPort);
+      expect(hostProvider.isHost, isTrue);
+      expect(hostProvider.pairingCode, equals(testCode));
+      expect(hostProvider.serverPort, equals(testPort));
+      expect(hostProvider.pairingUri, contains(':$testPort/$testCode'));
+
+      // 2. Phone A symuluje odczyt kodu QR wygenerowanego przez Phone B
+      final qrString = hostProvider.pairingUri;
+      final parsedData = PairingSchemeHelper.parse(qrString);
+      expect(parsedData, isNotNull);
+      expect(parsedData!.code, equals(testCode));
+      expect(parsedData.port, equals(testPort));
+
+      // 3. Phone A łączy się z Phone B przy użyciu danych ze skanu QR
+      // Dla stabilności testu lokalnego używamy localhost, jeśli detectedIp nie zezwala na loopback bind
+      await clientProvider.joinSession(
+        hostAddress: '127.0.0.1',
+        pairingCode: parsedData.code,
+        port: parsedData.port,
+      );
+
+      await Future.delayed(const Duration(milliseconds: 150));
+      expect(clientProvider.connectionState, equals(CameraConnectionState.connected));
+      expect(hostProvider.connectionState, equals(CameraConnectionState.connected));
+
+      // 4. Wymiana komunikatów przez ustanowione połączenie
+      await hostProvider.broadcastScore(
+        const ScoreUpdatePayload(
+          pointsA: 15,
+          pointsB: 12,
+          setsA: 1,
+          setsB: 0,
+          teamA: 'HOST A',
+          teamB: 'GUEST B',
+          servingTeam: 'A',
+          setNumber: 2,
+          timeoutsA: 0,
+          timeoutsB: 1,
+          isMatchFinished: false,
+        ),
+      );
+
+      await Future.delayed(const Duration(milliseconds: 150));
+      expect(clientProvider.lastReceivedScore, isNotNull);
+      expect(clientProvider.lastReceivedScore?.pointsA, equals(15));
+      expect(clientProvider.lastReceivedScore?.pointsB, equals(12));
+
+      // 5. Rozłączenie
+      await clientProvider.disconnect();
+      await hostProvider.disconnect();
+      clientProvider.dispose();
+      hostProvider.dispose();
     });
   });
 }

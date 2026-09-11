@@ -6,7 +6,9 @@ abstract class ISignalingService {
   Stream<P2PMessage> get incomingMessages;
   Stream<bool> get isConnectedStream;
   bool get isConnected;
+  String? get currentHostAddress;
 
+  Future<String> getLocalIpAddress();
   Future<void> startLocalServer({int port = 8080});
   Future<void> stopServer();
 
@@ -37,7 +39,80 @@ class LocalSignalingService implements ISignalingService {
   @override
   bool get isConnected => _isConnected;
 
+  @override
   String? get currentHostAddress => _currentHostAddress;
+
+  /// Wykrywa rzeczywisty lokalny adres IPv4 interfejsu Wi-Fi lub Hotspota
+  static Future<String?> findLocalIpAddress() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        includeLoopback: false,
+        type: InternetAddressType.IPv4,
+      );
+
+      InternetAddress? wifiOrHotspotCandidate;
+      InternetAddress? privateIpCandidate;
+      InternetAddress? anyCandidate;
+
+      for (final iface in interfaces) {
+        final name = iface.name.toLowerCase();
+        final isWifiOrHotspot = name.contains('wlan') ||
+            name.contains('ap') ||
+            name.contains('wifi') ||
+            name.contains('hotspot') ||
+            name.contains('rndis') ||
+            name.contains('swlan');
+
+        for (final addr in iface.addresses) {
+          if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
+            anyCandidate ??= addr;
+
+            final ip = addr.address;
+            final isPrivate = ip.startsWith('192.168.') ||
+                ip.startsWith('10.') ||
+                _is172Private(ip);
+
+            if (isWifiOrHotspot) {
+              wifiOrHotspotCandidate ??= addr;
+            } else if (isPrivate) {
+              privateIpCandidate ??= addr;
+            }
+          }
+        }
+      }
+
+      if (wifiOrHotspotCandidate != null) {
+        return wifiOrHotspotCandidate.address;
+      }
+      if (privateIpCandidate != null) {
+        return privateIpCandidate.address;
+      }
+      if (anyCandidate != null) {
+        return anyCandidate.address;
+      }
+    } catch (_) {
+      // W środowiskach testowych lub przy braku uprawnień
+    }
+    return null;
+  }
+
+  static bool _is172Private(String ip) {
+    if (!ip.startsWith('172.')) return false;
+    final parts = ip.split('.');
+    if (parts.length >= 2) {
+      final second = int.tryParse(parts[1]);
+      if (second != null && second >= 16 && second <= 31) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @override
+  Future<String> getLocalIpAddress() async {
+    final ip = await findLocalIpAddress();
+    return ip ?? '127.0.0.1';
+  }
 
   /// Uruchomienie lokalnego serwera WebSocket (np. na telefonie kontrolującym Phone B)
   @override
@@ -46,7 +121,8 @@ class LocalSignalingService implements ISignalingService {
 
     try {
       _server = await HttpServer.bind(InternetAddress.anyIPv4, port);
-      _currentHostAddress = _server?.address.address;
+      final detectedIp = await findLocalIpAddress();
+      _currentHostAddress = detectedIp ?? '127.0.0.1';
 
       _server?.listen((HttpRequest request) async {
         if (WebSocketTransformer.isUpgradeRequest(request)) {

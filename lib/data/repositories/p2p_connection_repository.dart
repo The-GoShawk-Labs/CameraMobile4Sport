@@ -8,9 +8,10 @@ abstract class IP2PConnectionRepository {
   Stream<StreamHealthMetrics> get healthMetricsStream;
   Stream<P2PMessage> get incomingMessagesStream;
   CameraConnectionState get currentState;
+  String? get hostAddress;
 
-  Future<void> hostMatchSession({required String pairingCode, required String role});
-  Future<void> joinMatchSession({required String hostAddress, required String pairingCode, required String role});
+  Future<void> hostMatchSession({required String pairingCode, required String role, int port = 8080});
+  Future<void> joinMatchSession({required String hostAddress, required String pairingCode, required String role, int port = 8080});
   Future<void> sendScoreUpdate(ScoreUpdatePayload scorePayload, {required String role});
   Future<void> sendCameraControl(CameraControlPayload cameraPayload, {required String role});
   Future<void> sendRecorderControl({required bool isRecording, required String role, String? matchId});
@@ -37,8 +38,11 @@ class P2PConnectionRepository implements IP2PConnectionRepository {
   CameraConnectionState get currentState => _transportService.currentState;
 
   @override
-  Future<void> hostMatchSession({required String pairingCode, required String role}) async {
-    await _transportService.initializeAsHost(pairingCode: pairingCode, myRole: role);
+  String? get hostAddress => _transportService.hostAddress;
+
+  @override
+  Future<void> hostMatchSession({required String pairingCode, required String role, int port = 8080}) async {
+    await _transportService.initializeAsHost(pairingCode: pairingCode, myRole: role, port: port);
   }
 
   @override
@@ -46,11 +50,13 @@ class P2PConnectionRepository implements IP2PConnectionRepository {
     required String hostAddress,
     required String pairingCode,
     required String role,
+    int port = 8080,
   }) async {
     await _transportService.initializeAsClient(
       hostAddress: hostAddress,
       pairingCode: pairingCode,
       myRole: role,
+      port: port,
     );
   }
 

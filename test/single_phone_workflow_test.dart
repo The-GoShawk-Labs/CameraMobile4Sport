@@ -160,6 +160,11 @@ void main() {
       // Zatrzymujemy nagrywanie
       await cameraProvider.toggleMasterRecording();
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Bezpieczne odmontowanie drzewa widgetów (zatrzymuje animacje PulseDot i zwalnia zasoby)
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
     });
   });
 }

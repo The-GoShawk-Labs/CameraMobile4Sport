@@ -53,6 +53,7 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
   Widget build(BuildContext context) {
     final matchProvider = context.watch<MatchProvider>();
     final streamerProvider = context.watch<StreamerProvider>();
+    final p2pProvider = context.watch<P2PConnectionProvider>();
 
     return Scaffold(
       appBar: AppBar(
@@ -316,13 +317,51 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
                             boxShadow: AppTheme.cyanGlow(blur: 20, opacity: 0.35),
                           ),
                           child: QrImageView(
-                            data: 'volleylive://${matchProvider.session.pairingCode}',
+                            data: p2pProvider.pairingUri,
                             version: QrVersions.auto,
                             size: 190.0,
                           ),
                         ),
 
-                        const SizedBox(height: 18),
+                        const SizedBox(height: 14),
+
+                        // WSKAŹNIK DIAGNOSTYCZNY LOKALNEGO ADRESU IP
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF0C1322),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.35)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.wifi_tethering, color: AppTheme.cyanAccent, size: 16),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Lokalny IP: ${p2pProvider.hostAddress}:${p2pProvider.serverPort}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                  letterSpacing: 0.4,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              InkWell(
+                                onTap: () {
+                                  Clipboard.setData(ClipboardData(text: '${p2pProvider.hostAddress}:${p2pProvider.serverPort}'));
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Skopiowano adres IP hosta do schowka!')),
+                                  );
+                                },
+                                child: const Icon(Icons.copy, size: 14, color: AppTheme.cyanAccent),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        const SizedBox(height: 12),
 
                         // PIGUŁKA KODU PIN ZE SKRÓTEM DO KOPIOWANIA
                         InkWell(

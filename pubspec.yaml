@@ -46,6 +46,8 @@ dependencies:
   video_player: ^2.9.2
   flutter_secure_storage: ^9.2.4
   wakelock_plus: ^1.2.8
+  mobile_scanner: ^7.4.1
+  path_provider: ^2.1.6
 
 dev_dependencies:
   flutter_test:

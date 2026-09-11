@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:volleylive/core/utils/pairing_scheme_helper.dart';
 import 'package:volleylive/data/models/p2p_message.dart';
 import 'package:volleylive/data/repositories/p2p_connection_repository.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
@@ -13,6 +14,7 @@ class P2PConnectionProvider extends ChangeNotifier {
 
   String _pairingCode = '';
   String _hostAddress = '127.0.0.1';
+  int _serverPort = 8080;
   bool _isHost = false;
 
   ScoreUpdatePayload? _lastReceivedScore;
@@ -33,6 +35,8 @@ class P2PConnectionProvider extends ChangeNotifier {
   StreamHealthMetrics get healthMetrics => _healthMetrics;
   String get pairingCode => _pairingCode;
   String get hostAddress => _hostAddress;
+  int get serverPort => _serverPort;
+  String get pairingUri => PairingSchemeHelper.buildUri(host: _hostAddress, port: _serverPort, code: _pairingCode);
   bool get isHost => _isHost;
   ScoreUpdatePayload? get lastReceivedScore => _lastReceivedScore;
   CameraControlPayload? get lastReceivedCameraControl => _lastReceivedCameraControl;
@@ -80,11 +84,13 @@ class P2PConnectionProvider extends ChangeNotifier {
   }
 
   /// Hostowanie sesji (np. Phone B / Reżyserka lub Phone A)
-  Future<void> hostSession({required String pairingCode}) async {
+  Future<void> hostSession({required String pairingCode, int port = 8080}) async {
     _pairingCode = pairingCode;
+    _serverPort = port;
     _isHost = true;
     _currentRole = DeviceRole.scorerPhoneB;
-    await _repository.hostMatchSession(pairingCode: pairingCode, role: _currentRole.idName);
+    await _repository.hostMatchSession(pairingCode: pairingCode, role: _currentRole.idName, port: port);
+    _hostAddress = _repository.hostAddress ?? '127.0.0.1';
     notifyListeners();
   }
 
@@ -92,17 +98,29 @@ class P2PConnectionProvider extends ChangeNotifier {
   Future<void> joinSession({
     required String hostAddress,
     required String pairingCode,
+    int port = 8080,
   }) async {
     _hostAddress = hostAddress;
     _pairingCode = pairingCode;
+    _serverPort = port;
     _isHost = false;
     _currentRole = DeviceRole.cameraPhoneA;
     await _repository.joinMatchSession(
       hostAddress: hostAddress,
       pairingCode: pairingCode,
       role: _currentRole.idName,
+      port: port,
     );
     notifyListeners();
+  }
+
+  /// Dołączanie na podstawie sparsowanych danych kodu QR
+  Future<void> joinWithPairingData(PairingData data) {
+    return joinSession(
+      hostAddress: data.host,
+      pairingCode: data.code,
+      port: data.port,
+    );
   }
 
   /// Wysłanie aktualizacji wyniku do sparowanego telefonu

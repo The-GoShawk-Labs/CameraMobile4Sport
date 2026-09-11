@@ -8,9 +8,10 @@ abstract class IWebRtcTransportService {
   Stream<StreamHealthMetrics> get healthMetricsStream;
   Stream<P2PMessage> get dataChannelMessages;
   CameraConnectionState get currentState;
+  String? get hostAddress;
 
-  Future<void> initializeAsHost({required String pairingCode, required String myRole});
-  Future<void> initializeAsClient({required String hostAddress, required String pairingCode, required String myRole});
+  Future<void> initializeAsHost({required String pairingCode, required String myRole, int port = 8080});
+  Future<void> initializeAsClient({required String hostAddress, required String pairingCode, required String myRole, int port = 8080});
   Future<void> sendDataMessage(P2PMessage message);
   Future<void> close();
   void sendHeartbeat();
@@ -50,12 +51,15 @@ class WebRtcTransportService implements IWebRtcTransportService {
   CameraConnectionState get currentState => _currentState;
 
   @override
-  Future<void> initializeAsHost({required String pairingCode, required String myRole}) async {
+  String? get hostAddress => _signalingService.currentHostAddress;
+
+  @override
+  Future<void> initializeAsHost({required String pairingCode, required String myRole, int port = 8080}) async {
     _role = myRole;
     _setState(CameraConnectionState.pairing);
 
     _listenSignaling();
-    await _signalingService.startLocalServer(port: 8080);
+    await _signalingService.startLocalServer(port: port);
     _startHealthMonitoring();
   }
 
@@ -64,13 +68,14 @@ class WebRtcTransportService implements IWebRtcTransportService {
     required String hostAddress,
     required String pairingCode,
     required String myRole,
+    int port = 8080,
   }) async {
     _role = myRole;
     _setState(CameraConnectionState.connecting);
 
     _listenSignaling();
     try {
-      await _signalingService.connect(hostAddress, port: 8080);
+      await _signalingService.connect(hostAddress, port: port);
       _setState(CameraConnectionState.connected);
       _startHealthMonitoring();
 

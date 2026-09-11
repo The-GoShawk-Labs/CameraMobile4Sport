@@ -1,14 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:volleylive/domain/models/camera_config.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
+import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/domain/services/recording_service.dart';
 import 'package:volleylive/domain/services/video_transport_service.dart';
 
 class CameraProvider extends ChangeNotifier {
-  final RecordingService _recordingService = RecordingService();
-  final VideoTransportService _transportService = VideoTransportService();
+  final RecordingService _recordingService;
+  final VideoTransportService _transportService;
 
   CameraController? _cameraController;
   List<CameraDescription> _availableCameras = [];
@@ -16,10 +18,11 @@ class CameraProvider extends ChangeNotifier {
   bool _isSimulationMode = false;
   String? _cameraErrorMessage;
 
+  StreamSubscription<RecordingState>? _recordingStateSub;
+  StreamSubscription<Duration>? _durationSub;
+  StreamSubscription<CameraConnectionState>? _transportSub;
+
   CameraSettings _settings = const CameraSettings();
-  CameraConnectionState _connectionState = CameraConnectionState.disconnected;
-  RecordingState _recordingState = RecordingState.idle;
-  Duration _masterRecDuration = Duration.zero;
   bool _isTripodLocked = false;
   double _audioLevel = 0.65; // 0.0 do 1.0 (VU Meter)
   final int _batteryLevel = 85;
@@ -27,8 +30,14 @@ class CameraProvider extends ChangeNotifier {
 
   Timer? _audioSimTimer;
 
-  CameraProvider({bool enableAudioSim = true}) {
-    _initListeners(enableAudioSim: enableAudioSim);
+  CameraProvider({
+    bool? enableAudioSim,
+    RecordingService? recordingService,
+    VideoTransportService? transportService,
+  })  : _recordingService = recordingService ?? RecordingService(),
+        _transportService = transportService ?? VideoTransportService() {
+    final bool shouldEnableAudioSim = enableAudioSim ?? !Platform.environment.containsKey('FLUTTER_TEST');
+    _initListeners(enableAudioSim: shouldEnableAudioSim);
   }
 
   CameraController? get cameraController => _cameraController;
@@ -38,36 +47,41 @@ class CameraProvider extends ChangeNotifier {
   String? get cameraErrorMessage => _cameraErrorMessage;
 
   CameraSettings get settings => _settings;
-  CameraConnectionState get connectionState => _connectionState;
-  RecordingState get recordingState => _recordingState;
-  bool get isRecording => _recordingState == RecordingState.recording;
-  Duration get masterRecDuration => _masterRecDuration;
+  CameraConnectionState get connectionState => _transportService.currentState;
+  RecordingState get recordingState => _recordingService.currentState;
+  bool get isRecording => _recordingService.currentState == RecordingState.recording;
+  Duration get masterRecDuration => _recordingService.recordedDuration;
   bool get isTripodLocked => _isTripodLocked;
   double get audioLevel => _audioLevel;
   int get batteryLevel => _batteryLevel;
   String get pairedHostCode => _pairedHostCode;
 
+  MasterRecordingResult? get lastRecordingResult => _recordingService.lastRecordingResult;
+  String? get recordingErrorMessage => _recordingService.lastErrorMessage;
+  RecordingService get recordingService => _recordingService;
+  VideoTransportService get transportService => _transportService;
+
   void _initListeners({bool enableAudioSim = true}) {
-    _recordingService.recordingStateStream.listen((state) {
-      _recordingState = state;
-      notifyListeners();
+    _recordingStateSub = _recordingService.recordingStateStream.listen((state) {
+      if (hasListeners) notifyListeners();
     });
 
-    _recordingService.durationStream.listen((duration) {
-      _masterRecDuration = duration;
-      notifyListeners();
+    _durationSub = _recordingService.durationStream.listen((duration) {
+      if (hasListeners) notifyListeners();
     });
 
-    _transportService.connectionStateStream.listen((state) {
-      _connectionState = state;
-      notifyListeners();
+    _transportSub = _transportService.connectionStateStream.listen((state) {
+      // ŻELAZNA ZASADA WSAD.md:
+      // Zmiana stanu połączenia P2P/WebRTC (rozłączenie, restart, błąd)
+      // pod żadnym pozorem NIE może przerwać trwającego nagrywania Master REC na Phone A.
+      if (hasListeners) notifyListeners();
     });
 
     if (enableAudioSim) {
       // Symulacja wysterowania mikrofonu
       _audioSimTimer = Timer.periodic(const Duration(milliseconds: 300), (timer) {
         _audioLevel = 0.4 + (DateTime.now().millisecond % 50) / 100;
-        notifyListeners();
+        if (hasListeners) notifyListeners();
       });
     }
   }
@@ -141,15 +155,17 @@ class CameraProvider extends ChangeNotifier {
   }
 
   Future<void> toggleMasterRecording() async {
-    if (_recordingState == RecordingState.recording) {
-      _recordingState = RecordingState.stopping;
+    if (_recordingService.currentState == RecordingState.recording) {
       notifyListeners();
-      await _recordingService.stopRecording();
-      _recordingState = RecordingState.saved;
+      await _recordingService.stopRecording(
+        cameraController: _cameraController,
+      );
     } else {
-      _recordingState = RecordingState.recording;
       notifyListeners();
-      await _recordingService.startMasterRecording();
+      await _recordingService.startMasterRecording(
+        cameraController: _cameraController,
+        isSimulation: _isSimulationMode || _cameraController == null,
+      );
     }
     notifyListeners();
   }
@@ -284,6 +300,9 @@ class CameraProvider extends ChangeNotifier {
   @override
   void dispose() {
     _audioSimTimer?.cancel();
+    _recordingStateSub?.cancel();
+    _durationSub?.cancel();
+    _transportSub?.cancel();
     _cameraController?.dispose();
     _recordingService.dispose();
     _transportService.dispose();
