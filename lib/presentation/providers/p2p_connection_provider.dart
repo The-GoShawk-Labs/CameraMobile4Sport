@@ -37,6 +37,7 @@ class P2PConnectionProvider extends ChangeNotifier {
   ScoreUpdatePayload? get lastReceivedScore => _lastReceivedScore;
   CameraControlPayload? get lastReceivedCameraControl => _lastReceivedCameraControl;
   bool? get lastReceivedRecorderTrigger => _lastReceivedRecorderTrigger;
+  bool get isSinglePhoneMode => _currentRole == DeviceRole.singlePhoneAllInOne;
 
   void selectRole(DeviceRole role) {
     _currentRole = role;

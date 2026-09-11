@@ -8,7 +8,7 @@ abstract class IRecordingService {
   Duration get recordedDuration;
 
   Future<void> startMasterRecording();
-  Future<void> stopRecording();
+  Future<void> stopRecording({bool simulatedDelay = false});
 }
 
 /// Serwis nagrywania wideo
@@ -48,14 +48,17 @@ class RecordingService implements IRecordingService {
   }
 
   @override
-  Future<void> stopRecording() async {
+  Future<void> stopRecording({bool simulatedDelay = false}) async {
+    _timer?.cancel();
+    _timer = null;
     if (_currentState != RecordingState.recording) return;
 
-    _timer?.cancel();
     _currentState = RecordingState.stopping;
     _stateController.add(_currentState);
 
-    await Future.delayed(const Duration(milliseconds: 500));
+    if (simulatedDelay) {
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
     _currentState = RecordingState.saved;
     _stateController.add(_currentState);
   }

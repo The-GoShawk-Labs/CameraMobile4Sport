@@ -1,22 +1,39 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:uuid/uuid.dart';
 
-/// Serwis bezpiecznego przechowywania poświadczeń (Klucze streamingu, tokeny).
+/// Serwis bezpiecznego przechowywania poświadczeń (Klucze streamingu, tokeny)
+/// oparty o natywny magazyn kluczy (Android Keystore / iOS Keychain) poprzez flutter_secure_storage.
 /// Zgodnie z wymaganiami WSAD.md:
-/// 1. Nigdy nie przechowujemy kluczy jawnie w pamięci współdzielonej bez szyfrowania.
+/// 1. Nigdy nie przechowujemy kluczy jawnie w SharedPreferences.
 /// 2. Modele operują na 'credentialReference', a nie na jawnym stream key.
 /// 3. Nigdy nie wypisujemy zawartości kluczy do logów ani telemetrii.
 class SecureStorageService {
   static const String _storagePrefix = 'sec_vault_';
   static const _uuid = Uuid();
 
-  // Prosty zoptymalizowany szyfr XOR z solą sprzętową/lokalną
-  static final Uint8List _obfuscationKey = Uint8List.fromList(
-    utf8.encode('VolleyLive_Secure_Hardware_Enclave_Key_2026!#'),
+  static const _androidOptions = AndroidOptions(
+    encryptedSharedPreferences: true,
   );
+
+  static const _iosOptions = IOSOptions(
+    accessibility: KeychainAccessibility.first_unlock,
+  );
+
+  static FlutterSecureStorage? _customStorage;
+
+  static FlutterSecureStorage get _storage =>
+      _customStorage ??
+      const FlutterSecureStorage(
+        aOptions: _androidOptions,
+        iOptions: _iosOptions,
+      );
+
+  /// Pozwala na wstrzyknięcie dedykowanego magazynu (np. w testach jednostkowych).
+  static void setStorageForTesting(FlutterSecureStorage? storage) {
+    _customStorage = storage;
+  }
 
   /// Zapisuje klucz streamingu i zwraca unikalny identyfikator 'credentialReference'.
   static Future<String> storeCredential({
@@ -24,33 +41,24 @@ class SecureStorageService {
     String? preferredRef,
   }) async {
     final ref = preferredRef ?? 'cred_ref_${_uuid.v4()}';
-    final prefs = await SharedPreferences.getInstance();
-
-    final rawBytes = utf8.encode(credentialValue);
-    final encryptedBytes = Uint8List(rawBytes.length);
-    for (int i = 0; i < rawBytes.length; i++) {
-      encryptedBytes[i] = rawBytes[i] ^ _obfuscationKey[i % _obfuscationKey.length];
-    }
-
-    final encoded = base64Encode(encryptedBytes);
-    await prefs.setString('$_storagePrefix$ref', encoded);
+    await _storage.write(
+      key: '$_storagePrefix$ref',
+      value: credentialValue,
+      aOptions: _androidOptions,
+      iOptions: _iosOptions,
+    );
     return ref;
   }
 
-  /// Bezpiecznie pobiera zaszyfrowany klucz na żądanie encodera RTMPS.
+  /// Bezpiecznie pobiera zaszyfrowany klucz z Keystore/Keychain na żądanie encodera RTMPS.
   static Future<String?> getCredential(String credentialReference) async {
     if (credentialReference.isEmpty) return null;
-    final prefs = await SharedPreferences.getInstance();
-    final encoded = prefs.getString('$_storagePrefix$credentialReference');
-    if (encoded == null) return null;
-
     try {
-      final encryptedBytes = base64Decode(encoded);
-      final rawBytes = Uint8List(encryptedBytes.length);
-      for (int i = 0; i < encryptedBytes.length; i++) {
-        rawBytes[i] = encryptedBytes[i] ^ _obfuscationKey[i % _obfuscationKey.length];
-      }
-      return utf8.decode(rawBytes);
+      return await _storage.read(
+        key: '$_storagePrefix$credentialReference',
+        aOptions: _androidOptions,
+        iOptions: _iosOptions,
+      );
     } catch (_) {
       return null;
     }
@@ -58,11 +66,17 @@ class SecureStorageService {
 
   /// Usuwa poświadczenie z bezpiecznego magazynu.
   static Future<void> deleteCredential(String credentialReference) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('$_storagePrefix$credentialReference');
+    if (credentialReference.isEmpty) return;
+    try {
+      await _storage.delete(
+        key: '$_storagePrefix$credentialReference',
+        aOptions: _androidOptions,
+        iOptions: _iosOptions,
+      );
+    } catch (_) {}
   }
 
-  /// Zwraca zamaskowaną reprezentację (np. '••••••••••••1a4f')
+  /// Zwraca zamaskowaną reprezentację (np. '•••• •••• •••• 1a4f')
   static String maskCredential(String credentialReference) {
     if (credentialReference.isEmpty) return 'Brak klucza';
     final hash = sha256.convert(utf8.encode(credentialReference)).toString();

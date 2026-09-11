@@ -67,7 +67,14 @@ class _PhoneAJoinScreenState extends State<PhoneAJoinScreen> with SingleTickerPr
         title: const Text('POŁĄCZ JAKO KAMERA (PHONE A)'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-          onPressed: () => Navigator.pop(context),
+          tooltip: 'Wróć do menu',
+          onPressed: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go(AppRouter.initialRoute);
+            }
+          },
         ),
       ),
       body: Container(

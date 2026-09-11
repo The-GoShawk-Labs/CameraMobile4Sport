@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:volleylive/core/router/app_router.dart';
 import 'package:volleylive/core/theme/app_theme.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
+import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/providers/match_provider.dart';
 import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
 import 'package:volleylive/presentation/screens/settings/scoreboard_customizer_modal.dart';
@@ -17,6 +18,7 @@ class ModeSelectScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final match = context.watch<MatchProvider>();
     final p2p = context.read<P2PConnectionProvider>();
+    final camera = context.watch<CameraProvider>();
 
     return Scaffold(
       body: Container(
@@ -184,14 +186,249 @@ class ModeSelectScreen extends StatelessWidget {
                   const SizedBox(height: 18),
                 ],
 
-                const Text(
-                  'Wybierz tryb działania tego urządzenia:',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: AppTheme.textSecondary,
-                    fontWeight: FontWeight.w600,
+                // AKTYWNE NAGRYWANIE KAMERY W TLE (BACKGROUND MASTER REC RUNNING)
+                if (camera.isRecording) ...[
+                  GlassCard(
+                    borderColor: AppTheme.redLive,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Row(
+                              children: [
+                                PulseDot(color: AppTheme.redLive, size: 8),
+                                SizedBox(width: 8),
+                                Text(
+                                  'KAMERA NAGRYWA W TLE (MASTER REC)',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: 0.8,
+                                    color: AppTheme.redLive,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Text(
+                              _formatDuration(camera.masterRecDuration),
+                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: () => context.push(AppRouter.cameraRoute),
+                                icon: const Icon(Icons.videocam, size: 14),
+                                label: const Text('PODGLĄD KAMERY', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppTheme.cyanAccent,
+                                  foregroundColor: Colors.black,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: () => context.push(AppRouter.scorerRoute),
+                                icon: const Icon(Icons.sports_volleyball, size: 14),
+                                label: const Text('KOKPIT SĘDZIEGO', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppTheme.amberAccent,
+                                  foregroundColor: Colors.black,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
+                  const SizedBox(height: 18),
+                ],
+
+                // DEDYKOWANA KARTA: TRYB JEDNEGO SMARTFONA (ALL-IN-ONE)
+                Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        const Color(0xFF00E5FF).withValues(alpha: 0.18),
+                        const Color(0xFFFFAB00).withValues(alpha: 0.12),
+                        const Color(0xFF0F1726),
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: AppTheme.cyanAccent, width: 2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppTheme.cyanAccent.withValues(alpha: 0.25),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppTheme.cyanAccent.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: AppTheme.cyanAccent),
+                            ),
+                            child: const Icon(Icons.phone_android, color: AppTheme.cyanAccent, size: 26),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.cyanAccent.withValues(alpha: 0.25),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: const Text(
+                                    'TRYB POJEDYNCZEGO URZĄDZENIA',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w900,
+                                      color: AppTheme.cyanAccent,
+                                      letterSpacing: 0.8,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                const Text(
+                                  'TRYB JEDNEGO SMARTFONA (ALL-IN-ONE)',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.white,
+                                    letterSpacing: 0.3,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      const Text(
+                        'Uruchom kamerę na statywie, wyjdź z widoku bez przerywania nagrywania i sędziuj lub wprowadzaj statystyki na tym samym telefonie!',
+                        style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, height: 1.3),
+                      ),
+                      const SizedBox(height: 14),
+                      // SZYBKA SEKWENCJA KROKÓW 1-2-3
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () {
+                                p2p.selectRole(DeviceRole.singlePhoneAllInOne);
+                                context.push(AppRouter.cameraRoute);
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.cyanAccent,
+                                foregroundColor: Colors.black,
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              child: const Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.camera_alt, size: 16),
+                                  SizedBox(height: 2),
+                                  Text('1. KAMERA', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900)),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () {
+                                p2p.selectRole(DeviceRole.singlePhoneAllInOne);
+                                context.push(AppRouter.scorerRoute);
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.amberAccent,
+                                foregroundColor: Colors.black,
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              child: const Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.sports_volleyball, size: 16),
+                                  SizedBox(height: 2),
+                                  Text('2. SĘDZIA', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900)),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () {
+                                p2p.selectRole(DeviceRole.singlePhoneAllInOne);
+                                context.push(AppRouter.statisticianRoute);
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF00E676),
+                                foregroundColor: Colors.black,
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              child: const Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.analytics_outlined, size: 16),
+                                  SizedBox(height: 2),
+                                  Text('3. STATYSTYKI', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900)),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 22),
+
+                // SEPARATOR: TRYB DWÓCH SMARTFONÓW
+                const Row(
+                  children: [
+                    Expanded(child: Divider(color: Colors.white24)),
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 10),
+                      child: Text(
+                        'LUB TRYB DWÓCH SMARTFONÓW (P2P WEBRTC)',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.textSecondary,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    Expanded(child: Divider(color: Colors.white24)),
+                  ],
                 ),
                 const SizedBox(height: 14),
 
@@ -401,5 +638,12 @@ class ModeSelectScreen extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  String _formatDuration(Duration d) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final minutes = twoDigits(d.inMinutes.remainder(60));
+    final seconds = twoDigits(d.inSeconds.remainder(60));
+    return '${d.inHours > 0 ? '${twoDigits(d.inHours)}:' : ''}$minutes:$seconds';
   }
 }

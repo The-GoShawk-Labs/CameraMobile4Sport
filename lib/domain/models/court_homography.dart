@@ -141,7 +141,7 @@ enum CourtDisplayMode {
 enum PipSizeState {
   normal(width: 260, height: 160),
   expanded(width: 340, height: 210),
-  miniPill(width: 140, height: 50);
+  miniPill(width: 180, height: 48);
 
   final double width;
   final double height;

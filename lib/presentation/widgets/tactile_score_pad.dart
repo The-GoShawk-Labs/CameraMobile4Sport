@@ -22,6 +22,7 @@ class TactileScorePad extends StatelessWidget {
   final bool canUndo;
   final bool isTimeoutActive;
   final bool isOutdoorMode;
+  final VoidCallback? onToggleCollapse;
 
   const TactileScorePad({
     super.key,
@@ -43,6 +44,7 @@ class TactileScorePad extends StatelessWidget {
     required this.canUndo,
     required this.isTimeoutActive,
     this.isOutdoorMode = false,
+    this.onToggleCollapse,
   });
 
   @override
@@ -50,7 +52,7 @@ class TactileScorePad extends StatelessWidget {
     final isServingA = session.currentServer == ServingTeam.teamA;
     final isServingB = session.currentServer == ServingTeam.teamB;
 
-    final bgColor = isOutdoorMode ? Colors.black : const Color(0xFF0D121F);
+    final bgColor = isOutdoorMode ? Colors.black.withValues(alpha: 0.95) : const Color(0xF20D121F);
     final cardBorderWidth = isOutdoorMode ? 3.0 : 1.8;
 
     return Container(
@@ -72,20 +74,43 @@ class TactileScorePad extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // UCHWYT PANELU / GESTURE GUIDE
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  width: 36,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 6),
-                  decoration: BoxDecoration(
-                    color: isOutdoorMode ? Colors.white70 : Colors.white24,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
+            // UCHWYT PANELU / GESTURE GUIDE / PRZYCISK ZWIJANIA
+            GestureDetector(
+              onTap: onToggleCollapse,
+              behavior: HitTestBehavior.opaque,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.keyboard_arrow_down_rounded, size: 14, color: isOutdoorMode ? Colors.white70 : AppTheme.cyanAccent),
+                          const SizedBox(width: 4),
+                          Text(
+                            'UKRYJ PANEL DO PODGLĄDU WIDEO',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.6,
+                              color: isOutdoorMode ? Colors.white70 : AppTheme.cyanAccent.withValues(alpha: 0.9),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Icon(Icons.keyboard_arrow_down_rounded, size: 14, color: isOutdoorMode ? Colors.white70 : AppTheme.cyanAccent),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
 
             // GŁÓWNY MODUŁ PUNKTOWY

@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:video_player/video_player.dart';
 import 'package:volleylive/core/theme/app_theme.dart';
 import 'package:volleylive/domain/models/court_homography.dart';
+import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/providers/court_statistician_provider.dart';
 
 /// Pływający odtwarzacz wideo PiP (Picture-in-Picture) ze swobodnym przesuwaniem i szybkimi powtórkami (-5s, -10s)
@@ -187,6 +190,13 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
       return const SizedBox();
     }
 
+    CameraProvider? camera;
+    try {
+      camera = Provider.of<CameraProvider>(context);
+    } catch (_) {
+      // Bezpieczny fallback gdy CameraProvider nie jest obecny w hierarchii testów
+    }
+
     final sizeState = provider.pipSizeState;
     final pipPos = provider.pipPosition;
 
@@ -226,52 +236,70 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
           child: ClipRRect(
             borderRadius: BorderRadius.circular(10),
             child: sizeState == PipSizeState.miniPill
-                ? _buildMiniPillContent()
-                : _buildFullPipContent(sizeState),
+                ? _buildMiniPillContent(camera)
+                : _buildFullPipContent(sizeState, camera),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildMiniPillContent() {
+  Widget _buildMiniPillContent(CameraProvider? camera) {
+    final bool isRec = camera != null && camera.isRecording;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       color: const Color(0xFF0F172A),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.drag_indicator, size: 14, color: Colors.white38),
-              const SizedBox(width: 4),
-              Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppTheme.greenLive,
+          Expanded(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.drag_indicator, size: 14, color: Colors.white38),
+                const SizedBox(width: 4),
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isRec ? Colors.redAccent : AppTheme.greenLive,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 6),
-              const Text(
-                'PiP CAM',
-                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Colors.white),
-              ),
-            ],
+                const SizedBox(width: 5),
+                Flexible(
+                  child: Text(
+                    isRec ? 'REC LIVE' : 'PiP CAM',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
+          const SizedBox(width: 6),
           Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
               IconButton(
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
+                constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                visualDensity: VisualDensity.compact,
+                splashRadius: 14,
                 icon: const Icon(Icons.replay_5, size: 18, color: AppTheme.amberAccent),
                 onPressed: () => _rewind(5),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 4),
               IconButton(
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
+                constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                visualDensity: VisualDensity.compact,
+                splashRadius: 14,
                 icon: const Icon(Icons.fullscreen, size: 18, color: Colors.white70),
                 onPressed: () => widget.provider.togglePipExpanded(),
               ),
@@ -282,7 +310,7 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
     );
   }
 
-  Widget _buildFullPipContent(PipSizeState sizeState) {
+  Widget _buildFullPipContent(PipSizeState sizeState, CameraProvider? camera) {
     final bool isPlaying = _isInitialized && _controller != null
         ? _controller!.value.isPlaying
         : _isSimulatedPlaying;
@@ -295,11 +323,29 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
         ? (_controller!.value.duration == Duration.zero ? _simulatedDuration : _controller!.value.duration)
         : _simulatedDuration;
 
+    final bool hasLocalCamera = camera != null &&
+        camera.isCameraInitialized &&
+        camera.cameraController != null &&
+        camera.cameraController!.value.isInitialized;
+
+    final String displayStatus = camera != null && camera.isRecording
+        ? '🔴 MASTER REC (1-PHONE)'
+        : _statusMessage;
+
     return Stack(
       fit: StackFit.expand,
       children: [
-        // 1. Podgląd Wideo (VideoPlayer lub Symulowany Kadr Boiska)
-        if (_isInitialized && _controller != null && !_hasError)
+        // 1. Podgląd Wideo (Kamera lokalna w trybie 1 smartfona, VideoPlayer lub Symulowany Kadr Boiska)
+        if (hasLocalCamera)
+          FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: camera.cameraController!.value.previewSize?.height ?? 1920,
+              height: camera.cameraController!.value.previewSize?.width ?? 1080,
+              child: CameraPreview(camera.cameraController!),
+            ),
+          )
+        else if (_isInitialized && _controller != null && !_hasError)
           FittedBox(
             fit: BoxFit.cover,
             child: SizedBox(
@@ -342,15 +388,15 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
                 Container(
                   width: 6,
                   height: 6,
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: AppTheme.greenLive,
+                    color: (camera != null && camera.isRecording) ? Colors.redAccent : AppTheme.greenLive,
                   ),
                 ),
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(
-                    _statusMessage,
+                    displayStatus,
                     style: const TextStyle(
                       fontSize: 9,
                       fontWeight: FontWeight.w900,

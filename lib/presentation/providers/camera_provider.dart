@@ -40,6 +40,7 @@ class CameraProvider extends ChangeNotifier {
   CameraSettings get settings => _settings;
   CameraConnectionState get connectionState => _connectionState;
   RecordingState get recordingState => _recordingState;
+  bool get isRecording => _recordingState == RecordingState.recording;
   Duration get masterRecDuration => _masterRecDuration;
   bool get isTripodLocked => _isTripodLocked;
   double get audioLevel => _audioLevel;
@@ -141,10 +142,16 @@ class CameraProvider extends ChangeNotifier {
 
   Future<void> toggleMasterRecording() async {
     if (_recordingState == RecordingState.recording) {
+      _recordingState = RecordingState.stopping;
+      notifyListeners();
       await _recordingService.stopRecording();
+      _recordingState = RecordingState.saved;
     } else {
+      _recordingState = RecordingState.recording;
+      notifyListeners();
       await _recordingService.startMasterRecording();
     }
+    notifyListeners();
   }
 
   Future<void> setZoom(double zoom) async {

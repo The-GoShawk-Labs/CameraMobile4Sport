@@ -67,39 +67,6 @@ class _CameraControlsOverlayState extends State<CameraControlsOverlay> {
 
     return Stack(
       children: [
-        // PRZYCISK UKRYWANIA HUD (CZYSTY KADR)
-        Positioned(
-          top: widget.isLandscape ? 14 : 80,
-          right: widget.isLandscape ? 74 : 16,
-          child: SafeArea(
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: () => camera.toggleHudVisibility(),
-                borderRadius: BorderRadius.circular(20),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.55),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.white24),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.fullscreen, color: Colors.white70, size: 16),
-                      SizedBox(width: 4),
-                      Text(
-                        'CZYSTY KADR',
-                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white70),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
 
         // BOCZNY PANEL STEROWANIA KAMERĄ (ZOOM & EXPOSURE & FOCUS)
         Positioned(
@@ -334,16 +301,20 @@ class _CameraControlsOverlayState extends State<CameraControlsOverlay> {
     required String tooltip,
     Color activeColor = AppTheme.cyanAccent,
   }) {
+    final parts = badge.split(' ');
+    final isTwoLines = parts.length > 1;
+
     return Tooltip(
       message: tooltip,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(16),
         child: Container(
-          width: 52,
-          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          width: 56,
+          height: 56,
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
           decoration: BoxDecoration(
-            color: isActive ? activeColor.withValues(alpha: 0.2) : Colors.black.withValues(alpha: 0.6),
+            color: isActive ? activeColor.withValues(alpha: 0.25) : Colors.black.withValues(alpha: 0.65),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
               color: isActive ? activeColor : Colors.white24,
@@ -351,7 +322,8 @@ class _CameraControlsOverlayState extends State<CameraControlsOverlay> {
             ),
           ),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Icon(
                 icon,
@@ -359,14 +331,39 @@ class _CameraControlsOverlayState extends State<CameraControlsOverlay> {
                 size: 20,
               ),
               const SizedBox(height: 2),
-              Text(
-                badge,
-                style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.bold,
-                  color: isActive ? activeColor : Colors.white70,
+              if (isTwoLines) ...[
+                Text(
+                  parts[0],
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    height: 1.0,
+                    color: isActive ? activeColor : Colors.white,
+                  ),
                 ),
-              ),
+                Text(
+                  parts[1],
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 8.5,
+                    fontWeight: FontWeight.w700,
+                    height: 1.05,
+                    color: isActive ? activeColor : Colors.white70,
+                  ),
+                ),
+              ] else ...[
+                Text(
+                  badge,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    height: 1.0,
+                    color: isActive ? activeColor : Colors.white70,
+                  ),
+                ),
+              ],
             ],
           ),
         ),

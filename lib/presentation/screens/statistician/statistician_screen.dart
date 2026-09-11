@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+import 'package:volleylive/core/router/app_router.dart';
 import 'package:volleylive/core/theme/app_theme.dart';
 import 'package:volleylive/domain/models/court_homography.dart';
 import 'package:volleylive/presentation/providers/court_statistician_provider.dart';
@@ -59,11 +61,21 @@ class _StatisticianScreenState extends State<StatisticianScreen> with SingleTick
     final statsProvider = context.watch<CourtStatisticianProvider>();
     final matchProvider = context.watch<MatchProvider>();
 
-    return Scaffold(
-      backgroundColor: const Color(0xFF070A10),
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, screenConstraints) {
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (context.canPop()) {
+          context.pop();
+        } else {
+          context.go(AppRouter.initialRoute);
+        }
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFF070A10),
+        body: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, screenConstraints) {
             final screenSize = Size(screenConstraints.maxWidth, screenConstraints.maxHeight);
 
             return Stack(
@@ -86,7 +98,8 @@ class _StatisticianScreenState extends State<StatisticianScreen> with SingleTick
           },
         ),
       ),
-    );
+    ),
+  );
   }
 
   /// Układ pełnoekranowy (Full-Screen Pitch Mode) dla maksymalnego obszaru makiety
@@ -312,7 +325,14 @@ class _StatisticianScreenState extends State<StatisticianScreen> with SingleTick
             icon: const Icon(Icons.arrow_back, color: Colors.white, size: 18),
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
-            onPressed: () => Navigator.of(context).pop(),
+            tooltip: 'Wróć',
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go(AppRouter.initialRoute);
+              }
+            },
           ),
           const SizedBox(width: 6),
           Expanded(
@@ -339,6 +359,26 @@ class _StatisticianScreenState extends State<StatisticianScreen> with SingleTick
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Szybki powrót do Kamery
+              IconButton(
+                padding: const EdgeInsets.all(4),
+                constraints: const BoxConstraints(),
+                icon: const Icon(Icons.camera_alt_outlined, color: AppTheme.cyanAccent, size: 18),
+                tooltip: 'Przejdź do Kamery',
+                onPressed: () => context.push(AppRouter.cameraRoute),
+              ),
+              const SizedBox(width: 2),
+
+              // Szybki powrót do Sędziego
+              IconButton(
+                padding: const EdgeInsets.all(4),
+                constraints: const BoxConstraints(),
+                icon: const Icon(Icons.sports_volleyball, color: AppTheme.amberAccent, size: 18),
+                tooltip: 'Przejdź do Kokpitu Sędziego',
+                onPressed: () => context.push(AppRouter.scorerRoute),
+              ),
+              const SizedBox(width: 2),
+
               // Przełącznik Pełny Ekran Boiska (Full Screen Pitch Toggle)
               IconButton(
                 padding: const EdgeInsets.all(4),
@@ -346,31 +386,12 @@ class _StatisticianScreenState extends State<StatisticianScreen> with SingleTick
                 icon: Icon(
                   isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
                   color: isFullScreen ? AppTheme.amberAccent : Colors.white,
-                  size: 20,
+                  size: 18,
                 ),
                 tooltip: isFullScreen ? 'Wyjdź z pełnego ekranu' : 'Pełny ekran makiety boiska',
                 onPressed: () => statsProvider.toggleFullScreenCourt(),
               ),
-              const SizedBox(width: 4),
-
-              // Przełącznik Trybu Widoku: 2D vs Perspektywa Kamery
-              IconButton(
-                padding: const EdgeInsets.all(4),
-                constraints: const BoxConstraints(),
-                icon: Icon(
-                  statsProvider.courtDisplayMode == CourtDisplayMode.tactical2D ? Icons.crop_square : Icons.videocam,
-                  color: AppTheme.cyanAccent,
-                  size: 18,
-                ),
-                tooltip: 'Zmień tryb widoku (${statsProvider.courtDisplayMode.shortLabel})',
-                onPressed: () {
-                  final nextMode = statsProvider.courtDisplayMode == CourtDisplayMode.tactical2D
-                      ? CourtDisplayMode.cameraPerspective
-                      : CourtDisplayMode.tactical2D;
-                  statsProvider.setCourtDisplayMode(nextMode);
-                },
-              ),
-              const SizedBox(width: 4),
+              const SizedBox(width: 2),
 
               // Pokaż / Ukryj Pływające Okno PiP Wideo
               IconButton(
@@ -384,46 +405,71 @@ class _StatisticianScreenState extends State<StatisticianScreen> with SingleTick
                 tooltip: statsProvider.isPipVisible ? 'Ukryj wideo PiP' : 'Pokaż wideo PiP',
                 onPressed: () => statsProvider.togglePipVisibility(),
               ),
-              const SizedBox(width: 4),
+              const SizedBox(width: 2),
 
-              // Przycisk obrotu boiska o 90° (Z tyłu <-> Z boku)
-              IconButton(
-                padding: const EdgeInsets.all(4),
+              // Menu z dodatkowymi opcjami (Obrót, Widok, Heatmapa, Etykiety)
+              PopupMenuButton<String>(
+                padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
-                icon: const Icon(Icons.rotate_90_degrees_cw, color: AppTheme.cyanAccent, size: 18),
-                tooltip: 'Obróć boisko o 90° (${statsProvider.orientation.shortLabel})',
-                onPressed: () {
-                  final size = MediaQuery.of(context).size;
-                  statsProvider.rotateCourt90(currentViewport: Size(size.width, size.height * 0.5));
+                icon: const Icon(Icons.more_vert, color: Colors.white70, size: 18),
+                color: const Color(0xFF1E293B),
+                onSelected: (value) {
+                  if (value == 'rotate') {
+                    final size = MediaQuery.of(context).size;
+                    statsProvider.rotateCourt90(currentViewport: Size(size.width, size.height * 0.5));
+                  } else if (value == 'mode') {
+                    final nextMode = statsProvider.courtDisplayMode == CourtDisplayMode.tactical2D
+                        ? CourtDisplayMode.cameraPerspective
+                        : CourtDisplayMode.tactical2D;
+                    statsProvider.setCourtDisplayMode(nextMode);
+                  } else if (value == 'heatmap') {
+                    statsProvider.toggleHeatmap();
+                  } else if (value == 'labels') {
+                    statsProvider.toggleGridLabels();
+                  }
                 },
-              ),
-              const SizedBox(width: 4),
-
-              // Heatmap Toggle
-              IconButton(
-                padding: const EdgeInsets.all(4),
-                constraints: const BoxConstraints(),
-                icon: Icon(
-                  statsProvider.showHeatmap ? Icons.local_fire_department : Icons.local_fire_department_outlined,
-                  color: statsProvider.showHeatmap ? AppTheme.amberAccent : Colors.white60,
-                  size: 18,
-                ),
-                tooltip: 'Pokaż Heatmapę',
-                onPressed: () => statsProvider.toggleHeatmap(),
-              ),
-              const SizedBox(width: 4),
-
-              // Etykiety Stref Toggle
-              IconButton(
-                padding: const EdgeInsets.all(4),
-                constraints: const BoxConstraints(),
-                icon: Icon(
-                  statsProvider.showGridLabels ? Icons.visibility : Icons.visibility_off,
-                  color: statsProvider.showGridLabels ? AppTheme.cyanAccent : Colors.white60,
-                  size: 18,
-                ),
-                tooltip: 'Pokaż/Ukryj etykiety stref',
-                onPressed: () => statsProvider.toggleGridLabels(),
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'rotate',
+                    child: Row(
+                      children: [
+                        const Icon(Icons.rotate_90_degrees_cw, color: AppTheme.cyanAccent, size: 16),
+                        const SizedBox(width: 8),
+                        Text('Obróć boisko o 90° (${statsProvider.orientation.shortLabel})', style: const TextStyle(fontSize: 12, color: Colors.white)),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'mode',
+                    child: Row(
+                      children: [
+                        Icon(statsProvider.courtDisplayMode == CourtDisplayMode.tactical2D ? Icons.crop_square : Icons.videocam, color: AppTheme.cyanAccent, size: 16),
+                        const SizedBox(width: 8),
+                        Text('Widok: ${statsProvider.courtDisplayMode.shortLabel}', style: const TextStyle(fontSize: 12, color: Colors.white)),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'heatmap',
+                    child: Row(
+                      children: [
+                        Icon(statsProvider.showHeatmap ? Icons.local_fire_department : Icons.local_fire_department_outlined, color: AppTheme.amberAccent, size: 16),
+                        const SizedBox(width: 8),
+                        Text(statsProvider.showHeatmap ? 'Ukryj heatmapę' : 'Pokaż heatmapę', style: const TextStyle(fontSize: 12, color: Colors.white)),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'labels',
+                    child: Row(
+                      children: [
+                        Icon(statsProvider.showGridLabels ? Icons.visibility : Icons.visibility_off, color: AppTheme.cyanAccent, size: 16),
+                        const SizedBox(width: 8),
+                        Text(statsProvider.showGridLabels ? 'Ukryj etykiety stref' : 'Pokaż etykiety stref', style: const TextStyle(fontSize: 12, color: Colors.white)),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

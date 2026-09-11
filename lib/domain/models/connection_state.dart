@@ -2,7 +2,8 @@ enum DeviceRole {
   none('Niezdefiniowana', 'none'),
   cameraPhoneA('Smartfon Kamera', 'phone_a_camera'),
   scorerPhoneB('Smartfon Sterujący', 'phone_b_controller'),
-  statistician('Panel Statystyka', 'statistician');
+  statistician('Panel Statystyka', 'statistician'),
+  singlePhoneAllInOne('Jeden Smartfon (All-in-One)', 'single_phone_all_in_one');
 
   final String label;
   final String idName;
