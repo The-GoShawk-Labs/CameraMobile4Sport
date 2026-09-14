@@ -117,12 +117,16 @@ npm start
 
 ## Setup Guide
 
-1. **Install app** on both phones (camera and control)
+1. **Install app** on both phones (camera and control) - see [DEVICE_TESTING_GUIDE.md](DEVICE_TESTING_GUIDE.md) for step-by-step physical device deployment and ADB commands.
 2. **Connect phones** via WiFi Direct or local network
 3. **Mount camera phone** on tripod with good view of playing field
 4. **Configure stream** settings (YouTube/Facebook credentials)
 5. **Customize scoreboard** with team information
 6. **Start streaming** and manage scores in real-time
+
+## Physical Hardware Testing
+Detailed instructions for building APKs, installing onto Samsung & Realme devices, ADB diagnostics, and end-to-end testing scenarios are documented in [DEVICE_TESTING_GUIDE.md](DEVICE_TESTING_GUIDE.md).
+
 
 ## Configuration
 
