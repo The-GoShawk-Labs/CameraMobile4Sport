@@ -103,76 +103,15 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
             fit: StackFit.expand,
             children: [
               // =============================================================
-              // 1. PEŁNOEKRANOWA WARSTWA TŁA: KAMERA LIVE / MAKIETA BOISKA
+              // STRUKTURA GŁÓWNA: PIONOWA (PORTRAIT) LUB POZIOMA (LANDSCAPE)
               // =============================================================
-              _buildFullCameraBackground(context, match, camera, streamer, p2p, isOutdoor, isPortrait),
-
-              // =============================================================
-              // 2. NAKŁADKA TELEWIZYJNA WYNIKÓW (SCOREBOARD OVERLAY)
-              // =============================================================
-              Positioned(
-                top: isPortrait ? 98 : 52,
-                left: 8,
-                right: 8,
-                child: SafeArea(
-                  child: Center(
-                    child: ScoreboardOverlay(
-                      session: match.session,
-                      style: streamer.scoreboardStyle,
-                      isTimeoutActive: match.isTimeoutActive,
-                      timeoutSeconds: match.timeoutSecondsRemaining,
-                      timeoutTeam: match.timeoutCallingTeam,
-                      showServeIndicator: streamer.showServeIndicator,
-                      activeSpecialEvent: match.activeSpecialEvent,
-                    ),
-                  ),
-                ),
-              ),
-
-              // =============================================================
-              // 3. EKRAN ZWYCIĘSTWA W MECZU
-              // =============================================================
-              if (match.session.isMatchOver)
-                Positioned.fill(
-                  child: Container(
-                    color: Colors.black87,
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.emoji_events, color: AppTheme.amberAccent, size: 64),
-                          const SizedBox(height: 12),
-                          const Text(
-                            'KONIEC MECZU!',
-                            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.white),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            'Zwycięzca: ${match.session.matchWinner}',
-                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.cyanAccent),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Wynik końcowy: ${match.session.currentSetPointsA} - ${match.session.currentSetPointsB}',
-                            style: const TextStyle(fontSize: 14, color: Colors.white70),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-
-              // =============================================================
-              // 4. GÓRNY PASEK STATUSU HUD & BANER AWARYJNY
-              // =============================================================
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
+              if (isPortrait)
+                Column(
                   children: [
-                    _buildTopBroadcastHUD(context, streamer, match, camera, p2p, isPortrait),
+                    // 1. GÓRNY PASEK STATUSU HUD (MENU, LIVE/REC, STATUS PHONE A)
+                    _buildTopBroadcastHUD(context, streamer, match, camera, p2p, true),
+
+                    // 2. AWARYJNY BANER PRZYWRACANIA POŁĄCZENIA
                     if (p2p.currentRole != DeviceRole.singlePhoneAllInOne &&
                         p2p.connectionState != CameraConnectionState.connected)
                       RecoveryBanner(
@@ -185,227 +124,135 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                           );
                         },
                       ),
-                  ],
-                ),
-              ),
 
-              // =============================================================
-              // 5. DOLNY PANEL STEROWANIA SĘDZIEGO (Z PŁYNNYM UKRYWANIEM)
-              // =============================================================
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: AnimatedSlide(
-                  offset: _isControlsHidden ? const Offset(0, 1.05) : Offset.zero,
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeInOutCubic,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      TactileScorePad(
-                        session: match.session,
-                        onAddPointA: (pts) {
-                          match.addPointA(points: pts);
-                          context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
-                        },
-                        onAddPointB: (pts) {
-                          match.addPointB(points: pts);
-                          context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
-                        },
-                        onSubtractPointA: () {
-                          match.subtractPointA();
-                          context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
-                        },
-                        onSubtractPointB: () {
-                          match.subtractPointB();
-                          context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
-                        },
-                        onAddFoulA: () {
-                          match.addFoulA();
-                          context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
-                        },
-                        onAddFoulB: () {
-                          match.addFoulB();
-                          context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
-                        },
-                        onNextPeriod: () {
-                          match.nextPeriod();
-                          context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
-                        },
-                        onUndo: () {
-                          match.undo();
-                          context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
-                        },
-                        onToggleRotation: () {
-                          match.toggleRotation();
-                          context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
-                        },
-                        onRequestTimeoutA: () {
-                          match.startTimeout(ServingTeam.teamA);
-                          context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
-                        },
-                        onRequestTimeoutB: () {
-                          match.startTimeout(ServingTeam.teamB);
-                          context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
-                        },
-                        onRequestSubA: () => match.requestSubstitutionA(),
-                        onRequestSubB: () => match.requestSubstitutionB(),
-                        onSpecialTag: (tag) => match.triggerSpecialEvent(tag),
-                        canUndo: match.canUndo,
-                        isTimeoutActive: match.isTimeoutActive,
-                        isOutdoorMode: isOutdoor,
-                        onToggleCollapse: () {
-                          HapticFeedback.selectionClick();
-                          setState(() {
-                            _isControlsHidden = true;
-                          });
-                        },
-                      ),
-                      _buildBottomModernNavBar(context, streamer),
-                    ],
-                  ),
-                ),
-              ),
-
-              // =============================================================
-              // 6. DYSKRETNY PŁYWAJĄCY PRZYCISK PRZYWRÓCENIA STEROWANIA
-              // =============================================================
-              if (_isControlsHidden)
-                Positioned(
-                  bottom: 12,
-                  left: 0,
-                  right: 0,
-                  child: Center(
-                    child: InkWell(
-                      onTap: () {
-                        HapticFeedback.selectionClick();
-                        setState(() {
-                          _isControlsHidden = false;
-                        });
-                      },
-                      borderRadius: BorderRadius.circular(25),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.black87,
-                          borderRadius: BorderRadius.circular(25),
-                          border: Border.all(color: AppTheme.amberAccent, width: 1.5),
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppTheme.amberAccent.withValues(alpha: 0.35),
-                              blurRadius: 12,
-                              spreadRadius: 1,
-                            ),
-                          ],
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.sports_volleyball, size: 16, color: AppTheme.amberAccent),
-                            SizedBox(width: 8),
-                            Text(
-                              'POKAŻ KOKPIT SĘDZIEGO',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w900,
-                                color: Colors.white,
-                                letterSpacing: 0.6,
-                              ),
-                            ),
-                            SizedBox(width: 4),
-                            Icon(Icons.keyboard_arrow_up_rounded, size: 18, color: AppTheme.amberAccent),
-                          ],
-                        ),
-                      ),
+                    // 3. WIDOK STRUMIENIA WIDEO (16:9 DOPASOWANY DO SZEROKOŚCI Z NAŁOŻONĄ TABLICĄ WYNIKÓW)
+                    _buildBroadcastStreamView(
+                      context: context,
+                      match: match,
+                      camera: camera,
+                      streamer: streamer,
+                      p2p: p2p,
+                      isOutdoor: isOutdoor,
+                      isPortrait: true,
                     ),
-                  ),
-                ),
 
-            // OVERLAY BLOKADY DOTYKU SĘDZIEGO (GHOST TOUCH LOCK)
-            if (match.isScreenLocked)
-              Positioned.fill(
-                child: Container(
-                  color: Colors.black.withValues(alpha: 0.94),
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.lock_rounded, color: AppTheme.amberAccent, size: 64),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'TRYB SĘDZIEGO ZABLOKOWANY',
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 0.5),
-                        ),
-                        const SizedBox(height: 6),
-                        const Text(
-                          'Ochrona przed przypadkowym dotknięciem na słupku / ławce',
-                          style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
-                        ),
-                        const SizedBox(height: 24),
-
-                        // PRZYTRZYMAJ, ABY ODBLOKOWAĆ (HOLD TO UNLOCK)
-                        GestureDetector(
-                          onLongPressStart: (_) {
-                            _unlockHoldController?.forward();
-                          },
-                          onLongPressEnd: (_) {
-                            if (_unlockHoldController?.isCompleted ?? false) {
-                              HapticFeedback.heavyImpact();
-                              match.toggleScreenLock();
-                            }
-                            _unlockHoldController?.reverse();
-                          },
-                          child: AnimatedBuilder(
-                            animation: _unlockHoldController!,
-                            builder: (context, child) {
-                              final progress = _unlockHoldController!.value;
-                              return Container(
-                                width: 220,
-                                height: 50,
-                                decoration: BoxDecoration(
-                                  color: AppTheme.surfaceCard,
-                                  borderRadius: BorderRadius.circular(25),
-                                  border: Border.all(color: AppTheme.amberAccent, width: 1.5),
-                                ),
-                                child: Stack(
-                                  alignment: Alignment.centerLeft,
+                    // 4. OBSZAR KOKPITU SĘDZIEGO (PŁYNNIE CHOWANY / ROZWIJANY)
+                    Expanded(
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          AnimatedSlide(
+                            offset: _isControlsHidden ? const Offset(0, 1.05) : Offset.zero,
+                            duration: const Duration(milliseconds: 250),
+                            curve: Curves.easeInOutCubic,
+                            child: Align(
+                              alignment: Alignment.bottomCenter,
+                              child: SingleChildScrollView(
+                                physics: const ClampingScrollPhysics(),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Container(
-                                      width: 220 * progress,
-                                      decoration: BoxDecoration(
-                                        color: AppTheme.amberAccent.withValues(alpha: 0.4),
-                                        borderRadius: BorderRadius.circular(25),
-                                      ),
-                                    ),
-                                    const Center(
-                                      child: Text(
-                                        'PRZYTRZYMAJ, BY ODBLOKOWAĆ',
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w900,
-                                          color: Colors.white,
-                                          letterSpacing: 0.5,
-                                        ),
-                                      ),
-                                    ),
+                                    _buildTactileScorePadWidget(context, match, isOutdoor),
+                                    _buildBottomModernNavBar(context, streamer),
                                   ],
                                 ),
+                              ),
+                            ),
+                          ),
+
+                          // PRZYCISK PRZYWRÓCENIA KOKPITU
+                          if (_isControlsHidden)
+                            Positioned(
+                              bottom: 12,
+                              left: 0,
+                              right: 0,
+                              child: _buildFloatingRestoreControlsButton(),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                )
+              else
+                // =============================================================
+                // UKŁAD POZIOMY (LANDSCAPE)
+                // =============================================================
+                Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // 1. STRUMIEŃ WIDEO 16:9 WYŚRODKOWANY / DOPASOWANY DO SZEROKOŚCI Z NAŁOŻONYM SCOREBOARDEM
+                    Center(
+                      child: _buildBroadcastStreamView(
+                        context: context,
+                        match: match,
+                        camera: camera,
+                        streamer: streamer,
+                        p2p: p2p,
+                        isOutdoor: isOutdoor,
+                        isPortrait: false,
+                      ),
+                    ),
+
+                    // 2. GÓRNY PASEK STATUSU HUD W POZIOMIE
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: _buildTopBroadcastHUD(context, streamer, match, camera, p2p, false),
+                    ),
+
+                    // 3. AWARYJNY BANER W POZIOMIE (TYLKO PODCZAS AKTYWNEGO WZNAWIANIA, PONIŻEJ TABLICY)
+                    if (p2p.currentRole != DeviceRole.singlePhoneAllInOne &&
+                        p2p.connectionState == CameraConnectionState.reconnecting)
+                      Positioned(
+                        top: 108,
+                        left: 40,
+                        right: 40,
+                        child: Center(
+                          child: RecoveryBanner(
+                            connectionState: p2p.connectionState,
+                            onManualReconnect: () async {
+                              await p2p.joinSession(
+                                hostAddress: p2p.hostAddress.isNotEmpty ? p2p.hostAddress : '192.168.68.51',
+                                pairingCode: 'VL-8492',
+                                role: DeviceRole.scorerPhoneB,
                               );
                             },
                           ),
                         ),
-                      ],
-                    ),
-                  ),
+                      ),
+
+                    // 4. ERGONOMICZNY KOKPIT SĘDZIEGO W POZIOMIE (KCIUKOWY OVERLAY PO BOKACH)
+                    _buildLandscapeErgonomicCockpit(context, match, isOutdoor),
+
+                    // 5. PRZYCISK PRZYWRÓCENIA STEROWANIA W POZIOMIE GDY SCHOWANE
+                    if (_isControlsHidden)
+                      Positioned(
+                        bottom: 12,
+                        left: 0,
+                        right: 0,
+                        child: _buildFloatingRestoreControlsButton(),
+                      ),
+                  ],
                 ),
-              ),
-          ],
+
+              // =============================================================
+              // EKRAN ZWYCIĘSTWA W MECZU
+              // =============================================================
+              if (match.session.isMatchOver)
+                _buildVictoryOverlay(match),
+
+              // =============================================================
+              // OVERLAY BLOKADY DOTYKU SĘDZIEGO (GHOST TOUCH LOCK)
+              // =============================================================
+              if (match.isScreenLocked)
+                _buildScreenLockOverlay(match),
+            ],
+          ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   Widget _buildTopBroadcastHUD(
     BuildContext context,
@@ -1064,15 +911,18 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
 );
   }
 
-  Widget _buildFullCameraBackground(
-    BuildContext context,
-    MatchProvider match,
-    CameraProvider camera,
-    StreamerProvider streamer,
-    P2PConnectionProvider p2p,
-    bool isOutdoor,
-    bool isPortrait,
-  ) {
+  // ===========================================================================
+  // WIDOK STRUMIENIA WIDEO (16:9) Z TABLICĄ WYNIKÓW OVERLAY I TELEMETRIĄ
+  // ===========================================================================
+  Widget _buildBroadcastStreamView({
+    required BuildContext context,
+    required MatchProvider match,
+    required CameraProvider camera,
+    required StreamerProvider streamer,
+    required P2PConnectionProvider p2p,
+    required bool isOutdoor,
+    required bool isPortrait,
+  }) {
     return GestureDetector(
       onTap: () {
         if (_isControlsHidden) {
@@ -1083,200 +933,853 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
         }
       },
       child: Container(
-        color: isOutdoor ? Colors.black : const Color(0xFF070A10),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // 1. BEZPRZEWODOWY OBRAZ Z KAMERY PHONE A (P2P REALME)
-            if (p2p.currentVideoFrame != null)
-              Container(
-                color: Colors.black,
-                alignment: Alignment.center,
-                child: FittedBox(
-                  fit: BoxFit.contain,
-                  child: Image.memory(
-                    p2p.currentVideoFrame!,
-                    gaplessPlayback: true,
-                  ),
-                ),
-              )
-            // 2. LOKALNA KAMERA W TRYBIE POJEDYNCZEGO TELEFONU (ALL-IN-ONE)
-            else if (_showLocalCameraPreview &&
-                camera.isCameraInitialized &&
-                camera.cameraController != null &&
-                camera.cameraController!.value.isInitialized)
-              Builder(
-                builder: (context) {
-                  final controller = camera.cameraController!;
-                  final pWidth = controller.value.previewSize?.width ?? 1920.0;
-                  final pHeight = controller.value.previewSize?.height ?? 1080.0;
-                  final sensorLong = pWidth > pHeight ? pWidth : pHeight;
-                  final sensorShort = pWidth > pHeight ? pHeight : pWidth;
-                  final targetWidth = isPortrait ? sensorShort : sensorLong;
-                  final targetHeight = isPortrait ? sensorLong : sensorShort;
-                  final targetAspectRatio = targetWidth / targetHeight;
+        color: Colors.black,
+        child: AspectRatio(
+          aspectRatio: 16 / 9,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // 1. ZASADNICZY STRUMIEŃ WIDEO (KAMERA P2P / KAMERA LOKALNA / MAKIETA BOISKA)
+              _buildStreamMediaLayer(match, camera, p2p, isOutdoor, isPortrait),
 
-                  return Container(
-                    color: Colors.black,
-                    alignment: Alignment.center,
-                    child: AspectRatio(
-                      aspectRatio: targetAspectRatio,
-                      child: FittedBox(
-                        fit: BoxFit.contain,
-                        child: SizedBox(
-                          width: targetWidth,
-                          height: targetHeight,
-                          child: CameraPreview(controller),
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              )
-            // 3. MAKIETA BOISKA JEŚLI BRAK AKTYWNEGO OBRAZU Z KAMERY
-            else ...[
-              // RYSOWANE LINIE BOISKA DOSTOSOWANE DO DYSCYPLINY
-              CustomPaint(
-                painter: SportCourtPainter(
-                  sport: match.session.sport,
-                  isHighContrast: isOutdoor,
+              // 2. TABLICA WYNIKÓW (SCOREBOARD OVERLAY) NAŁOŻONA BEZPOŚREDNIO NA STRUMIEŃ WIDEO
+              Positioned(
+                top: isPortrait ? 8 : 52,
+                left: 8,
+                right: 8,
+                child: Center(
+                  child: ScoreboardOverlay(
+                    session: match.session,
+                    style: streamer.scoreboardStyle,
+                    isTimeoutActive: match.isTimeoutActive,
+                    timeoutSeconds: match.timeoutSecondsRemaining,
+                    timeoutTeam: match.timeoutCallingTeam,
+                    showServeIndicator: streamer.showServeIndicator,
+                    activeSpecialEvent: match.activeSpecialEvent,
+                  ),
                 ),
               ),
 
-              // SIATKA CELOWNIKA KAMERY / FOCUS RETICLE
-              Center(
-                child: Container(
-                  width: 140,
-                  height: 90,
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.white10, width: 1),
-                    borderRadius: BorderRadius.circular(8),
+              // 3. TELEMETRIA STRUMIENIA I PRZEŁĄCZNIK WIDOKU W DOLNYM ROGU STRUMIENIA
+              if (isPortrait || _isControlsHidden)
+                Positioned(
+                  bottom: 6,
+                  left: isPortrait ? 10 : 16,
+                  right: isPortrait ? 10 : null,
+                  child: _buildStreamStatusAndControlsRow(context, camera, p2p, isPortrait: isPortrait),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStreamMediaLayer(
+    MatchProvider match,
+    CameraProvider camera,
+    P2PConnectionProvider p2p,
+    bool isOutdoor,
+    bool isPortrait,
+  ) {
+    // 1. BEZPRZEWODOWY OBRAZ Z KAMERY PHONE A (P2P REALME)
+    if (p2p.currentVideoFrame != null) {
+      return FittedBox(
+        fit: BoxFit.cover,
+        child: Image.memory(
+          p2p.currentVideoFrame!,
+          gaplessPlayback: true,
+        ),
+      );
+    }
+
+    // 2. LOKALNA KAMERA W TRYBIE POJEDYNCZEGO TELEFONU (ALL-IN-ONE)
+    if (_showLocalCameraPreview &&
+        camera.isCameraInitialized &&
+        camera.cameraController != null &&
+        camera.cameraController!.value.isInitialized) {
+      final controller = camera.cameraController!;
+      return FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: controller.value.previewSize?.width ?? 1920.0,
+          height: controller.value.previewSize?.height ?? 1080.0,
+          child: CameraPreview(controller),
+        ),
+      );
+    }
+
+    // 3. MAKIETA BOISKA JEŚLI BRAK AKTYWNEGO OBRAZU Z KAMERY
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        CustomPaint(
+          painter: SportCourtPainter(
+            sport: match.session.sport,
+            isHighContrast: isOutdoor,
+          ),
+        ),
+        Center(
+          child: Container(
+            width: 140,
+            height: 90,
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.white10, width: 1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Stack(
+              children: [
+                Align(
+                  alignment: Alignment.topLeft,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      border: Border(
+                        top: BorderSide(color: AppTheme.cyanAccent, width: 2),
+                        left: BorderSide(color: AppTheme.cyanAccent, width: 2),
+                      ),
+                    ),
                   ),
-                  child: Stack(
+                ),
+                Align(
+                  alignment: Alignment.topRight,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      border: Border(
+                        top: BorderSide(color: AppTheme.cyanAccent, width: 2),
+                        right: BorderSide(color: AppTheme.cyanAccent, width: 2),
+                      ),
+                    ),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.bottomLeft,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(color: AppTheme.cyanAccent, width: 2),
+                        left: BorderSide(color: AppTheme.cyanAccent, width: 2),
+                      ),
+                    ),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.bottomRight,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(color: AppTheme.cyanAccent, width: 2),
+                        right: BorderSide(color: AppTheme.cyanAccent, width: 2),
+                      ),
+                    ),
+                  ),
+                ),
+                Center(
+                  child: Icon(match.session.sport.icon, size: 28, color: Colors.white.withValues(alpha: 0.15)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStreamStatusAndControlsRow(
+    BuildContext context,
+    CameraProvider camera,
+    P2PConnectionProvider p2p, {
+    bool isPortrait = true,
+  }) {
+    return Align(
+      alignment: isPortrait ? Alignment.bottomCenter : Alignment.bottomLeft,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.75),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white12),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // PODPIS STATUSU STRUMIENIA WIDEO I PARAMETRÓW KODERA
+              InkWell(
+                onTap: () => _openVideoSettings(context),
+                borderRadius: BorderRadius.circular(6),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Align(
-                        alignment: Alignment.topLeft,
-                        child: Container(width: 8, height: 8, decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppTheme.cyanAccent, width: 2), left: BorderSide(color: AppTheme.cyanAccent, width: 2)))),
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: camera.isRecording ? AppTheme.redLive : AppTheme.greenLive,
+                          shape: BoxShape.circle,
+                        ),
                       ),
-                      Align(
-                        alignment: Alignment.topRight,
-                        child: Container(width: 8, height: 8, decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppTheme.cyanAccent, width: 2), right: BorderSide(color: AppTheme.cyanAccent, width: 2)))),
+                      const SizedBox(width: 6),
+                      Text(
+                        isPortrait
+                            ? (p2p.currentVideoFrame != null
+                                ? 'LIVE FEED • REALME (${p2p.healthMetrics.latencyMs}ms • P2P)'
+                                : (camera.isCameraInitialized
+                                    ? 'LOKALNA KAMERA (${camera.settings.resolution.label} ${camera.settings.fps.label})'
+                                    : 'OCZEKIWANIE NA KAMERĘ REALME...'))
+                            : (p2p.currentVideoFrame != null
+                                ? 'P2P ${p2p.healthMetrics.latencyMs}ms'
+                                : (camera.isCameraInitialized
+                                    ? 'KAMERA ${camera.settings.fps.label}'
+                                    : 'BRAK ŹRÓDŁA')),
+                        style: const TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.5,
+                          color: Colors.white70,
+                        ),
                       ),
-                      Align(
-                        alignment: Alignment.bottomLeft,
-                        child: Container(width: 8, height: 8, decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.cyanAccent, width: 2), left: BorderSide(color: AppTheme.cyanAccent, width: 2)))),
+                      const SizedBox(width: 4),
+                      const Icon(Icons.settings, size: 10, color: AppTheme.cyanAccent),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(width: 8),
+
+              // PRZEŁĄCZNIK WIDOKU KAMERA LIVE / MAKIETA
+              InkWell(
+                onTap: () {
+                  setState(() {
+                    _showLocalCameraPreview = !_showLocalCameraPreview;
+                  });
+                  if (_showLocalCameraPreview && !camera.isCameraInitialized) {
+                    camera.initializeCamera();
+                  }
+                },
+                borderRadius: BorderRadius.circular(6),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.white10,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.5)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _showLocalCameraPreview ? Icons.sports_volleyball : Icons.videocam,
+                        size: 11,
+                        color: AppTheme.cyanAccent,
                       ),
-                      Align(
-                        alignment: Alignment.bottomRight,
-                        child: Container(width: 8, height: 8, decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppTheme.cyanAccent, width: 2), right: BorderSide(color: AppTheme.cyanAccent, width: 2)))),
-                      ),
-                      Center(
-                        child: Icon(match.session.sport.icon, size: 28, color: Colors.white.withValues(alpha: 0.15)),
+                      const SizedBox(width: 4),
+                      Text(
+                        _showLocalCameraPreview ? 'MAKIETA' : 'KAMERA LIVE',
+                        style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white),
                       ),
                     ],
                   ),
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
 
-            // PODPIS STATUSU STRUMIENIA WIDEO I PRZEŁĄCZNIK KAMERA/MAKIETA (W JEDNYM RZĘDZIE, BEZ KOLIZJI)
-            Positioned(
-              top: isPortrait ? 154 : 50,
-              left: 12,
-              right: 12,
-              child: Align(
-                alignment: isPortrait ? Alignment.center : Alignment.centerLeft,
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // PODPIS STATUSU STRUMIENIA WIDEO I PARAMETRÓW KODERA
-                      InkWell(
-                        onTap: () => _openVideoSettings(context),
-                        borderRadius: BorderRadius.circular(6),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: Colors.white12),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 6,
-                                height: 6,
-                                decoration: BoxDecoration(
-                                  color: camera.isRecording ? AppTheme.redLive : AppTheme.greenLive,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                p2p.currentVideoFrame != null
-                                    ? 'LIVE FEED • REALME (${p2p.healthMetrics.latencyMs}ms • P2P)'
-                                    : (camera.isCameraInitialized
-                                        ? 'LOKALNA KAMERA (${camera.settings.resolution.label} ${camera.settings.fps.label})'
-                                        : 'OCZEKIWANIE NA KAMERĘ REALME...'),
-                                style: const TextStyle(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 0.5,
-                                  color: Colors.white70,
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              const Icon(Icons.settings, size: 10, color: AppTheme.cyanAccent),
-                            ],
-                          ),
-                        ),
+  Widget _buildTactileScorePadWidget(
+    BuildContext context,
+    MatchProvider match,
+    bool isOutdoor,
+  ) {
+    return TactileScorePad(
+      session: match.session,
+      onAddPointA: (pts) {
+        match.addPointA(points: pts);
+        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+      },
+      onAddPointB: (pts) {
+        match.addPointB(points: pts);
+        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+      },
+      onSubtractPointA: () {
+        match.subtractPointA();
+        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+      },
+      onSubtractPointB: () {
+        match.subtractPointB();
+        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+      },
+      onAddFoulA: () {
+        match.addFoulA();
+        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+      },
+      onAddFoulB: () {
+        match.addFoulB();
+        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+      },
+      onNextPeriod: () {
+        match.nextPeriod();
+        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+      },
+      onUndo: () {
+        match.undo();
+        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+      },
+      onToggleRotation: () {
+        match.toggleRotation();
+        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+      },
+      onRequestTimeoutA: () {
+        match.startTimeout(ServingTeam.teamA);
+        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+      },
+      onRequestTimeoutB: () {
+        match.startTimeout(ServingTeam.teamB);
+        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+      },
+      onRequestSubA: () => match.requestSubstitutionA(),
+      onRequestSubB: () => match.requestSubstitutionB(),
+      onSpecialTag: (tag) => match.triggerSpecialEvent(tag),
+      canUndo: match.canUndo,
+      isTimeoutActive: match.isTimeoutActive,
+      isOutdoorMode: isOutdoor,
+      onToggleCollapse: () {
+        HapticFeedback.selectionClick();
+        setState(() {
+          _isControlsHidden = true;
+        });
+      },
+    );
+  }
+
+  Widget _buildFloatingRestoreControlsButton() {
+    return Center(
+      child: InkWell(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          setState(() {
+            _isControlsHidden = false;
+          });
+        },
+        borderRadius: BorderRadius.circular(25),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black87,
+            borderRadius: BorderRadius.circular(25),
+            border: Border.all(color: AppTheme.amberAccent, width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: AppTheme.amberAccent.withValues(alpha: 0.35),
+                blurRadius: 12,
+                spreadRadius: 1,
+              ),
+            ],
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.sports_volleyball, size: 16, color: AppTheme.amberAccent),
+              SizedBox(width: 8),
+              Text(
+                'POKAŻ KOKPIT SĘDZIEGO',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                  letterSpacing: 0.6,
+                ),
+              ),
+              SizedBox(width: 4),
+              Icon(Icons.keyboard_arrow_up_rounded, size: 18, color: AppTheme.amberAccent),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // ERGONOMICZNY KOKPIT SĘDZIEGO W POZIOMIE (LANDSCAPE HUD)
+  // Przeznaczony do obsługi kciukami bez zasłaniania środka boiska ani tablicy
+  // ===========================================================================
+  Widget _buildLandscapeErgonomicCockpit(
+    BuildContext context,
+    MatchProvider match,
+    bool isOutdoor,
+  ) {
+    final session = match.session;
+    final isServingA = session.currentServer == ServingTeam.teamA;
+    final isServingB = session.currentServer == ServingTeam.teamB;
+
+    return AnimatedSlide(
+      offset: _isControlsHidden ? const Offset(0, 1.25) : Offset.zero,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeInOutCubic,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // LEWY PANEL: DRUŻYNA A (OBSŁUGA LEWYM KCIUKIEM)
+          Positioned(
+            left: 12,
+            bottom: 12,
+            child: _buildLandscapeTeamScoreCard(
+              teamName: session.teamA,
+              teamColor: session.teamAColor,
+              points: session.currentSetPointsA,
+              isServing: isServingA,
+              timeoutsUsed: session.timeoutsA,
+              subsUsed: session.substitutionsA,
+              onAddPoint: () {
+                match.addPointA(points: 1);
+                context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+              },
+              onSubtractPoint: () {
+                match.subtractPointA();
+                context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+              },
+              tag1Label: 'AS!',
+              tag1Color: AppTheme.amberAccent,
+              onTag1: () => match.triggerSpecialEvent('AS!'),
+              tag2Label: 'BLOK',
+              tag2Color: AppTheme.cyanAccent,
+              onTag2: () => match.triggerSpecialEvent('BLOK'),
+              isOutdoor: isOutdoor,
+            ),
+          ),
+
+          // PRAWY PANEL: DRUŻYNA B (OBSŁUGA PRAWYM KCIUKIEM)
+          Positioned(
+            right: 12,
+            bottom: 12,
+            child: _buildLandscapeTeamScoreCard(
+              teamName: session.teamB,
+              teamColor: session.teamBColor,
+              points: session.currentSetPointsB,
+              isServing: isServingB,
+              timeoutsUsed: session.timeoutsB,
+              subsUsed: session.substitutionsB,
+              onAddPoint: () {
+                match.addPointB(points: 1);
+                context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+              },
+              onSubtractPoint: () {
+                match.subtractPointB();
+                context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+              },
+              tag1Label: 'ATAK',
+              tag1Color: AppTheme.amberAccent,
+              onTag1: () => match.triggerSpecialEvent('ATAK'),
+              tag2Label: 'CHALLENGE',
+              tag2Color: const Color(0xFFAB47BC),
+              onTag2: () => match.triggerSpecialEvent('CHALLENGE'),
+              isOutdoor: isOutdoor,
+            ),
+          ),
+
+          // DOLNY PASEK NAWIGACJI I KONTROLI MECZU: ROTACJA, UNDO, TIMEOUT, ZWIŃ
+          Positioned(
+            bottom: 12,
+            left: 235,
+            right: 235,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: isOutdoor ? Colors.black : const Color(0xF20A0E17),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white24),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black87, blurRadius: 10, offset: Offset(0, 2)),
+                ],
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  // ROTACJA
+                  InkWell(
+                    onTap: () {
+                      match.toggleRotation();
+                      context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+                    },
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: AppTheme.amberAccent.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppTheme.amberAccent.withValues(alpha: 0.6)),
                       ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.sync_alt, size: 13, color: AppTheme.amberAccent),
+                          SizedBox(width: 4),
+                          Text('ROTACJA', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: AppTheme.amberAccent)),
+                        ],
+                      ),
+                    ),
+                  ),
 
-                      const SizedBox(width: 8),
-
-                      // PRZEŁĄCZNIK WIDOKU KAMERA LIVE / MAKIETA
-                      InkWell(
-                        onTap: () {
-                          setState(() {
-                            _showLocalCameraPreview = !_showLocalCameraPreview;
-                          });
-                          if (_showLocalCameraPreview && !camera.isCameraInitialized) {
-                            camera.initializeCamera();
+                  // UNDO (COFNIJ)
+                  InkWell(
+                    onTap: match.canUndo
+                        ? () {
+                            match.undo();
+                            context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
                           }
-                        },
-                        borderRadius: BorderRadius.circular(6),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.black87,
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.5)),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                _showLocalCameraPreview ? Icons.sports_volleyball : Icons.videocam,
-                                size: 11,
-                                color: AppTheme.cyanAccent,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                _showLocalCameraPreview ? 'MAKIETA' : 'KAMERA LIVE',
-                                style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white),
-                              ),
-                            ],
-                          ),
-                        ),
+                        : null,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: match.canUndo ? Colors.white12 : Colors.white10,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: match.canUndo ? Colors.white24 : Colors.white10),
                       ),
-                    ],
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.undo, size: 13, color: match.canUndo ? Colors.white : Colors.white30),
+                          const SizedBox(width: 4),
+                          Text(
+                            'COFNIJ',
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: match.canUndo ? Colors.white : Colors.white30),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  // PRZYCISK UKRYCIA KOKPITU
+                  InkWell(
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      setState(() {
+                        _isControlsHidden = true;
+                      });
+                    },
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: Colors.white12,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.keyboard_arrow_down_rounded, size: 15, color: Colors.white70),
+                          SizedBox(width: 2),
+                          Text('UKRYJ', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white70)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLandscapeTeamScoreCard({
+    required String teamName,
+    required Color teamColor,
+    required int points,
+    required bool isServing,
+    required int timeoutsUsed,
+    required int subsUsed,
+    required VoidCallback onAddPoint,
+    required VoidCallback onSubtractPoint,
+    required String tag1Label,
+    required Color tag1Color,
+    required VoidCallback onTag1,
+    required String tag2Label,
+    required Color tag2Color,
+    required VoidCallback onTag2,
+    required bool isOutdoor,
+  }) {
+    return Container(
+      width: 210,
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: isOutdoor ? Colors.black : const Color(0xF20A0E17),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isServing ? teamColor : teamColor.withValues(alpha: 0.35),
+          width: isServing ? 2.0 : 1.2,
+        ),
+        boxShadow: [
+          if (isServing)
+            BoxShadow(
+              color: teamColor.withValues(alpha: 0.25),
+              blurRadius: 12,
+              spreadRadius: 1,
+            ),
+          const BoxShadow(color: Colors.black87, blurRadius: 10, offset: Offset(0, 3)),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // NAZWA DRUŻYNY I ZNACZNIK SERWISU
+          Row(
+            children: [
+              Container(width: 4, height: 14, decoration: BoxDecoration(color: teamColor, borderRadius: BorderRadius.circular(2))),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  teamName.toUpperCase(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                    color: teamColor,
+                    letterSpacing: 0.5,
                   ),
                 ),
               ),
+              if (isServing)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: teamColor.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: teamColor, width: 1),
+                  ),
+                  child: const Text('SERW', style: TextStyle(fontSize: 8, fontWeight: FontWeight.w900, color: Colors.white)),
+                ),
+            ],
+          ),
+
+          const SizedBox(height: 6),
+
+          // DUŻY PRZYCISK PUNKTU (+1 TAP, SWIPE DO DOŁU -1)
+          GestureDetector(
+            onTap: () {
+              HapticFeedback.lightImpact();
+              onAddPoint();
+            },
+            onVerticalDragEnd: (details) {
+              if ((details.primaryVelocity ?? 0) > 100) {
+                HapticFeedback.mediumImpact();
+                onSubtractPoint();
+              }
+            },
+            child: Container(
+              height: 72,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: isOutdoor ? const Color(0xFF101622) : const Color(0xFF141D2D),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isServing ? teamColor.withValues(alpha: 0.5) : Colors.white12,
+                ),
+              ),
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Positioned(
+                    top: 4,
+                    left: 8,
+                    child: Text('TAP: +1', style: TextStyle(fontSize: 8, color: Colors.white.withValues(alpha: 0.4), fontWeight: FontWeight.bold)),
+                  ),
+                  Positioned(
+                    top: 4,
+                    right: 8,
+                    child: Text('SWIPE: -1', style: TextStyle(fontSize: 8, color: Colors.white.withValues(alpha: 0.4), fontWeight: FontWeight.bold)),
+                  ),
+                  Text(
+                    points.toString(),
+                    style: TextStyle(
+                      fontSize: 40,
+                      fontWeight: FontWeight.w900,
+                      color: teamColor,
+                      height: 1.0,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ],
+          ),
+
+          const SizedBox(height: 6),
+
+          // SZYBKIE TAGI ZDARZEŃ (AS, BLOK / ATAK, CHALLENGE)
+          Row(
+            children: [
+              Expanded(
+                child: InkWell(
+                  onTap: () {
+                    HapticFeedback.heavyImpact();
+                    onTag1();
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    height: 26,
+                    decoration: BoxDecoration(
+                      color: tag1Color.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: tag1Color.withValues(alpha: 0.4)),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      tag1Label,
+                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: tag1Color),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: InkWell(
+                  onTap: () {
+                    HapticFeedback.heavyImpact();
+                    onTag2();
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    height: 26,
+                    decoration: BoxDecoration(
+                      color: tag2Color.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: tag2Color.withValues(alpha: 0.4)),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      tag2Label,
+                      style: TextStyle(fontSize: 9, fontWeight: FontWeight.w900, color: tag2Color),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVictoryOverlay(MatchProvider match) {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black87,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.emoji_events, color: AppTheme.amberAccent, size: 64),
+              const SizedBox(height: 12),
+              const Text(
+                'KONIEC MECZU!',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.white),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Zwycięzca: ${match.session.matchWinner}',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.cyanAccent),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Wynik końcowy: ${match.session.currentSetPointsA} - ${match.session.currentSetPointsB}',
+                style: const TextStyle(fontSize: 14, color: Colors.white70),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScreenLockOverlay(MatchProvider match) {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withValues(alpha: 0.94),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.lock_rounded, color: AppTheme.amberAccent, size: 64),
+              const SizedBox(height: 16),
+              const Text(
+                'TRYB SĘDZIEGO ZABLOKOWANY',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 0.5),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Ochrona przed przypadkowym dotknięciem na słupku / ławce',
+                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 24),
+              GestureDetector(
+                onLongPressStart: (_) {
+                  _unlockHoldController?.forward();
+                },
+                onLongPressEnd: (_) {
+                  if (_unlockHoldController?.isCompleted ?? false) {
+                    HapticFeedback.heavyImpact();
+                    match.toggleScreenLock();
+                  }
+                  _unlockHoldController?.reverse();
+                },
+                child: AnimatedBuilder(
+                  animation: _unlockHoldController!,
+                  builder: (context, child) {
+                    final progress = _unlockHoldController!.value;
+                    return Container(
+                      width: 220,
+                      height: 50,
+                      decoration: BoxDecoration(
+                        color: AppTheme.surfaceCard,
+                        borderRadius: BorderRadius.circular(25),
+                        border: Border.all(color: AppTheme.amberAccent, width: 1.5),
+                      ),
+                      child: Stack(
+                        alignment: Alignment.centerLeft,
+                        children: [
+                          Container(
+                            width: 220 * progress,
+                            decoration: BoxDecoration(
+                              color: AppTheme.amberAccent.withValues(alpha: 0.4),
+                              borderRadius: BorderRadius.circular(25),
+                            ),
+                          ),
+                          const Center(
+                            child: Text(
+                              'PRZYTRZYMAJ, BY ODBLOKOWAĆ',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.white,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1348,11 +1851,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                 _openVideoSettings(context);
               } else if (index == 4) {
                 // STREAM MODAL
-                showModalBottomSheet(
-                  context: context,
-                  backgroundColor: Colors.transparent,
-                  builder: (_) => const StreamSettingsModal(),
-                );
+                _openStreamSettings(context);
               } else if (index == 5) {
                 // SCOREBOARD STUDIO
                 showModalBottomSheet(

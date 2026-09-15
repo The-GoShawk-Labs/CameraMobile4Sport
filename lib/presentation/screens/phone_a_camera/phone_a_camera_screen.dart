@@ -420,6 +420,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                         timeoutSeconds: match.timeoutSecondsRemaining,
                         timeoutTeam: match.timeoutCallingTeam,
                         showServeIndicator: streamer.showServeIndicator,
+                        activeSpecialEvent: match.activeSpecialEvent,
                       ),
                     ),
                   ),
