@@ -219,8 +219,9 @@ void main() {
 
       // Podgląd i HUD
       expect(find.byType(PhoneACameraScreen), findsOneWidget);
-      expect(find.textContaining('MASTER REC: GOTOWY'), findsOneWidget);
-      expect(find.text('START TRANSMISJI / ZAPISU'), findsOneWidget);
+      expect(find.textContaining('REC: GOTOWY'), findsOneWidget);
+      expect(find.text('START TRANSMISJI'), findsOneWidget);
+      expect(find.text('REC'), findsOneWidget);
       expect(find.text('CZYSTY KADR'), findsOneWidget);
       expect(find.text('STATYW'), findsOneWidget);
       expect(find.byType(CameraControlsOverlay), findsOneWidget);
@@ -231,7 +232,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
 
       expect(find.text('CZYSTY KADR'), findsOneWidget);
-      expect(find.text('START TRANSMISJI / ZAPISU'), findsOneWidget);
+      expect(find.text('START TRANSMISJI'), findsOneWidget);
 
       // Kliknij "CZYSTY KADR"
       await tester.tap(find.text('CZYSTY KADR'));
@@ -239,7 +240,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
 
       // Dolny i górny pasek powinny być ukryte
-      expect(find.text('START TRANSMISJI / ZAPISU'), findsNothing);
+      expect(find.text('START TRANSMISJI'), findsNothing);
       expect(find.text('POKAŻ HUD'), findsOneWidget);
 
       // Przywróć HUD
@@ -247,7 +248,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
 
-      expect(find.text('START TRANSMISJI / ZAPISU'), findsOneWidget);
+      expect(find.text('START TRANSMISJI'), findsOneWidget);
       expect(find.text('CZYSTY KADR'), findsOneWidget);
     });
 
@@ -289,10 +290,10 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
 
       // 1. Stan początkowy
-      expect(find.text('START TRANSMISJI / ZAPISU'), findsOneWidget);
+      expect(find.text('REC'), findsOneWidget);
 
       // 2. Start nagrywania
-      await tester.tap(find.text('START TRANSMISJI / ZAPISU'));
+      await tester.tap(find.text('REC'));
       await tester.pump();
       for (int i = 0; i < 10 && !camera.isRecording; i++) {
         await tester.runAsync(() async {
@@ -302,10 +303,10 @@ void main() {
       }
 
       expect(camera.isRecording, isTrue);
-      expect(find.text('ZAKOŃCZ'), findsOneWidget);
+      expect(find.text('REC STOP'), findsOneWidget);
 
       // 3. Zatrzymanie nagrywania
-      await tester.tap(find.text('ZAKOŃCZ'));
+      await tester.tap(find.text('REC STOP'));
       await tester.pump();
       for (int i = 0; i < 20 && camera.recordingState != RecordingState.saved; i++) {
         await tester.runAsync(() async {

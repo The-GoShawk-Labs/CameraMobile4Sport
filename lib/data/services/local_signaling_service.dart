@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:volleylive/data/models/p2p_message.dart';
 
 abstract class ISignalingService {
   Stream<P2PMessage> get incomingMessages;
+  Stream<Uint8List> get incomingVideoFrames;
   Stream<bool> get isConnectedStream;
+  Stream<int> get clientCountStream;
   bool get isConnected;
+  int get clientCount;
   String? get currentHostAddress;
 
   Future<String> getLocalIpAddress();
@@ -16,6 +20,7 @@ abstract class ISignalingService {
   Future<void> disconnect();
 
   void sendMessage(P2PMessage message);
+  void sendVideoFrame(Uint8List frameBytes);
 }
 
 /// Serwis sygnalizacji lokalnej (WebSocket Host w LAN/Hotspot oraz Klient P2P)
@@ -25,7 +30,9 @@ class LocalSignalingService implements ISignalingService {
   WebSocket? _clientSocket;
 
   final _messageController = StreamController<P2PMessage>.broadcast();
+  final _videoFrameController = StreamController<Uint8List>.broadcast();
   final _connectionStateController = StreamController<bool>.broadcast();
+  final _clientCountController = StreamController<int>.broadcast();
 
   bool _isConnected = false;
   String? _currentHostAddress;
@@ -34,10 +41,19 @@ class LocalSignalingService implements ISignalingService {
   Stream<P2PMessage> get incomingMessages => _messageController.stream;
 
   @override
+  Stream<Uint8List> get incomingVideoFrames => _videoFrameController.stream;
+
+  @override
   Stream<bool> get isConnectedStream => _connectionStateController.stream;
 
   @override
+  Stream<int> get clientCountStream => _clientCountController.stream;
+
+  @override
   bool get isConnected => _isConnected;
+
+  @override
+  int get clientCount => _serverClients.length + (_clientSocket != null && _isConnected ? 1 : 0);
 
   @override
   String? get currentHostAddress => _currentHostAddress;
@@ -132,21 +148,32 @@ class LocalSignalingService implements ISignalingService {
 
           socket.listen(
             (data) {
-              _handleRawMessage(data, fromSocket: socket);
-              // Rozgłoś do pozostałych klientów w trybie hub
-              _broadcastToOtherClients(data, socket);
+              if (data is List<int>) {
+                final bytes = data is Uint8List ? data : Uint8List.fromList(data);
+                if (!_videoFrameController.isClosed) {
+                  _videoFrameController.add(bytes);
+                }
+                _broadcastToOtherClients(data, socket);
+              } else if (data is String) {
+                _handleRawMessage(data, fromSocket: socket);
+                // Rozgłoś do pozostałych klientów w trybie hub
+                _broadcastToOtherClients(data, socket);
+              }
             },
             onDone: () {
               _serverClients.remove(socket);
+              _updateClientCount();
               if (_serverClients.isEmpty && _clientSocket == null) {
                 _setConnected(false);
               }
             },
             onError: (err) {
               _serverClients.remove(socket);
+              _updateClientCount();
             },
             cancelOnError: true,
           );
+          _updateClientCount();
         } else {
           request.response
             ..statusCode = HttpStatus.forbidden
@@ -174,21 +201,32 @@ class LocalSignalingService implements ISignalingService {
     try {
       _clientSocket = await WebSocket.connect(wsUrl).timeout(const Duration(seconds: 5));
       _setConnected(true);
+      _updateClientCount();
 
       _clientSocket?.listen(
         (data) {
-          _handleRawMessage(data);
+          if (data is List<int>) {
+            final bytes = data is Uint8List ? data : Uint8List.fromList(data);
+            if (!_videoFrameController.isClosed) {
+              _videoFrameController.add(bytes);
+            }
+          } else if (data is String) {
+            _handleRawMessage(data);
+          }
         },
         onDone: () {
           _setConnected(false);
+          _updateClientCount();
         },
         onError: (err) {
           _setConnected(false);
+          _updateClientCount();
         },
         cancelOnError: true,
       );
     } catch (e) {
       _setConnected(false);
+      _updateClientCount();
       rethrow;
     }
   }
@@ -211,12 +249,26 @@ class LocalSignalingService implements ISignalingService {
   }
 
   @override
+  void sendVideoFrame(Uint8List frameBytes) {
+    if (_clientSocket != null && _clientSocket?.readyState == WebSocket.open) {
+      _clientSocket?.add(frameBytes);
+    }
+
+    for (final client in _serverClients) {
+      if (client.readyState == WebSocket.open) {
+        client.add(frameBytes);
+      }
+    }
+  }
+
+  @override
   Future<void> disconnect() async {
     if (_clientSocket != null) {
       await _clientSocket?.close();
       _clientSocket = null;
     }
     _setConnected(false);
+    _updateClientCount();
   }
 
   @override
@@ -229,6 +281,7 @@ class LocalSignalingService implements ISignalingService {
     _server = null;
     _currentHostAddress = null;
     _setConnected(false);
+    _updateClientCount();
   }
 
   void _handleRawMessage(dynamic data, {WebSocket? fromSocket}) {
@@ -257,10 +310,18 @@ class LocalSignalingService implements ISignalingService {
     }
   }
 
+  void _updateClientCount() {
+    if (!_clientCountController.isClosed) {
+      _clientCountController.add(clientCount);
+    }
+  }
+
   void dispose() {
     disconnect();
     stopServer();
     _messageController.close();
+    _videoFrameController.close();
     _connectionStateController.close();
+    _clientCountController.close();
   }
 }

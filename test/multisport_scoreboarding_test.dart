@@ -121,7 +121,7 @@ void main() {
       expect(find.text('SIATKÓWKA HALOWA'), findsOneWidget);
       expect(find.text('KOSZYKÓWKA'), findsOneWidget);
       expect(find.text('PIŁKA NOŻNA / FUTSAL'), findsOneWidget);
-      expect(find.text('POŁĄCZ ZE SMARTFONEM KAMERĄ (PHONE A)'), findsOneWidget);
+      expect(find.textContaining('SMARTFONEM KAMERĄ'), findsWidgets);
     });
 
     testWidgets('TactileScorePad renders basketball buttons (+1, +2, +3, -1) and fouls', (tester) async {

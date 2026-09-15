@@ -337,13 +337,27 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
       children: [
         // 1. Podgląd Wideo (Kamera lokalna w trybie 1 smartfona, VideoPlayer lub Symulowany Kadr Boiska)
         if (hasLocalCamera)
-          FittedBox(
-            fit: BoxFit.cover,
-            child: SizedBox(
-              width: camera.cameraController!.value.previewSize?.height ?? 1920,
-              height: camera.cameraController!.value.previewSize?.width ?? 1080,
-              child: CameraPreview(camera.cameraController!),
-            ),
+          Builder(
+            builder: (context) {
+              final controller = camera.cameraController!;
+              final pWidth = controller.value.previewSize?.width ?? 1920.0;
+              final pHeight = controller.value.previewSize?.height ?? 1080.0;
+              final sensorLong = pWidth > pHeight ? pWidth : pHeight;
+              final sensorShort = pWidth > pHeight ? pHeight : pWidth;
+              return Center(
+                child: AspectRatio(
+                  aspectRatio: sensorLong / sensorShort,
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    child: SizedBox(
+                      width: sensorLong,
+                      height: sensorShort,
+                      child: CameraPreview(controller),
+                    ),
+                  ),
+                ),
+              );
+            },
           )
         else if (_isInitialized && _controller != null && !_hasError)
           FittedBox(

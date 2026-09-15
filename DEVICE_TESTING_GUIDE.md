@@ -2,7 +2,7 @@
 **Projekt:** CameraMobile4Sport (Sport Video Streaming System)  
 **Docelowe urządzenia referencyjne:** 
 - **Samsung Galaxy A53 5G** (`SM-A536B`, ID: `RZCT40DG2DK`, Android 16 / One UI)
-- **Realme** (Android / Realme UI / ColorOS)
+- **Realme 12 Pro+ 5G** (`RMX3840`, ID: `ac0e929f`, Android 14 / Realme UI)
 
 ---
 
@@ -46,7 +46,7 @@ lub bezpośrednio przez ADB:
 
 **Przykładowy wynik:**
 - Samsung Galaxy A53: `RZCT40DG2DK`
-- Realme: `[ID_REALME]` (np. ciąg znaków alfanumerycznych)
+- Realme: `ac0e929f` (Realme 12 Pro+ 5G `RMX3840`)
 
 ---
 
@@ -68,10 +68,9 @@ flutter build apk --debug
 & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" -s RZCT40DG2DK install -r build\app\outputs\flutter-apk\app-debug.apk
 ```
 
-#### Krok 3: Instalacja na Realme:
-*(Zastąp `ID_REALME` identyfikatorem z polecenia `flutter devices`)*
+#### Krok 3: Instalacja na Realme (ac0e929f):
 ```powershell
-& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" -s ID_REALME install -r build\app\outputs\flutter-apk\app-debug.apk
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" -s ac0e929f install -r build\app\outputs\flutter-apk\app-debug.apk
 ```
 
 > **Uwaga:** Parametr `-r` oznacza *reinstall* – instaluje nową wersję bez czyszczenia danych aplikacji ani konfiguracji.
@@ -85,9 +84,9 @@ Wygodne przy testowaniu logów na żywo i korzystaniu z Hot Reload (`r`) oraz Ho
   ```powershell
   flutter run -d RZCT40DG2DK
   ```
-- **Dla Realme:**
+- **Dla Realme (ac0e929f):**
   ```powershell
-  flutter run -d ID_REALME
+  flutter run -d ac0e929f
   ```
 - **Dla obu smartfonów jednocześnie:**
   Otwórz dwa niezależne okna PowerShell i w każdym uruchom powyższe polecenie z odpowiednim ID urządzenia.
@@ -157,7 +156,7 @@ Do zdalnej weryfikacji widoku smartfona z poziomu komputera służą poniższe p
 & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" -s RZCT40DG2DK exec-out screencap -p > zrzut_samsung.png
 
 # Zrzut z Realme:
-& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" -s ID_REALME exec-out screencap -p > zrzut_realme.png
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" -s ac0e929f exec-out screencap -p > zrzut_realme.png
 ```
 
 ### Podgląd logów na żywo (tylko z aplikacji):

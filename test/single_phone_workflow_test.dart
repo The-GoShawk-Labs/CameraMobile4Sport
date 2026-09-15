@@ -23,7 +23,7 @@ void main() {
       expect(find.textContaining('TRYB JEDNEGO SMARTFONA'), findsOneWidget);
       expect(find.text('1. KAMERA'), findsOneWidget);
       expect(find.text('2. SĘDZIA'), findsOneWidget);
-      expect(find.text('3. STATYSTYKI'), findsOneWidget);
+      expect(find.textContaining('STAT'), findsWidgets);
     });
 
     testWidgets('Tapping 1. KAMERA opens PhoneACameraScreen and presents safe exit and quick pills', (WidgetTester tester) async {

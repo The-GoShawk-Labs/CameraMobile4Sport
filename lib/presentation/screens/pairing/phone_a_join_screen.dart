@@ -23,7 +23,7 @@ class PhoneAJoinScreen extends StatefulWidget {
 
 class _PhoneAJoinScreenState extends State<PhoneAJoinScreen> with SingleTickerProviderStateMixin {
   final _pinController = TextEditingController(text: 'VL-8492');
-  final _hostIpController = TextEditingController(text: '127.0.0.1');
+  final _hostIpController = TextEditingController(text: '192.168.68.54');
   bool _isConnecting = false;
   bool _hasScanned = false;
   late AnimationController _scannerLaserController;

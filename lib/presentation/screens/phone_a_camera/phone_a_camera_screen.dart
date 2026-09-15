@@ -84,9 +84,42 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
     return '$hours:$minutes:$seconds';
   }
 
+  Future<void> _onToggleLiveTransmission(BuildContext context, CameraProvider camera) async {
+    final p2p = context.read<P2PConnectionProvider>();
+    await camera.toggleLiveTransmission(p2pProvider: p2p);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: camera.isLiveTransmitting ? const Color(0xFF00B0FF) : Colors.black87,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+        content: Row(
+          children: [
+            Icon(
+              camera.isLiveTransmitting ? Icons.wifi_tethering : Icons.portable_wifi_off,
+              color: Colors.white,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                camera.isLiveTransmitting
+                    ? 'TRANSMISJA LIVE AKTYWNA (Telefon Sędziego widzi obraz kamery)'
+                    : 'TRANSMISJA LIVE ZATRZYMANA',
+                style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _onToggleRecording(BuildContext context, CameraProvider camera) async {
     final wasRecording = camera.recordingState == RecordingState.recording;
-    await camera.toggleMasterRecording();
+    final p2p = context.read<P2PConnectionProvider>();
+    await camera.toggleMasterRecording(p2pProvider: p2p);
     if (!context.mounted) return;
 
     if (wasRecording) {
@@ -335,7 +368,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                   onScaleUpdate: (details) {
                     camera.setZoom(_baseZoom * details.scale);
                   },
-                  child: _buildCameraPreviewContent(camera),
+                  child: _buildCameraPreviewContent(camera, isLandscape),
                 ),
               ),
 
@@ -460,16 +493,35 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
   );
 }
 
-  Widget _buildCameraPreviewContent(CameraProvider camera) {
+  Widget _buildCameraPreviewContent(CameraProvider camera, bool isLandscape) {
     if (camera.isCameraInitialized &&
         camera.cameraController != null &&
         camera.cameraController!.value.isInitialized) {
-      return FittedBox(
-        fit: BoxFit.cover,
-        child: SizedBox(
-          width: camera.cameraController!.value.previewSize?.height ?? 1920,
-          height: camera.cameraController!.value.previewSize?.width ?? 1080,
-          child: CameraPreview(camera.cameraController!),
+      final controller = camera.cameraController!;
+      final previewSize = controller.value.previewSize;
+
+      final double pWidth = previewSize?.width ?? 1920.0;
+      final double pHeight = previewSize?.height ?? 1080.0;
+      final double sensorLong = pWidth > pHeight ? pWidth : pHeight;
+      final double sensorShort = pWidth > pHeight ? pHeight : pWidth;
+
+      final double targetWidth = isLandscape ? sensorLong : sensorShort;
+      final double targetHeight = isLandscape ? sensorShort : sensorLong;
+      final double targetAspectRatio = targetWidth / targetHeight;
+
+      return Container(
+        color: Colors.black,
+        alignment: Alignment.center,
+        child: AspectRatio(
+          aspectRatio: targetAspectRatio,
+          child: FittedBox(
+            fit: BoxFit.contain,
+            child: SizedBox(
+              width: targetWidth,
+              height: targetHeight,
+              child: CameraPreview(controller),
+            ),
+          ),
         ),
       );
     }
@@ -477,36 +529,40 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
     // Podgląd symulacyjny (dla emulatora, platform desktopowych i testów)
     return Container(
       color: const Color(0xFF161C2A),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          CustomPaint(
-            painter: CourtPainter(zoomRatio: camera.settings.zoom),
-          ),
-          Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.videocam_outlined,
-                  size: 56,
-                  color: Colors.white.withValues(alpha: 0.2),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'PODGLĄD TRANSMISJI ${camera.settings.resolution.label.toUpperCase()} ${camera.settings.fps.label}\n${camera.settings.bitrateMbps.toStringAsFixed(1)} Mbps | ZOOM ${camera.settings.zoom.toStringAsFixed(1)}x',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white.withValues(alpha: 0.35),
-                    letterSpacing: 0.5,
-                  ),
-                ),
-              ],
+      alignment: Alignment.center,
+      child: AspectRatio(
+        aspectRatio: isLandscape ? (16 / 9) : (9 / 16),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            CustomPaint(
+              painter: CourtPainter(zoomRatio: camera.settings.zoom),
             ),
-          ),
-        ],
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.videocam_outlined,
+                    size: 56,
+                    color: Colors.white.withValues(alpha: 0.2),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'PODGLĄD TRANSMISJI ${camera.settings.resolution.label.toUpperCase()} ${camera.settings.fps.label}\n${camera.settings.bitrateMbps.toStringAsFixed(1)} Mbps | ZOOM ${camera.settings.zoom.toStringAsFixed(1)}x',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white.withValues(alpha: 0.35),
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -529,117 +585,121 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             // RZĄD 1: NAWIGACJA, TRYBY I UKRYWANIE KADRU
-            Row(
-              children: [
-                // PRZYCISK MENU GŁÓWNEGO
-                InkWell(
-                  onTap: () => _handleSafeExit(context, camera),
-                  borderRadius: BorderRadius.circular(16),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white24),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 12),
-                        SizedBox(width: 4),
-                        Text(
-                          'MENU',
-                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
-                        ),
-                      ],
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Row(
+                children: [
+                  // PRZYCISK MENU GŁÓWNEGO
+                  InkWell(
+                    onTap: () => _handleSafeExit(context, camera),
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.white24),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 12),
+                          SizedBox(width: 4),
+                          Text(
+                            'MENU',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
+                  const SizedBox(width: 8),
 
-                // PRZEŁĄCZNIK: SĘDZIA
-                InkWell(
-                  onTap: () {
-                    _showBackgroundRecNotice(context, camera);
-                    context.push(AppRouter.scorerRoute);
-                  },
-                  borderRadius: BorderRadius.circular(16),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: AppTheme.amberAccent.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: AppTheme.amberAccent.withValues(alpha: 0.6)),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.sports_volleyball, size: 13, color: AppTheme.amberAccent),
-                        SizedBox(width: 4),
-                        Text(
-                          'SĘDZIA',
-                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: AppTheme.amberAccent),
-                        ),
-                      ],
+                  // PRZEŁĄCZNIK: SĘDZIA
+                  InkWell(
+                    onTap: () {
+                      _showBackgroundRecNotice(context, camera);
+                      context.push(AppRouter.scorerRoute);
+                    },
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: AppTheme.amberAccent.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppTheme.amberAccent.withValues(alpha: 0.6)),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.sports_volleyball, size: 13, color: AppTheme.amberAccent),
+                          SizedBox(width: 4),
+                          Text(
+                            'SĘDZIA',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: AppTheme.amberAccent),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
+                  const SizedBox(width: 8),
 
-                // PRZEŁĄCZNIK: STATYSTYKI
-                InkWell(
-                  onTap: () {
-                    _showBackgroundRecNotice(context, camera);
-                    context.push(AppRouter.statisticianRoute);
-                  },
-                  borderRadius: BorderRadius.circular(16),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF00E676).withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: const Color(0xFF00E676).withValues(alpha: 0.6)),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.analytics_outlined, size: 13, color: Color(0xFF00E676)),
-                        SizedBox(width: 4),
-                        Text(
-                          'STATYSTYKI',
-                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF00E676)),
-                        ),
-                      ],
+                  // PRZEŁĄCZNIK: STATYSTYKI
+                  InkWell(
+                    onTap: () {
+                      _showBackgroundRecNotice(context, camera);
+                      context.push(AppRouter.statisticianRoute);
+                    },
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00E676).withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: const Color(0xFF00E676).withValues(alpha: 0.6)),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.analytics_outlined, size: 13, color: Color(0xFF00E676)),
+                          SizedBox(width: 4),
+                          Text(
+                            'STATYSTYKI',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Color(0xFF00E676)),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-                const Spacer(),
+                  const SizedBox(width: 12),
 
-                // PRZYCISK CZYSTY KADR (UKRYWANIE HUD)
-                InkWell(
-                  onTap: () => camera.toggleHudVisibility(),
-                  borderRadius: BorderRadius.circular(16),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white24),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.fullscreen, color: Colors.white70, size: 14),
-                        SizedBox(width: 4),
-                        Text(
-                          'KADR',
-                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white70),
-                        ),
-                      ],
+                  // PRZYCISK CZYSTY KADR (UKRYWANIE HUD)
+                  InkWell(
+                    onTap: () => camera.toggleHudVisibility(),
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.white24),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.fullscreen, color: Colors.white70, size: 14),
+                          SizedBox(width: 4),
+                          Text(
+                            'KADR',
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white70),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
             const SizedBox(height: 6),
 
@@ -649,6 +709,41 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
               alignment: Alignment.centerLeft,
               child: Row(
                 children: [
+                  // LIVE TRANSMISSION STATUS BADGE
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: camera.isLiveTransmitting
+                          ? AppTheme.greenLive.withValues(alpha: 0.25)
+                          : Colors.black54,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: camera.isLiveTransmitting ? AppTheme.greenLive : Colors.white24,
+                        width: 1,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          camera.isLiveTransmitting ? Icons.wifi_tethering : Icons.portable_wifi_off,
+                          color: camera.isLiveTransmitting ? AppTheme.greenLive : Colors.white60,
+                          size: 11,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          camera.isLiveTransmitting ? 'LIVE ON' : 'LIVE OFF',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: camera.isLiveTransmitting ? AppTheme.greenLive : Colors.white70,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+
                   // MASTER REC STATUS
                   InkWell(
                     onTap: () {
@@ -1070,23 +1165,24 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                 _buildVuMeter(camera.audioLevel),
                 const SizedBox(width: 8),
 
-                // GŁÓWNY PRZYCISK: DUŻY, CZYTELNY, W PEŁNI WIDOCZNY NA SMARTFONIE
+                // GŁÓWNY PRZYCISK 1: "TRANSMISJA LIVE" (BEZ NAGRYWANIA)
                 Expanded(
                   child: InkWell(
-                    onTap: () => _onToggleRecording(context, camera),
+                    onTap: () => _onToggleLiveTransmission(context, camera),
                     borderRadius: BorderRadius.circular(16),
                     child: Container(
                       height: 48,
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
-                          colors: isRecording
-                              ? [const Color(0xFFE53935), const Color(0xFFC62828)]
+                          colors: camera.isLiveTransmitting
+                              ? [const Color(0xFF00E676), const Color(0xFF00B0FF)]
                               : [const Color(0xFF00E5FF), const Color(0xFF0091EA)],
                         ),
                         borderRadius: BorderRadius.circular(16),
                         boxShadow: [
                           BoxShadow(
-                            color: (isRecording ? AppTheme.redLive : AppTheme.cyanAccent).withValues(alpha: 0.4),
+                            color: (camera.isLiveTransmitting ? AppTheme.greenLive : AppTheme.cyanAccent).withValues(alpha: 0.4),
                             blurRadius: 10,
                             offset: const Offset(0, 3),
                           ),
@@ -1096,18 +1192,21 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
-                            isRecording ? Icons.stop_circle : Icons.fiber_smart_record,
-                            color: isRecording ? Colors.white : Colors.black,
-                            size: 24,
+                            camera.isLiveTransmitting ? Icons.wifi_tethering : Icons.cell_tower,
+                            color: Colors.black,
+                            size: 18,
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            isRecording ? 'ZAKOŃCZ NAGRYWANIE' : 'START TRANSMISJI / ZAPISU',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w900,
-                              color: isRecording ? Colors.white : Colors.black,
-                              letterSpacing: 0.5,
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              camera.isLiveTransmitting ? 'TRANSMISJA ON' : 'TRANSMISJA',
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.black,
+                                letterSpacing: 0.2,
+                              ),
                             ),
                           ),
                         ],
@@ -1115,7 +1214,53 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
+
+                // GŁÓWNY PRZYCISK 2: MASTER REC (SPRZĘTOWY ZAPIS MP4)
+                InkWell(
+                  onTap: () => _onToggleRecording(context, camera),
+                  borderRadius: BorderRadius.circular(16),
+                  child: Container(
+                    height: 48,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    decoration: BoxDecoration(
+                      color: isRecording ? AppTheme.redLive : const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: isRecording ? Colors.white : AppTheme.redLive,
+                        width: 1.5,
+                      ),
+                      boxShadow: [
+                        if (isRecording)
+                          BoxShadow(
+                            color: AppTheme.redLive.withValues(alpha: 0.5),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isRecording ? Icons.stop_circle : Icons.fiber_manual_record,
+                          color: isRecording ? Colors.white : AppTheme.redLive,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          isRecording ? 'STOP' : 'REC',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w900,
+                            color: isRecording ? Colors.white : AppTheme.redLive,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
 
                 // PRZYCISK STATYWU
                 InkWell(
@@ -1123,7 +1268,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                   borderRadius: BorderRadius.circular(16),
                   child: Container(
                     height: 48,
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
                     decoration: BoxDecoration(
                       color: AppTheme.surfaceCard,
                       borderRadius: BorderRadius.circular(16),
@@ -1132,11 +1277,11 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                     child: const Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.screen_lock_portrait, size: 18, color: AppTheme.cyanAccent),
+                        Icon(Icons.screen_lock_portrait, size: 16, color: AppTheme.cyanAccent),
                         SizedBox(height: 2),
                         Text(
                           'STATYW',
-                          style: TextStyle(fontSize: 8.5, fontWeight: FontWeight.bold, color: AppTheme.cyanAccent),
+                          style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: AppTheme.cyanAccent),
                         ),
                       ],
                     ),
@@ -1214,24 +1359,25 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
           _buildLensSwitcher(context, camera),
           const SizedBox(width: 12),
 
-          // GŁÓWNY PRZYCISK: "START TRANSMISJI / ZAPISU"
+          // GŁÓWNY PRZYCISK 1: "START TRANSMISJI" (BEZ NAGRYWANIA)
           Expanded(
+            flex: 3,
             child: InkWell(
-              onTap: () => _onToggleRecording(context, camera),
+              onTap: () => _onToggleLiveTransmission(context, camera),
               borderRadius: BorderRadius.circular(14),
               child: Container(
                 height: 44,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
-                    colors: isRecording
-                        ? [const Color(0xFFE53935), const Color(0xFFC62828)]
+                    colors: camera.isLiveTransmitting
+                        ? [const Color(0xFF00E676), const Color(0xFF00B0FF)]
                         : [const Color(0xFF00E5FF), const Color(0xFF0091EA)],
                   ),
                   borderRadius: BorderRadius.circular(14),
                   boxShadow: [
                     BoxShadow(
-                      color: (isRecording ? AppTheme.redLive : AppTheme.cyanAccent).withValues(alpha: 0.35),
+                      color: (camera.isLiveTransmitting ? AppTheme.greenLive : AppTheme.cyanAccent).withValues(alpha: 0.35),
                       blurRadius: 8,
                       offset: const Offset(0, 2),
                     ),
@@ -1243,24 +1389,70 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(
-                        isRecording ? Icons.stop_circle : Icons.fiber_smart_record,
-                        color: isRecording ? Colors.white : Colors.black,
-                        size: 20,
+                        camera.isLiveTransmitting ? Icons.wifi_tethering : Icons.cell_tower,
+                        color: Colors.black,
+                        size: 18,
                       ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 5),
                       Text(
-                        isRecording ? 'ZAKOŃCZ' : 'START TRANSMISJI / ZAPISU',
+                        camera.isLiveTransmitting ? 'TRANSMISJA ON' : 'START TRANSMISJI',
                         textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 12,
+                        style: const TextStyle(
+                          fontSize: 11.5,
                           fontWeight: FontWeight.bold,
-                          color: isRecording ? Colors.white : Colors.black,
+                          color: Colors.black,
                           letterSpacing: 0.3,
                         ),
                       ),
                     ],
                   ),
                 ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+
+          // GŁÓWNY PRZYCISK 2: MASTER REC
+          InkWell(
+            onTap: () => _onToggleRecording(context, camera),
+            borderRadius: BorderRadius.circular(14),
+            child: Container(
+              height: 44,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: isRecording ? AppTheme.redLive : const Color(0xFF1E293B),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: isRecording ? Colors.white : AppTheme.redLive,
+                  width: 1.5,
+                ),
+                boxShadow: [
+                  if (isRecording)
+                    BoxShadow(
+                      color: AppTheme.redLive.withValues(alpha: 0.5),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    isRecording ? Icons.stop_circle : Icons.fiber_manual_record,
+                    color: isRecording ? Colors.white : AppTheme.redLive,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    isRecording ? 'REC STOP' : 'REC',
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w900,
+                      color: isRecording ? Colors.white : AppTheme.redLive,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

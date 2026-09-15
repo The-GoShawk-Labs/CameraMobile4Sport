@@ -12,6 +12,7 @@ import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/providers/match_provider.dart';
 import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
 import 'package:volleylive/presentation/providers/streamer_provider.dart';
+import 'package:volleylive/presentation/screens/settings/camera_connection_modal.dart';
 import 'package:volleylive/presentation/screens/settings/scoreboard_customizer_modal.dart';
 import 'package:volleylive/presentation/screens/settings/stream_settings_modal.dart';
 import 'package:volleylive/presentation/screens/settings/video_settings_modal.dart';
@@ -48,8 +49,11 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
     );
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      final p2p = context.read<P2PConnectionProvider>();
       final camera = context.read<CameraProvider>();
-      if (!camera.isCameraInitialized && !camera.isSimulationMode) {
+      if (p2p.currentRole == DeviceRole.singlePhoneAllInOne &&
+          !camera.isCameraInitialized &&
+          !camera.isSimulationMode) {
         camera.initializeCamera();
       }
     });
@@ -67,6 +71,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
     final match = context.watch<MatchProvider>();
     final streamer = context.watch<StreamerProvider>();
     final camera = context.watch<CameraProvider>();
+    final p2p = context.watch<P2PConnectionProvider>();
     final isOutdoor = match.isOutdoorModeEnabled;
     final isPortrait = MediaQuery.of(context).orientation == Orientation.portrait;
 
@@ -100,25 +105,26 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
               // =============================================================
               // 1. PEŁNOEKRANOWA WARSTWA TŁA: KAMERA LIVE / MAKIETA BOISKA
               // =============================================================
-              _buildFullCameraBackground(context, match, camera, streamer, isOutdoor, isPortrait),
+              _buildFullCameraBackground(context, match, camera, streamer, p2p, isOutdoor, isPortrait),
 
               // =============================================================
               // 2. NAKŁADKA TELEWIZYJNA WYNIKÓW (SCOREBOARD OVERLAY)
               // =============================================================
               Positioned(
-                top: isPortrait ? 98 : 46,
-                left: isPortrait ? 8 : null,
-                right: isPortrait ? 8 : 12,
-                child: Align(
-                  alignment: isPortrait ? Alignment.topCenter : Alignment.topRight,
-                  child: ScoreboardOverlay(
-                    session: match.session,
-                    style: streamer.scoreboardStyle,
-                    isTimeoutActive: match.isTimeoutActive,
-                    timeoutSeconds: match.timeoutSecondsRemaining,
-                    timeoutTeam: match.timeoutCallingTeam,
-                    showServeIndicator: streamer.showServeIndicator,
-                    activeSpecialEvent: match.activeSpecialEvent,
+                top: isPortrait ? 98 : 52,
+                left: 8,
+                right: 8,
+                child: SafeArea(
+                  child: Center(
+                    child: ScoreboardOverlay(
+                      session: match.session,
+                      style: streamer.scoreboardStyle,
+                      isTimeoutActive: match.isTimeoutActive,
+                      timeoutSeconds: match.timeoutSecondsRemaining,
+                      timeoutTeam: match.timeoutCallingTeam,
+                      showServeIndicator: streamer.showServeIndicator,
+                      activeSpecialEvent: match.activeSpecialEvent,
+                    ),
                   ),
                 ),
               ),
@@ -166,11 +172,18 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _buildTopBroadcastHUD(context, streamer, match, camera, isPortrait),
-                    if (!camera.isCameraInitialized && streamer.cameraLinkState != CameraConnectionState.connected)
+                    _buildTopBroadcastHUD(context, streamer, match, camera, p2p, isPortrait),
+                    if (p2p.currentRole != DeviceRole.singlePhoneAllInOne &&
+                        p2p.connectionState != CameraConnectionState.connected)
                       RecoveryBanner(
-                        connectionState: streamer.cameraLinkState,
-                        onManualReconnect: () => streamer.startHostPairing(match.session.pairingCode),
+                        connectionState: p2p.connectionState,
+                        onManualReconnect: () async {
+                          await p2p.joinSession(
+                            hostAddress: p2p.hostAddress.isNotEmpty ? p2p.hostAddress : '192.168.68.51',
+                            pairingCode: 'VL-8492',
+                            role: DeviceRole.scorerPhoneB,
+                          );
+                        },
                       ),
                   ],
                 ),
@@ -399,6 +412,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
     StreamerProvider streamer,
     MatchProvider match,
     CameraProvider camera,
+    P2PConnectionProvider p2p,
     bool isPortrait,
   ) {
     final isLive = streamer.streamingState == StreamingState.live;
@@ -658,28 +672,44 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
 
                 // WEBRTC CAMERA LINK TELEMETRY (PHONE A)
                 InkWell(
-                  onTap: () => _openStreamSettings(context),
+                  onTap: () => _openCameraConnectionModal(context),
                   borderRadius: BorderRadius.circular(8),
                   child: Container(
                     height: 38,
                     padding: const EdgeInsets.symmetric(horizontal: 10),
                     decoration: BoxDecoration(
-                      color: AppTheme.cyanAccent.withValues(alpha: 0.12),
+                      color: p2p.connectionState == CameraConnectionState.connected
+                          ? AppTheme.cyanAccent.withValues(alpha: 0.15)
+                          : AppTheme.amberAccent.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.35)),
+                      border: Border.all(
+                        color: p2p.connectionState == CameraConnectionState.connected
+                            ? AppTheme.cyanAccent.withValues(alpha: 0.4)
+                            : AppTheme.amberAccent.withValues(alpha: 0.4),
+                      ),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.videocam, color: AppTheme.cyanAccent, size: 16),
+                        Icon(
+                          Icons.videocam,
+                          color: p2p.connectionState == CameraConnectionState.connected
+                              ? AppTheme.cyanAccent
+                              : AppTheme.amberAccent,
+                          size: 16,
+                        ),
                         const SizedBox(width: 5),
                         Text(
-                          'Phone A\n${streamer.healthMetrics.latencyMs}ms',
+                          p2p.connectionState == CameraConnectionState.connected
+                              ? 'Phone A\n${p2p.healthMetrics.latencyMs}ms'
+                              : 'Phone A\nPOŁĄCZ',
                           textAlign: TextAlign.center,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.bold,
-                            color: AppTheme.cyanAccent,
+                            color: p2p.connectionState == CameraConnectionState.connected
+                                ? AppTheme.cyanAccent
+                                : AppTheme.amberAccent,
                             height: 1.1,
                           ),
                         ),
@@ -896,20 +926,30 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
 
               // WEBRTC CAMERA LINK TELEMETRY
               InkWell(
-                onTap: () => _openStreamSettings(context),
+                onTap: () => _openCameraConnectionModal(context),
                 borderRadius: BorderRadius.circular(6),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                   child: Row(
                     children: [
-                      const Icon(Icons.videocam, color: AppTheme.cyanAccent, size: 15),
+                      Icon(
+                        Icons.videocam,
+                        color: p2p.connectionState == CameraConnectionState.connected
+                            ? AppTheme.cyanAccent
+                            : AppTheme.amberAccent,
+                        size: 15,
+                      ),
                       const SizedBox(width: 4),
                       Text(
-                        'Phone A (${streamer.healthMetrics.latencyMs}ms)',
-                        style: const TextStyle(
+                        p2p.connectionState == CameraConnectionState.connected
+                            ? 'Phone A (${p2p.healthMetrics.latencyMs}ms)'
+                            : 'Phone A (POŁĄCZ)',
+                        style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
-                          color: AppTheme.cyanAccent,
+                          color: p2p.connectionState == CameraConnectionState.connected
+                              ? AppTheme.cyanAccent
+                              : AppTheme.amberAccent,
                         ),
                       ),
                     ],
@@ -1029,6 +1069,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
     MatchProvider match,
     CameraProvider camera,
     StreamerProvider streamer,
+    P2PConnectionProvider p2p,
     bool isOutdoor,
     bool isPortrait,
   ) {
@@ -1046,18 +1087,53 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
         child: Stack(
           fit: StackFit.expand,
           children: [
-            if (_showLocalCameraPreview &&
+            // 1. BEZPRZEWODOWY OBRAZ Z KAMERY PHONE A (P2P REALME)
+            if (p2p.currentVideoFrame != null)
+              Container(
+                color: Colors.black,
+                alignment: Alignment.center,
+                child: FittedBox(
+                  fit: BoxFit.contain,
+                  child: Image.memory(
+                    p2p.currentVideoFrame!,
+                    gaplessPlayback: true,
+                  ),
+                ),
+              )
+            // 2. LOKALNA KAMERA W TRYBIE POJEDYNCZEGO TELEFONU (ALL-IN-ONE)
+            else if (_showLocalCameraPreview &&
                 camera.isCameraInitialized &&
                 camera.cameraController != null &&
                 camera.cameraController!.value.isInitialized)
-              FittedBox(
-                fit: BoxFit.cover,
-                child: SizedBox(
-                  width: camera.cameraController!.value.previewSize?.height ?? 1920,
-                  height: camera.cameraController!.value.previewSize?.width ?? 1080,
-                  child: CameraPreview(camera.cameraController!),
-                ),
+              Builder(
+                builder: (context) {
+                  final controller = camera.cameraController!;
+                  final pWidth = controller.value.previewSize?.width ?? 1920.0;
+                  final pHeight = controller.value.previewSize?.height ?? 1080.0;
+                  final sensorLong = pWidth > pHeight ? pWidth : pHeight;
+                  final sensorShort = pWidth > pHeight ? pHeight : pWidth;
+                  final targetWidth = isPortrait ? sensorShort : sensorLong;
+                  final targetHeight = isPortrait ? sensorLong : sensorShort;
+                  final targetAspectRatio = targetWidth / targetHeight;
+
+                  return Container(
+                    color: Colors.black,
+                    alignment: Alignment.center,
+                    child: AspectRatio(
+                      aspectRatio: targetAspectRatio,
+                      child: FittedBox(
+                        fit: BoxFit.contain,
+                        child: SizedBox(
+                          width: targetWidth,
+                          height: targetHeight,
+                          child: CameraPreview(controller),
+                        ),
+                      ),
+                    ),
+                  );
+                },
               )
+            // 3. MAKIETA BOISKA JEŚLI BRAK AKTYWNEGO OBRAZU Z KAMERY
             else ...[
               // RYSOWANE LINIE BOISKA DOSTOSOWANE DO DYSCYPLINY
               CustomPaint(
@@ -1139,9 +1215,11 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                               ),
                               const SizedBox(width: 6),
                               Text(
-                                camera.isCameraInitialized
-                                    ? 'LOKALNA KAMERA (${camera.settings.resolution.label} ${camera.settings.fps.label})'
-                                    : 'LIVE FEED • PHONE A (${camera.settings.resolution.label} ${camera.settings.fps.label})',
+                                p2p.currentVideoFrame != null
+                                    ? 'LIVE FEED • REALME (${p2p.healthMetrics.latencyMs}ms • P2P)'
+                                    : (camera.isCameraInitialized
+                                        ? 'LOKALNA KAMERA (${camera.settings.resolution.label} ${camera.settings.fps.label})'
+                                        : 'OCZEKIWANIE NA KAMERĘ REALME...'),
                                 style: const TextStyle(
                                   fontSize: 9,
                                   fontWeight: FontWeight.bold,
@@ -1201,6 +1279,15 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
           ],
         ),
       ),
+    );
+  }
+
+  void _openCameraConnectionModal(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => const CameraConnectionModal(),
     );
   }
 

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:volleylive/core/utils/pairing_scheme_helper.dart';
 import 'package:volleylive/data/models/p2p_message.dart';
@@ -16,7 +17,9 @@ class P2PConnectionProvider extends ChangeNotifier {
   String _hostAddress = '127.0.0.1';
   int _serverPort = 8080;
   bool _isHost = false;
+  int _clientCount = 0;
 
+  Uint8List? _currentVideoFrame;
   ScoreUpdatePayload? _lastReceivedScore;
   CameraControlPayload? _lastReceivedCameraControl;
   bool? _lastReceivedRecorderTrigger;
@@ -24,6 +27,8 @@ class P2PConnectionProvider extends ChangeNotifier {
   StreamSubscription? _stateSub;
   StreamSubscription? _healthSub;
   StreamSubscription? _msgSub;
+  StreamSubscription? _videoSub;
+  StreamSubscription? _clientCountSub;
 
   P2PConnectionProvider({IP2PConnectionRepository? repository})
       : _repository = repository ?? P2PConnectionRepository() {
@@ -38,6 +43,8 @@ class P2PConnectionProvider extends ChangeNotifier {
   int get serverPort => _serverPort;
   String get pairingUri => PairingSchemeHelper.buildUri(host: _hostAddress, port: _serverPort, code: _pairingCode);
   bool get isHost => _isHost;
+  int get clientCount => _clientCount;
+  Uint8List? get currentVideoFrame => _currentVideoFrame;
   ScoreUpdatePayload? get lastReceivedScore => _lastReceivedScore;
   CameraControlPayload? get lastReceivedCameraControl => _lastReceivedCameraControl;
   bool? get lastReceivedRecorderTrigger => _lastReceivedRecorderTrigger;
@@ -62,6 +69,16 @@ class P2PConnectionProvider extends ChangeNotifier {
     _msgSub = _repository.incomingMessagesStream.listen((msg) {
       _handleIncomingMessage(msg);
     });
+
+    _videoSub = _repository.incomingVideoFrames.listen((frame) {
+      _currentVideoFrame = frame;
+      notifyListeners();
+    });
+
+    _clientCountSub = _repository.clientCountStream.listen((count) {
+      _clientCount = count;
+      notifyListeners();
+    });
   }
 
   void _handleIncomingMessage(P2PMessage msg) {
@@ -83,28 +100,33 @@ class P2PConnectionProvider extends ChangeNotifier {
     }
   }
 
-  /// Hostowanie sesji (np. Phone B / Reżyserka lub Phone A)
-  Future<void> hostSession({required String pairingCode, int port = 8080}) async {
+  /// Hostowanie sesji (np. Phone A jako kamera nadająca lub Phone B)
+  Future<void> hostSession({
+    required String pairingCode,
+    DeviceRole role = DeviceRole.scorerPhoneB,
+    int port = 8080,
+  }) async {
     _pairingCode = pairingCode;
     _serverPort = port;
     _isHost = true;
-    _currentRole = DeviceRole.scorerPhoneB;
+    _currentRole = role;
     await _repository.hostMatchSession(pairingCode: pairingCode, role: _currentRole.idName, port: port);
     _hostAddress = _repository.hostAddress ?? '127.0.0.1';
     notifyListeners();
   }
 
-  /// Dołączanie do hosta (np. Phone A kamera podłącza się do Phone B)
+  /// Dołączanie do hosta (np. Phone B łączy się z kamerą Phone A lub odwrotnie)
   Future<void> joinSession({
     required String hostAddress,
     required String pairingCode,
+    DeviceRole role = DeviceRole.cameraPhoneA,
     int port = 8080,
   }) async {
     _hostAddress = hostAddress;
     _pairingCode = pairingCode;
     _serverPort = port;
     _isHost = false;
-    _currentRole = DeviceRole.cameraPhoneA;
+    _currentRole = role;
     await _repository.joinMatchSession(
       hostAddress: hostAddress,
       pairingCode: pairingCode,
@@ -115,12 +137,18 @@ class P2PConnectionProvider extends ChangeNotifier {
   }
 
   /// Dołączanie na podstawie sparsowanych danych kodu QR
-  Future<void> joinWithPairingData(PairingData data) {
+  Future<void> joinWithPairingData(PairingData data, {DeviceRole role = DeviceRole.cameraPhoneA}) {
     return joinSession(
       hostAddress: data.host,
       pairingCode: data.code,
+      role: role,
       port: data.port,
     );
+  }
+
+  /// Rozsyłanie klatki wideo na żywo (z Phone A)
+  void broadcastVideoFrame(Uint8List frameBytes) {
+    _repository.sendVideoFrame(frameBytes);
   }
 
   /// Wysłanie aktualizacji wyniku do sparowanego telefonu
@@ -145,6 +173,8 @@ class P2PConnectionProvider extends ChangeNotifier {
   Future<void> disconnect() async {
     await _repository.disconnect();
     _isHost = false;
+    _currentVideoFrame = null;
+    _clientCount = 0;
     _connectionState = CameraConnectionState.disconnected;
     notifyListeners();
   }
@@ -154,6 +184,8 @@ class P2PConnectionProvider extends ChangeNotifier {
     _stateSub?.cancel();
     _healthSub?.cancel();
     _msgSub?.cancel();
+    _videoSub?.cancel();
+    _clientCountSub?.cancel();
     _repository.disconnect();
     super.dispose();
   }

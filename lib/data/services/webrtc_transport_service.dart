@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:volleylive/data/models/p2p_message.dart';
 import 'package:volleylive/data/services/local_signaling_service.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
@@ -7,12 +8,16 @@ abstract class IWebRtcTransportService {
   Stream<CameraConnectionState> get connectionStateStream;
   Stream<StreamHealthMetrics> get healthMetricsStream;
   Stream<P2PMessage> get dataChannelMessages;
+  Stream<Uint8List> get incomingVideoFrames;
   CameraConnectionState get currentState;
   String? get hostAddress;
+  int get clientCount;
+  Stream<int> get clientCountStream;
 
   Future<void> initializeAsHost({required String pairingCode, required String myRole, int port = 8080});
   Future<void> initializeAsClient({required String hostAddress, required String pairingCode, required String myRole, int port = 8080});
   Future<void> sendDataMessage(P2PMessage message);
+  void sendVideoFrame(Uint8List frameBytes);
   Future<void> close();
   void sendHeartbeat();
 }
@@ -48,10 +53,24 @@ class WebRtcTransportService implements IWebRtcTransportService {
   Stream<P2PMessage> get dataChannelMessages => _dataMessageController.stream;
 
   @override
+  Stream<Uint8List> get incomingVideoFrames => _signalingService.incomingVideoFrames;
+
+  @override
   CameraConnectionState get currentState => _currentState;
 
   @override
   String? get hostAddress => _signalingService.currentHostAddress;
+
+  @override
+  int get clientCount => _signalingService.clientCount;
+
+  @override
+  Stream<int> get clientCountStream => _signalingService.clientCountStream;
+
+  @override
+  void sendVideoFrame(Uint8List frameBytes) {
+    _signalingService.sendVideoFrame(frameBytes);
+  }
 
   @override
   Future<void> initializeAsHost({required String pairingCode, required String myRole, int port = 8080}) async {

@@ -24,11 +24,13 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
   final _tournamentController = TextEditingController(text: 'LIGA MISTRZÓW MVP');
   final _teamAController = TextEditingController(text: 'AZS KRAKÓW');
   final _teamBController = TextEditingController(text: 'LEGIA WARSZAWA');
+  final _cameraIpController = TextEditingController(text: '192.168.68.51');
   Color _colorA = const Color(0xFF00E5FF);
   Color _colorB = const Color(0xFFFFAB00);
   MatchSport _selectedSport = MatchSport.volleyball;
   ScoreboardThemeStyle _selectedStyle = ScoreboardThemeStyle.tvProBroadcast;
   bool _isMatchCreated = false;
+  bool _isConnectingDirectly = false;
 
   final List<Color> _palette = [
     const Color(0xFF00E5FF),
@@ -46,6 +48,7 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
     _tournamentController.dispose();
     _teamAController.dispose();
     _teamBController.dispose();
+    _cameraIpController.dispose();
     super.dispose();
   }
 
@@ -232,41 +235,134 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
 
                   const SizedBox(height: 20),
 
-                  // PRZYCISK: UTWÓRZ MECZ & GENERUJ KOD DLA KAMERY
-                  ElevatedButton(
-                    onPressed: () {
-                      matchProvider.startNewMatch(
-                        teamA: _teamAController.text,
-                        teamB: _teamBController.text,
-                        teamAColor: _colorA,
-                        teamBColor: _colorB,
-                        sport: _selectedSport,
-                        tournamentName: _tournamentController.text,
-                      );
-                      streamerProvider.setScoreboardStyle(_selectedStyle);
-                      streamerProvider.startHostPairing(matchProvider.session.pairingCode);
-                      context.read<P2PConnectionProvider>().hostSession(
-                        pairingCode: matchProvider.session.pairingCode,
-                      );
-                      setState(() {
-                        _isMatchCreated = true;
-                      });
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.cyanAccent,
-                      foregroundColor: Colors.black,
-                      minimumSize: const Size(double.infinity, 54),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      elevation: 4,
-                    ),
-                    child: const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                  // 4. KARTA POŁĄCZENIA ZE SMARTFONEM KAMERĄ
+                  GlassCard(
+                    borderColor: AppTheme.cyanAccent.withValues(alpha: 0.6),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Icon(Icons.qr_code_2, size: 22),
-                        SizedBox(width: 8),
-                        Text(
-                          'POŁĄCZ ZE SMARTFONEM KAMERĄ (PHONE A)',
-                          style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.5, fontSize: 13),
+                        const Row(
+                          children: [
+                            Icon(Icons.videocam, color: AppTheme.cyanAccent, size: 18),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'POŁĄCZENIE ZE SMARTFONEM KAMERĄ (REALME)',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 0.8,
+                                  color: AppTheme.cyanAccent,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        const Text(
+                          'Jeśli na telefonie Realme włączono "TRANSMISJA", wpisz jego adres IP i połącz się bezpośrednio:',
+                          style: TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                        ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _cameraIpController,
+                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13),
+                          decoration: InputDecoration(
+                            labelText: 'Adres IP Kamery (Phone A)',
+                            labelStyle: const TextStyle(color: AppTheme.cyanAccent, fontSize: 11),
+                            hintText: '192.168.68.51',
+                            prefixIcon: const Icon(Icons.wifi, color: AppTheme.cyanAccent, size: 18),
+                            filled: true,
+                            fillColor: const Color(0xFF0D131F),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        ElevatedButton.icon(
+                          onPressed: _isConnectingDirectly ? null : () async {
+                            setState(() => _isConnectingDirectly = true);
+                            matchProvider.startNewMatch(
+                              teamA: _teamAController.text,
+                              teamB: _teamBController.text,
+                              teamAColor: _colorA,
+                              teamBColor: _colorB,
+                              sport: _selectedSport,
+                              tournamentName: _tournamentController.text,
+                            );
+                            streamerProvider.setScoreboardStyle(_selectedStyle);
+                            try {
+                              await p2pProvider.joinSession(
+                                hostAddress: _cameraIpController.text.trim().isNotEmpty
+                                    ? _cameraIpController.text.trim()
+                                    : '192.168.68.51',
+                                pairingCode: 'VL-8492',
+                                role: DeviceRole.scorerPhoneB,
+                              );
+                            } catch (_) {}
+                            if (context.mounted) {
+                              context.go(AppRouter.scorerRoute);
+                            }
+                          },
+                          icon: _isConnectingDirectly
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                                )
+                              : const Icon(Icons.link, size: 18),
+                          label: Text(
+                            _isConnectingDirectly
+                                ? 'ŁĄCZENIE Z KAMERĄ...'
+                                : 'POŁĄCZ Z KAMERĄ I PRZEJDŹ DO KOKPITU',
+                            style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.greenLive,
+                            foregroundColor: Colors.black,
+                            minimumSize: const Size(double.infinity, 48),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        const Row(
+                          children: [
+                            Expanded(child: Divider(color: Colors.white12)),
+                            Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 8),
+                              child: Text('LUB', style: TextStyle(fontSize: 10, color: Colors.white38)),
+                            ),
+                            Expanded(child: Divider(color: Colors.white12)),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            matchProvider.startNewMatch(
+                              teamA: _teamAController.text,
+                              teamB: _teamBController.text,
+                              teamAColor: _colorA,
+                              teamBColor: _colorB,
+                              sport: _selectedSport,
+                              tournamentName: _tournamentController.text,
+                            );
+                            streamerProvider.setScoreboardStyle(_selectedStyle);
+                            streamerProvider.startHostPairing(matchProvider.session.pairingCode);
+                            context.read<P2PConnectionProvider>().hostSession(
+                              pairingCode: matchProvider.session.pairingCode,
+                            );
+                            setState(() {
+                              _isMatchCreated = true;
+                            });
+                          },
+                          icon: const Icon(Icons.qr_code_2, size: 18),
+                          label: const Text('POKAŻ KOD QR DLA TELEFONU A', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppTheme.cyanAccent,
+                            side: const BorderSide(color: AppTheme.cyanAccent),
+                            minimumSize: const Size(double.infinity, 42),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
                         ),
                       ],
                     ),
@@ -632,13 +728,15 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
             children: [
               Icon(Icons.palette_outlined, color: AppTheme.purpleAccent, size: 16),
               SizedBox(width: 8),
-              Text(
-                'MOTYW GRAFICZNY TRANSMISJI (SCOREBOARD OVERLAY)',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.8,
-                  color: Colors.white70,
+              Expanded(
+                child: Text(
+                  'MOTYW GRAFICZNY TRANSMISJI (SCOREBOARD OVERLAY)',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.8,
+                    color: Colors.white70,
+                  ),
                 ),
               ),
             ],

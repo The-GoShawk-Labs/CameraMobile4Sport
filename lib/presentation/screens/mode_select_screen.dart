@@ -344,20 +344,20 @@ class ModeSelectScreen extends StatelessWidget {
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: AppTheme.cyanAccent,
                                 foregroundColor: Colors.black,
-                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                               ),
                               child: const Column(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Icon(Icons.camera_alt, size: 16),
+                                  Icon(Icons.camera_alt, size: 15),
                                   SizedBox(height: 2),
-                                  Text('1. KAMERA', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900)),
+                                  Text('1. KAMERA', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w900)),
                                 ],
                               ),
                             ),
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 6),
                           Expanded(
                             child: ElevatedButton(
                               onPressed: () {
@@ -367,20 +367,20 @@ class ModeSelectScreen extends StatelessWidget {
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: AppTheme.amberAccent,
                                 foregroundColor: Colors.black,
-                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                               ),
                               child: const Column(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Icon(Icons.sports_volleyball, size: 16),
+                                  Icon(Icons.sports_volleyball, size: 15),
                                   SizedBox(height: 2),
-                                  Text('2. SĘDZIA', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900)),
+                                  Text('2. SĘDZIA', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w900)),
                                 ],
                               ),
                             ),
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 6),
                           Expanded(
                             child: ElevatedButton(
                               onPressed: () {
@@ -390,15 +390,15 @@ class ModeSelectScreen extends StatelessWidget {
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFF00E676),
                                 foregroundColor: Colors.black,
-                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                               ),
                               child: const Column(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Icon(Icons.analytics_outlined, size: 16),
+                                  Icon(Icons.analytics_outlined, size: 15),
                                   SizedBox(height: 2),
-                                  Text('3. STATYSTYKI', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900)),
+                                  Text('3. STATS', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w900)),
                                 ],
                               ),
                             ),
@@ -416,11 +416,11 @@ class ModeSelectScreen extends StatelessWidget {
                   children: [
                     Expanded(child: Divider(color: Colors.white24)),
                     Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 10),
+                      padding: EdgeInsets.symmetric(horizontal: 8),
                       child: Text(
-                        'LUB TRYB DWÓCH SMARTFONÓW (P2P WEBRTC)',
+                        'TRYB DWÓCH SMARTFONÓW (P2P)',
                         style: TextStyle(
-                          fontSize: 10,
+                          fontSize: 9.5,
                           fontWeight: FontWeight.bold,
                           color: AppTheme.textSecondary,
                           letterSpacing: 0.5,

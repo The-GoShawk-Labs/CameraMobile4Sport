@@ -310,12 +310,12 @@ class _CameraControlsOverlayState extends State<CameraControlsOverlay> {
         onTap: onTap,
         borderRadius: BorderRadius.circular(16),
         child: Container(
-          width: 56,
-          height: 56,
-          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+          width: 52,
+          height: 52,
+          padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
           decoration: BoxDecoration(
             color: isActive ? activeColor.withValues(alpha: 0.25) : Colors.black.withValues(alpha: 0.65),
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(14),
             border: Border.all(
               color: isActive ? activeColor : Colors.white24,
               width: 1.5,
@@ -328,15 +328,15 @@ class _CameraControlsOverlayState extends State<CameraControlsOverlay> {
               Icon(
                 icon,
                 color: isActive ? activeColor : Colors.white,
-                size: 20,
+                size: 18,
               ),
-              const SizedBox(height: 2),
+              const SizedBox(height: 1),
               if (isTwoLines) ...[
                 Text(
                   parts[0],
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 10,
+                    fontSize: 9,
                     fontWeight: FontWeight.bold,
                     height: 1.0,
                     color: isActive ? activeColor : Colors.white,
@@ -346,9 +346,9 @@ class _CameraControlsOverlayState extends State<CameraControlsOverlay> {
                   parts[1],
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 8.5,
+                    fontSize: 8,
                     fontWeight: FontWeight.w700,
-                    height: 1.05,
+                    height: 1.0,
                     color: isActive ? activeColor : Colors.white70,
                   ),
                 ),
@@ -357,7 +357,7 @@ class _CameraControlsOverlayState extends State<CameraControlsOverlay> {
                   badge,
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 10,
+                    fontSize: 9,
                     fontWeight: FontWeight.bold,
                     height: 1.0,
                     color: isActive ? activeColor : Colors.white70,

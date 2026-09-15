@@ -2,11 +2,13 @@ import 'dart:async';
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:volleylive/core/utils/camera_frame_converter.dart';
 import 'package:volleylive/domain/models/camera_config.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
 import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/domain/services/recording_service.dart';
 import 'package:volleylive/domain/services/video_transport_service.dart';
+import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
 
 class CameraProvider extends ChangeNotifier {
   final RecordingService _recordingService;
@@ -27,6 +29,11 @@ class CameraProvider extends ChangeNotifier {
   double _audioLevel = 0.65; // 0.0 do 1.0 (VU Meter)
   final int _batteryLevel = 85;
   String _pairedHostCode = '';
+
+  bool _isLiveTransmitting = false;
+  bool _isStreamingFrames = false;
+  int _lastFrameTimestamp = 0;
+  bool _isConvertingFrame = false;
 
   Timer? _audioSimTimer;
 
@@ -50,6 +57,7 @@ class CameraProvider extends ChangeNotifier {
   CameraConnectionState get connectionState => _transportService.currentState;
   RecordingState get recordingState => _recordingService.currentState;
   bool get isRecording => _recordingService.currentState == RecordingState.recording;
+  bool get isLiveTransmitting => _isLiveTransmitting;
   Duration get masterRecDuration => _recordingService.recordedDuration;
   bool get isTripodLocked => _isTripodLocked;
   double get audioLevel => _audioLevel;
@@ -154,13 +162,91 @@ class CameraProvider extends ChangeNotifier {
     await _transportService.connectToHost(pairingCode);
   }
 
-  Future<void> toggleMasterRecording() async {
+  Future<void> startLiveTransmission({required P2PConnectionProvider p2pProvider}) async {
+    _isLiveTransmitting = true;
+    notifyListeners();
+
+    // Uruchom jako host dla sesji P2P, aby sędzia mógł się podłączyć
+    if (!p2pProvider.isHost && p2pProvider.connectionState != CameraConnectionState.connected) {
+      await p2pProvider.hostSession(
+        pairingCode: _pairedHostCode.isNotEmpty ? _pairedHostCode : 'VL-8492',
+        role: DeviceRole.cameraPhoneA,
+      );
+    }
+
+    _startImageStreamLoop(p2pProvider);
+  }
+
+  void _startImageStreamLoop(P2PConnectionProvider p2pProvider) {
+    if (_cameraController != null &&
+        _cameraController!.value.isInitialized &&
+        !_isStreamingFrames &&
+        !isRecording) {
+      try {
+        _isStreamingFrames = true;
+        _cameraController!.startImageStream((CameraImage image) async {
+          if (!_isLiveTransmitting) return;
+
+          final now = DateTime.now().millisecondsSinceEpoch;
+          // Ogranicz do ~18-20 FPS (min. 55 ms między klatkami)
+          if (now - _lastFrameTimestamp < 55) return;
+          if (_isConvertingFrame) return;
+
+          _isConvertingFrame = true;
+          _lastFrameTimestamp = now;
+
+          try {
+            final jpeg = await CameraFrameConverter.convertYuvToJpeg(image, quality: 50);
+            if (jpeg != null && _isLiveTransmitting) {
+              p2pProvider.broadcastVideoFrame(jpeg);
+            }
+          } catch (_) {
+          } finally {
+            _isConvertingFrame = false;
+          }
+        });
+      } catch (e) {
+        _isStreamingFrames = false;
+        debugPrint('Błąd startImageStream: $e');
+      }
+    }
+  }
+
+  Future<void> stopLiveTransmission({required P2PConnectionProvider p2pProvider}) async {
+    _isLiveTransmitting = false;
+    if (_isStreamingFrames && _cameraController != null) {
+      try {
+        await _cameraController!.stopImageStream();
+      } catch (_) {}
+      _isStreamingFrames = false;
+    }
+    notifyListeners();
+  }
+
+  Future<void> toggleLiveTransmission({required P2PConnectionProvider p2pProvider}) async {
+    if (_isLiveTransmitting) {
+      await stopLiveTransmission(p2pProvider: p2pProvider);
+    } else {
+      await startLiveTransmission(p2pProvider: p2pProvider);
+    }
+  }
+
+  Future<void> toggleMasterRecording({P2PConnectionProvider? p2pProvider}) async {
     if (_recordingService.currentState == RecordingState.recording) {
       notifyListeners();
       await _recordingService.stopRecording(
         cameraController: _cameraController,
       );
+      if (_isLiveTransmitting && p2pProvider != null) {
+        _startImageStreamLoop(p2pProvider);
+      }
     } else {
+      if (_isStreamingFrames && _cameraController != null) {
+        try {
+          await _cameraController!.stopImageStream();
+        } catch (_) {}
+        _isStreamingFrames = false;
+      }
       notifyListeners();
       await _recordingService.startMasterRecording(
         cameraController: _cameraController,
