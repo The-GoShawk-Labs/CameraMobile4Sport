@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:volleylive/core/services/video_storage_service.dart';
 import 'package:volleylive/domain/models/camera_config.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
@@ -16,12 +17,20 @@ import 'package:volleylive/presentation/widgets/camera_controls_overlay.dart';
 
 class FakeLowStorageService extends VideoStorageService {
   @override
-  Future<bool> hasSufficientStorageSpace({int requiredMegabytes = 100}) async {
+  Future<bool> hasSufficientStorageSpace({
+    int requiredMegabytes = 100,
+    String? subDirectory,
+  }) async {
     return false;
   }
 }
 
 void main() {
+  setUp(() {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    SharedPreferences.setMockInitialValues({});
+  });
+
   group('CameraProvider Unit Tests', () {
     late CameraProvider cameraProvider;
 
@@ -42,6 +51,7 @@ void main() {
       expect(cameraProvider.settings.isHudVisible, true);
       expect(cameraProvider.settings.isExposureLocked, false);
       expect(cameraProvider.settings.isFocusLocked, false);
+      expect(cameraProvider.settings.storageFolder, 'Movies/CameraMobile4Sport/mecze');
     });
 
     test('Sets and clamps zoom levels properly', () async {
@@ -131,6 +141,16 @@ void main() {
       expect(result.isSimulated, isTrue);
 
       recordingService.dispose();
+    });
+
+    test('VideoStorageService ensureInitialDirectoriesCreated creates default application folders', () async {
+      final storageService = VideoStorageService();
+      await storageService.ensureInitialDirectoriesCreated();
+
+      for (final preset in VideoStorageService.defaultPresets) {
+        final dir = await storageService.getMasterRecordingDirectory(preset.relativeSubPath);
+        expect(dir.existsSync(), isTrue, reason: 'Katalog ${preset.relativeSubPath} powinien istnieć');
+      }
     });
 
     test('Żelazna zasada WSAD.md: Master REC trwa nieprzerwanie mimo utraty i restartu połączenia P2P', () async {
@@ -284,6 +304,44 @@ void main() {
       expect(find.byType(VideoSettingsModal), findsNothing);
     });
 
+    testWidgets('Opens VideoSettingsModal and selects custom storage folder preset', (tester) async {
+      final camera = CameraProvider(enableAudioSim: false);
+      await tester.pumpWidget(buildTestApp(customCamera: camera));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Kliknij ikonkę parametrów wideo (tune)
+      final tuneButton = find.byIcon(Icons.tune);
+      expect(tuneButton, findsOneWidget);
+      await tester.tap(tuneButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.byType(VideoSettingsModal), findsOneWidget);
+      expect(find.text('FOLDER ZAPISU MASTER REC'), findsOneWidget);
+
+      // Kliknij przycisk ZMIEŃ
+      await tester.ensureVisible(find.widgetWithText(OutlinedButton, 'ZMIEŃ'));
+      await tester.tap(find.widgetWithText(OutlinedButton, 'ZMIEŃ'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.text('Wybór Folderu Zapisu Wideo'), findsOneWidget);
+      expect(find.text('Mecze (Domyślny)'), findsOneWidget);
+      expect(find.text('Movies/CameraMobile4Sport/mecze'), findsOneWidget);
+
+      // Wybierz preset 'Mecze'
+      await tester.tap(find.text('Mecze (Domyślny)'));
+      await tester.pump();
+
+      // Kliknij ZASTOSUJ FOLDER
+      await tester.ensureVisible(find.text('ZASTOSUJ FOLDER'));
+      await tester.tap(find.text('ZASTOSUJ FOLDER'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(camera.settings.storageFolder, equals('Movies/CameraMobile4Sport/mecze'));
+    });
+
     testWidgets('Starts and stops Master REC, displaying completion dialog with file path, size, and duration', (tester) async {
       final camera = CameraProvider(enableAudioSim: false);
       await tester.pumpWidget(buildTestApp(customCamera: camera));
@@ -335,6 +393,73 @@ void main() {
       await tester.tap(find.textContaining('REC: ZAPISANO'));
       await tester.pumpAndSettle();
       expect(find.text('Master REC Zapisany'), findsOneWidget);
+    });
+
+    testWidgets('Allows selecting and moving storage folder directly from recording summary dialog', (tester) async {
+      // Rozmiar w układzie poziomym (landscape - typowy dla Phone A kamery)
+      tester.view.physicalSize = const Size(1200, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final camera = CameraProvider(enableAudioSim: false);
+      await tester.pumpWidget(buildTestApp(customCamera: camera));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // 1. Rozpocznij i zakończ nagranie
+      await tester.tap(find.text('REC'));
+      await tester.pump();
+      for (int i = 0; i < 10 && !camera.isRecording; i++) {
+        await tester.runAsync(() async {
+          await Future.delayed(const Duration(milliseconds: 50));
+        });
+        await tester.pump();
+      }
+
+      expect(find.text('REC STOP'), findsOneWidget);
+      await tester.tap(find.text('REC STOP'));
+      await tester.pump();
+      for (int i = 0; i < 20 && camera.recordingState != RecordingState.saved; i++) {
+        await tester.runAsync(() async {
+          await Future.delayed(const Duration(milliseconds: 50));
+        });
+        await tester.pump();
+      }
+      await tester.pumpAndSettle();
+
+      expect(find.text('Master REC Zapisany'), findsOneWidget);
+      expect(find.text('ZMIEŃ FOLDER'), findsOneWidget);
+
+      // 2. Kliknij ZMIEŃ FOLDER
+      await tester.tap(find.text('ZMIEŃ FOLDER'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // 3. Sprawdź modal wyboru folderu
+      expect(find.text('Wybór Folderu Zapisu Wideo'), findsOneWidget);
+      expect(find.text('Treningi'), findsOneWidget);
+
+      // 4. Wybierz preset 'Treningi' (master_rec/treningi)
+      await tester.tap(find.text('Treningi'));
+      await tester.pump();
+
+      // 5. Zastosuj folder
+      await tester.ensureVisible(find.text('ZASTOSUJ FOLDER'));
+      await tester.tap(find.text('ZASTOSUJ FOLDER'));
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      // 6. Zweryfikuj, że ścieżka w dialogu oraz w cameraProvider została zaktualizowana
+      expect(camera.settings.storageFolder, equals('Movies/CameraMobile4Sport/treningi'));
+      expect(camera.lastRecordingResult?.displayPath, contains('Movies/CameraMobile4Sport/treningi'));
+      expect(find.textContaining('Movies/CameraMobile4Sport/treningi'), findsWidgets);
+
+      // 7. Zamknij dialog
+      await tester.tap(find.text('ZAMKNIJ'));
+      await tester.pumpAndSettle();
+      expect(find.text('Master REC Zapisany'), findsNothing);
     });
   });
 }

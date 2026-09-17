@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:volleylive/core/router/app_router.dart';
@@ -14,6 +15,7 @@ import 'package:volleylive/presentation/providers/match_provider.dart';
 import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
 import 'package:volleylive/presentation/providers/streamer_provider.dart';
 import 'package:volleylive/presentation/screens/settings/scoreboard_customizer_modal.dart';
+import 'package:volleylive/presentation/screens/settings/storage_folder_picker_modal.dart';
 import 'package:volleylive/presentation/screens/settings/stream_settings_modal.dart';
 import 'package:volleylive/presentation/screens/settings/video_settings_modal.dart';
 import 'package:volleylive/presentation/widgets/camera_controls_overlay.dart';
@@ -136,6 +138,13 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
   }
 
   void _showRecordingErrorNotice(BuildContext context, String error) {
+    if (error.toLowerCase().contains('przestrzeni') ||
+        error.toLowerCase().contains('folderu') ||
+        error.toLowerCase().contains('uprawnień')) {
+      _showStorageIssueDialog(context, error);
+      return;
+    }
+
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -158,54 +167,405 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
     );
   }
 
-  void _showRecordingSummaryDialog(BuildContext context, MasterRecordingResult result) {
+  void _showStorageIssueDialog(BuildContext context, String errorMessage) {
+    final camera = context.read<CameraProvider>();
+    final currentFolder = camera.settings.storageFolder;
+    final bitrate = camera.settings.bitrateMbps;
+    final gbPerHour = (bitrate * 3600) / (8 * 1024);
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF161F30),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: AppTheme.cyanAccent, width: 1),
-        ),
-        title: const Row(
-          children: [
-            Icon(Icons.check_circle, color: AppTheme.greenLive, size: 22),
-            SizedBox(width: 8),
-            Text(
-              'Master REC Zapisany',
-              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Sprzętowy plik MP4 został pomyślnie zarchiwizowany na urządzeniu:',
-              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-            ),
-            const SizedBox(height: 14),
-            _buildSummaryRow(Icons.movie_outlined, 'Plik', result.fileName),
-            const SizedBox(height: 8),
-            _buildSummaryRow(Icons.timer_outlined, 'Czas nagrania', result.formattedDuration),
-            const SizedBox(height: 8),
-            _buildSummaryRow(Icons.data_usage, 'Rozmiar', result.formattedSize),
-            const SizedBox(height: 8),
-            _buildSummaryRow(Icons.folder_outlined, 'Ścieżka zapisu', result.filePath, isSmall: true),
-          ],
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.cyanAccent,
-              foregroundColor: Colors.black,
-            ),
-            child: const Text('ZAMKNIJ', style: TextStyle(fontWeight: FontWeight.bold)),
+      builder: (dialogCtx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF141923),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Colors.amberAccent, width: 1.5)),
+          title: const Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.amberAccent, size: 26),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Problem z przestrzenią lub folderem',
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  errorMessage,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.05),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'AKTUALNE PARAMETRY NAGRANIA',
+                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.cyanAccent),
+                      ),
+                      const SizedBox(height: 6),
+                      Text('• Aktywny folder: $currentFolder', style: const TextStyle(color: Colors.white, fontSize: 11)),
+                      Text('• Jakość wideo: ${camera.settings.resolution.label} @ ${camera.settings.fps.label}', style: const TextStyle(color: Colors.white, fontSize: 11)),
+                      Text('• Przepustowość: ${bitrate.toStringAsFixed(1)} Mbps (~${gbPerHour.toStringAsFixed(2)} GB / godzinę)', style: const TextStyle(color: Colors.white, fontSize: 11)),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Dlaczego ten komunikat? Na nowszych wersjach systemu Android foldery współdzielone (Movies) mogą wymagać specjalnych uprawnień lub być zablokowane. Pamięć aplikacji (Sandbox) działa zawsze bez ograniczeń.',
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 11, fontStyle: FontStyle.italic),
+                ),
+              ],
+            ),
+          ),
+          actionsAlignment: MainAxisAlignment.spaceBetween,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogCtx).pop(),
+              child: const Text('ANULUJ', style: TextStyle(color: Colors.white60, fontSize: 12)),
+            ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.tune, size: 14, color: AppTheme.cyanAccent),
+                  label: const Text('PARAMETRY WIDEO', style: TextStyle(color: AppTheme.cyanAccent, fontSize: 11)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: AppTheme.cyanAccent),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: () {
+                    Navigator.of(dialogCtx).pop();
+                    showModalBottomSheet(
+                      context: context,
+                      backgroundColor: Colors.transparent,
+                      isScrollControlled: true,
+                      builder: (_) => const VideoSettingsModal(),
+                    );
+                  },
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.shield_outlined, size: 14, color: Colors.black),
+                  label: const Text('UŻYJ SANDBOX', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 11)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amberAccent,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: () async {
+                    Navigator.of(dialogCtx).pop();
+                    await camera.setStorageFolder('master_rec');
+                    if (context.mounted) {
+                      final p2p = context.read<P2PConnectionProvider>();
+                      await camera.toggleMasterRecording(p2pProvider: p2p);
+                    }
+                  },
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showRecordingSummaryDialog(BuildContext context, MasterRecordingResult initialResult) {
+    MasterRecordingResult currentResult = initialResult;
+    bool isMoving = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        final screenWidth = MediaQuery.of(ctx).size.width;
+        final screenHeight = MediaQuery.of(ctx).size.height;
+        final isLandscape = screenWidth > screenHeight;
+
+        return StatefulBuilder(
+          builder: (dialogCtx, setDialogState) {
+            Future<void> pickAndMoveFolder() async {
+              final camera = context.read<CameraProvider>();
+              final currentFolder = camera.settings.storageFolder;
+              final chosenFolder = await showModalBottomSheet<String>(
+                context: context,
+                backgroundColor: Colors.transparent,
+                isScrollControlled: true,
+                builder: (_) => StorageFolderPickerModal(
+                  initialFolder: currentFolder,
+                ),
+              );
+
+              if (chosenFolder != null && dialogCtx.mounted) {
+                setDialogState(() => isMoving = true);
+                try {
+                  final updatedResult = await camera.moveLastRecording(chosenFolder);
+                  if (dialogCtx.mounted) {
+                    setDialogState(() {
+                      if (updatedResult != null) {
+                        currentResult = updatedResult;
+                      }
+                      isMoving = false;
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        backgroundColor: const Color(0xFF1B2A3D),
+                        behavior: SnackBarBehavior.floating,
+                        content: Row(
+                          children: [
+                            const Icon(Icons.check_circle, color: AppTheme.greenLive, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Przeniesiono plik nagrania do folderu: $chosenFolder',
+                                style: const TextStyle(fontSize: 12, color: Colors.white),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+                } catch (e) {
+                  if (dialogCtx.mounted) {
+                    setDialogState(() => isMoving = false);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        backgroundColor: Colors.red.shade900,
+                        content: Text('Błąd podczas przenoszenia nagrania: $e'),
+                      ),
+                    );
+                  }
+                }
+              }
+            }
+
+            return AlertDialog(
+              backgroundColor: const Color(0xFF131C2D),
+              insetPadding: EdgeInsets.symmetric(
+                horizontal: isLandscape ? 32 : 24,
+                vertical: isLandscape ? 16 : 24,
+              ),
+              contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+              actionsPadding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: AppTheme.cyanAccent, width: 1.2),
+              ),
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: AppTheme.greenLive.withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.check_circle, color: AppTheme.greenLive, size: 20),
+                  ),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Master REC Zapisany',
+                          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          'Plik MP4 został bezpiecznie zarchiwizowany na urządzeniu',
+                          style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              content: SizedBox(
+                width: isLandscape ? 620 : double.maxFinite,
+                child: Scrollbar(
+                  thumbVisibility: true,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Siatka / Kafelki metadanych
+                        if (isLandscape)
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                flex: 3,
+                                child: Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.surfaceCard,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: Colors.white10),
+                                  ),
+                                  child: _buildSummaryRow(Icons.movie_outlined, 'Plik', currentResult.fileName),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                flex: 2,
+                                child: Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.surfaceCard,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: Colors.white10),
+                                  ),
+                                  child: _buildSummaryRow(Icons.timer_outlined, 'Czas nagrania', currentResult.formattedDuration),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                flex: 2,
+                                child: Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.surfaceCard,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: Colors.white10),
+                                  ),
+                                  child: _buildSummaryRow(Icons.data_usage, 'Rozmiar', currentResult.formattedSize),
+                                ),
+                              ),
+                            ],
+                          )
+                        else
+                          Column(
+                            children: [
+                              _buildSummaryRow(Icons.movie_outlined, 'Plik', currentResult.fileName),
+                              const SizedBox(height: 8),
+                              _buildSummaryRow(Icons.timer_outlined, 'Czas nagrania', currentResult.formattedDuration),
+                              const SizedBox(height: 8),
+                              _buildSummaryRow(Icons.data_usage, 'Rozmiar', currentResult.formattedSize),
+                            ],
+                          ),
+                        const SizedBox(height: 10),
+
+                        // Ścieżka zapisu + przycisk Zmień
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF0C1320),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.2)),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: _buildSummaryRow(
+                                  Icons.folder_outlined,
+                                  'Ścieżka zapisu',
+                                  currentResult.displayPath,
+                                  isSmall: true,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              TextButton.icon(
+                                onPressed: isMoving ? null : pickAndMoveFolder,
+                                style: TextButton.styleFrom(
+                                  foregroundColor: AppTheme.cyanAccent,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  backgroundColor: AppTheme.cyanAccent.withValues(alpha: 0.1),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                ),
+                                icon: isMoving
+                                    ? const SizedBox(
+                                        width: 12,
+                                        height: 12,
+                                        child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.cyanAccent),
+                                      )
+                                    : const Icon(Icons.drive_file_move_outlined, size: 14),
+                                label: const Text(
+                                  'ZMIEŃ',
+                                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              actions: [
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: isMoving ? null : pickAndMoveFolder,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTheme.cyanAccent,
+                        side: const BorderSide(color: AppTheme.cyanAccent, width: 1),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      icon: const Icon(Icons.folder_open, size: 14),
+                      label: const Text(
+                        'ZMIEŃ FOLDER',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: currentResult.filePath));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Skopiowano pełną ścieżkę do schowka'),
+                            duration: Duration(seconds: 2),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTheme.cyanAccent,
+                        side: const BorderSide(color: AppTheme.cyanAccent, width: 1),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      icon: const Icon(Icons.copy, size: 14),
+                      label: const Text(
+                        'KOPIUJ ŚCIEŻKĘ',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.cyanAccent,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: const Text('ZAMKNIJ', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 

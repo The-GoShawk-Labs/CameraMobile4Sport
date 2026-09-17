@@ -17,11 +17,13 @@ abstract class IRecordingService {
   Future<void> startMasterRecording({
     CameraController? cameraController,
     bool isSimulation = false,
+    String? storageFolder,
   });
 
   Future<MasterRecordingResult?> stopRecording({
     CameraController? cameraController,
     bool simulatedDelay = false,
+    String? storageFolder,
   });
 }
 
@@ -39,6 +41,7 @@ class RecordingService implements IRecordingService {
   MasterRecordingResult? _lastRecordingResult;
   String? _lastErrorMessage;
   bool _isCurrentSessionSimulated = false;
+  String? _activeStorageFolder;
 
   RecordingService({VideoStorageService? storageService})
       : _storageService = storageService ?? VideoStorageService();
@@ -61,6 +64,13 @@ class RecordingService implements IRecordingService {
   @override
   MasterRecordingResult? get lastRecordingResult => _lastRecordingResult;
 
+  VideoStorageService get storageService => _storageService;
+
+  void updateLastRecordingResult(MasterRecordingResult result) {
+    _lastRecordingResult = result;
+    _finishedController.add(result);
+  }
+
   @override
   String? get lastErrorMessage => _lastErrorMessage;
 
@@ -68,16 +78,18 @@ class RecordingService implements IRecordingService {
   Future<void> startMasterRecording({
     CameraController? cameraController,
     bool isSimulation = false,
+    String? storageFolder,
   }) async {
     if (_currentState == RecordingState.recording) return;
 
     _lastErrorMessage = null;
+    _activeStorageFolder = storageFolder;
 
-    // 1. Weryfikacja przestrzeni dyskowej przed startem nagrania
-    final hasSpace = await _storageService.hasSufficientStorageSpace();
+    // 1. Weryfikacja przestrzeni dyskowej i uprawnień zapisu przed startem nagrania
+    final hasSpace = await _storageService.hasSufficientStorageSpace(subDirectory: storageFolder);
     if (!hasSpace) {
       _currentState = RecordingState.failed;
-      _lastErrorMessage = 'Brak wystarczającej przestrzeni dyskowej na zapis Master REC.';
+      _lastErrorMessage = 'Brak wystarczającej przestrzeni dyskowej lub brak uprawnień zapisu do wybranego folderu ($storageFolder).';
       _stateController.add(_currentState);
       return;
     }
@@ -117,6 +129,7 @@ class RecordingService implements IRecordingService {
   Future<MasterRecordingResult?> stopRecording({
     CameraController? cameraController,
     bool simulatedDelay = false,
+    String? storageFolder,
   }) async {
     _timer?.cancel();
     _timer = null;
@@ -156,11 +169,13 @@ class RecordingService implements IRecordingService {
     }
 
     // 2. Finalizacja pliku w dedykowanym katalogu aplikacji (path_provider)
+    final targetFolder = storageFolder ?? _activeStorageFolder;
     try {
       final result = await _storageService.finalizeRecording(
         sourcePath: recordedSourcePath,
         duration: _duration,
         isSimulated: _isCurrentSessionSimulated,
+        subDirectory: targetFolder,
       );
 
       _lastRecordingResult = result;

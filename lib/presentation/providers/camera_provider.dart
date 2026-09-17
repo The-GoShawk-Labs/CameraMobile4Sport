@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:volleylive/core/services/video_storage_service.dart';
 import 'package:volleylive/core/utils/camera_frame_converter.dart';
 import 'package:volleylive/domain/models/camera_config.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
@@ -45,6 +47,8 @@ class CameraProvider extends ChangeNotifier {
         _transportService = transportService ?? VideoTransportService() {
     final bool shouldEnableAudioSim = enableAudioSim ?? !Platform.environment.containsKey('FLUTTER_TEST');
     _initListeners(enableAudioSim: shouldEnableAudioSim);
+    _loadSavedStorageFolder();
+    _recordingService.storageService.ensureInitialDirectoriesCreated();
   }
 
   CameraController? get cameraController => _cameraController;
@@ -236,6 +240,7 @@ class CameraProvider extends ChangeNotifier {
       notifyListeners();
       await _recordingService.stopRecording(
         cameraController: _cameraController,
+        storageFolder: _settings.storageFolder,
       );
       if (_isLiveTransmitting && p2pProvider != null) {
         _startImageStreamLoop(p2pProvider);
@@ -251,6 +256,7 @@ class CameraProvider extends ChangeNotifier {
       await _recordingService.startMasterRecording(
         cameraController: _cameraController,
         isSimulation: _isSimulationMode || _cameraController == null,
+        storageFolder: _settings.storageFolder,
       );
     }
     notifyListeners();
@@ -381,6 +387,43 @@ class CameraProvider extends ChangeNotifier {
   void updateSettings(CameraSettings newSettings) {
     _settings = newSettings;
     notifyListeners();
+  }
+
+  Future<void> setStorageFolder(String folder) async {
+    final sanitized = VideoStorageService.sanitizeFolderName(folder);
+    _settings = _settings.copyWith(storageFolder: sanitized);
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('volleylive_camera_storage_folder', sanitized);
+    } catch (_) {}
+  }
+
+  /// Przenosi ostatnio nagrany plik do nowego folderu i aktualizuje aktywną lokalizację
+  Future<MasterRecordingResult?> moveLastRecording(String targetFolder) async {
+    final last = _recordingService.lastRecordingResult;
+    if (last == null) return null;
+    final updated = await _recordingService.storageService.moveRecording(
+      currentResult: last,
+      targetSubDirectory: targetFolder,
+    );
+    _recordingService.updateLastRecordingResult(updated);
+    await setStorageFolder(targetFolder);
+    notifyListeners();
+    return updated;
+  }
+
+  Future<void> _loadSavedStorageFolder() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedFolder = prefs.getString('volleylive_camera_storage_folder');
+      if (savedFolder != null && savedFolder.trim().isNotEmpty) {
+        _settings = _settings.copyWith(
+          storageFolder: VideoStorageService.sanitizeFolderName(savedFolder),
+        );
+        notifyListeners();
+      }
+    } catch (_) {}
   }
 
   @override

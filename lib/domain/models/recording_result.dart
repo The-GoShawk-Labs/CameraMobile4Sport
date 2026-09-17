@@ -1,5 +1,6 @@
 class MasterRecordingResult {
   final String filePath;
+  final String displayRelativePath;
   final int fileSizeBytes;
   final Duration duration;
   final DateTime recordedAt;
@@ -7,11 +8,15 @@ class MasterRecordingResult {
 
   const MasterRecordingResult({
     required this.filePath,
+    String? displayRelativePath,
     required this.fileSizeBytes,
     required this.duration,
     required this.recordedAt,
     this.isSimulated = false,
-  });
+  }) : displayRelativePath = displayRelativePath ?? filePath;
+
+  /// Czytelna ścieżka względna dla interfejsu użytkownika
+  String get displayPath => displayRelativePath.isNotEmpty ? displayRelativePath : filePath;
 
   /// Nazwa pliku wyodrębniona ze ścieżki
   String get fileName {

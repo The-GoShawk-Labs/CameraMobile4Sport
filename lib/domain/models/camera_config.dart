@@ -50,6 +50,7 @@ class CameraSettings {
   final bool isMicrophoneEnabled;
   final double bitrateMbps;
   final bool isHudVisible;
+  final String storageFolder;
 
   const CameraSettings({
     this.resolution = VideoResolution.res1080p,
@@ -71,6 +72,7 @@ class CameraSettings {
     this.isMicrophoneEnabled = true,
     this.bitrateMbps = 8.0,
     this.isHudVisible = true,
+    this.storageFolder = 'Movies/CameraMobile4Sport/mecze',
   });
 
   CameraSettings copyWith({
@@ -95,6 +97,7 @@ class CameraSettings {
     bool? isMicrophoneEnabled,
     double? bitrateMbps,
     bool? isHudVisible,
+    String? storageFolder,
   }) {
     return CameraSettings(
       resolution: resolution ?? this.resolution,
@@ -116,6 +119,7 @@ class CameraSettings {
       isMicrophoneEnabled: isMicrophoneEnabled ?? this.isMicrophoneEnabled,
       bitrateMbps: bitrateMbps ?? this.bitrateMbps,
       isHudVisible: isHudVisible ?? this.isHudVisible,
+      storageFolder: storageFolder ?? this.storageFolder,
     );
   }
 
@@ -139,5 +143,6 @@ class CameraSettings {
     'isMicrophoneEnabled': isMicrophoneEnabled,
     'bitrateMbps': bitrateMbps,
     'isHudVisible': isHudVisible,
+    'storageFolder': storageFolder,
   };
 }

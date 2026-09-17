@@ -61,6 +61,10 @@ void main() {
     });
 
     testWidgets('Scorer screen displays [MENU] and bottom navigation allows 1-tap jump to Camera and Stats', (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
       await tester.pumpWidget(const VolleyLiveApp());
       await tester.pump(const Duration(milliseconds: 100));
 

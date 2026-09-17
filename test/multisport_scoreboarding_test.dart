@@ -173,6 +173,10 @@ void main() {
     });
 
     testWidgets('PhoneBScorerScreen renders live HUD, scoreboard, video settings button and court', (tester) async {
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
       await tester.pumpWidget(buildTestHarness(const PhoneBScorerScreen()));
       await tester.pump(const Duration(milliseconds: 100));
 
