@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:volleylive/core/services/video_storage_service.dart';
 import 'package:volleylive/core/utils/camera_frame_converter.dart';
@@ -235,7 +236,13 @@ class CameraProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> toggleMasterRecording({P2PConnectionProvider? p2pProvider}) async {
+  /// Resetuje stan nagrywania do gotowości (idle), czyszcząc ewentualne komunikaty błędów
+  void resetRecordingState() {
+    _recordingService.reset();
+    notifyListeners();
+  }
+
+  Future<void> toggleMasterRecording({P2PConnectionProvider? p2pProvider, DeviceOrientation? deviceOrientation}) async {
     if (_recordingService.currentState == RecordingState.recording) {
       notifyListeners();
       await _recordingService.stopRecording(
@@ -246,17 +253,26 @@ class CameraProvider extends ChangeNotifier {
         _startImageStreamLoop(p2pProvider);
       }
     } else {
+      // Jeśli poprzednie nagranie zakończyło się (saved) lub wystąpił błąd (failed),
+      // zresetuj stan sesji przed rozpoczęciem kolejnego nagrania w tej samej sesji
+      if (_recordingService.currentState != RecordingState.idle) {
+        _recordingService.reset();
+      }
+
       if (_isStreamingFrames && _cameraController != null) {
         try {
           await _cameraController!.stopImageStream();
         } catch (_) {}
         _isStreamingFrames = false;
+        // Krótka pauza zapobiegająca race condition w Camera2 pipeline na urządzeniach z Androidem
+        await Future.delayed(const Duration(milliseconds: 100));
       }
       notifyListeners();
       await _recordingService.startMasterRecording(
         cameraController: _cameraController,
         isSimulation: _isSimulationMode || _cameraController == null,
         storageFolder: _settings.storageFolder,
+        deviceOrientation: deviceOrientation,
       );
     }
     notifyListeners();

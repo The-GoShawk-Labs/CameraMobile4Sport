@@ -121,7 +121,11 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
   Future<void> _onToggleRecording(BuildContext context, CameraProvider camera) async {
     final wasRecording = camera.recordingState == RecordingState.recording;
     final p2p = context.read<P2PConnectionProvider>();
-    await camera.toggleMasterRecording(p2pProvider: p2p);
+    // Pobierz aktualną orientację urządzenia, aby plik MP4 zachował spójność z widokiem kamery
+    final currentOrientation = MediaQuery.of(context).orientation == Orientation.landscape
+        ? DeviceOrientation.landscapeLeft
+        : DeviceOrientation.portraitUp;
+    await camera.toggleMasterRecording(p2pProvider: p2p, deviceOrientation: currentOrientation);
     if (!context.mounted) return;
 
     if (wasRecording) {
@@ -269,7 +273,10 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                     await camera.setStorageFolder('master_rec');
                     if (context.mounted) {
                       final p2p = context.read<P2PConnectionProvider>();
-                      await camera.toggleMasterRecording(p2pProvider: p2p);
+                      final orientation = MediaQuery.of(context).orientation == Orientation.landscape
+                          ? DeviceOrientation.landscapeLeft
+                          : DeviceOrientation.portraitUp;
+                      await camera.toggleMasterRecording(p2pProvider: p2p, deviceOrientation: orientation);
                     }
                   },
                 ),
@@ -443,6 +450,25 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                                   child: _buildSummaryRow(Icons.data_usage, 'Rozmiar', currentResult.formattedSize),
                                 ),
                               ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                flex: 2,
+                                child: Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.surfaceCard,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: Colors.white10),
+                                  ),
+                                  child: _buildSummaryRow(
+                                    currentResult.recordedOrientation == RecordedVideoOrientation.landscape
+                                        ? Icons.stay_current_landscape
+                                        : Icons.stay_current_portrait,
+                                    'Format i Proporcje',
+                                    '${currentResult.aspectRatioString} (${currentResult.recordedOrientation.label})',
+                                  ),
+                                ),
+                              ),
                             ],
                           )
                         else
@@ -453,8 +479,55 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                               _buildSummaryRow(Icons.timer_outlined, 'Czas nagrania', currentResult.formattedDuration),
                               const SizedBox(height: 8),
                               _buildSummaryRow(Icons.data_usage, 'Rozmiar', currentResult.formattedSize),
+                              const SizedBox(height: 8),
+                              _buildSummaryRow(
+                                currentResult.recordedOrientation == RecordedVideoOrientation.landscape
+                                    ? Icons.stay_current_landscape
+                                    : Icons.stay_current_portrait,
+                                'Format i Proporcje',
+                                '${currentResult.aspectRatioString} (${currentResult.recordedOrientation.label})',
+                              ),
                             ],
                           ),
+
+                        const SizedBox(height: 10),
+
+                        // INFORMACJA O DOPASOWANIU DO STREAMINGU
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: currentResult.isStreamingOptimized
+                                ? AppTheme.cyanAccent.withValues(alpha: 0.12)
+                                : Colors.deepPurple.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: currentResult.isStreamingOptimized
+                                  ? AppTheme.cyanAccent.withValues(alpha: 0.3)
+                                  : Colors.deepPurpleAccent.withValues(alpha: 0.3),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                currentResult.isStreamingOptimized ? Icons.live_tv : Icons.smartphone,
+                                size: 16,
+                                color: currentResult.isStreamingOptimized ? AppTheme.cyanAccent : Colors.purpleAccent,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  currentResult.isStreamingOptimized
+                                      ? 'Format 16:9 – optymalny do strumieniowania na platformy wideo (YouTube, Twitch, OBS).'
+                                      : 'Format 9:16 – zoptymalizowany pod odtwarzanie pionowe (Shorts, Reels, TikTok).',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: currentResult.isStreamingOptimized ? Colors.white : Colors.white70,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                         const SizedBox(height: 10),
 
                         // Ścieżka zapisu + przycisk Zmień
@@ -547,6 +620,24 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                       label: const Text(
                         'KOPIUJ ŚCIEŻKĘ',
                         style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        // Reset stanu i natychmiastowe rozpoczęcie kolejnego nagrania w tej samej sesji
+                        _onToggleRecording(context, context.read<CameraProvider>());
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.redLive,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      icon: const Icon(Icons.fiber_manual_record, size: 14, color: Colors.white),
+                      label: const Text(
+                        'NAGRAJ KOLEJNE',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
                       ),
                     ),
                     ElevatedButton(
@@ -1168,7 +1259,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                   ),
                   const SizedBox(width: 6),
 
-                  // PARAMETRY TRANSMISJI
+                  // PARAMETRY TRANSMISJI I PROPORCJE KADRU
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
                     decoration: BoxDecoration(
@@ -1176,9 +1267,26 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(color: Colors.white12),
                     ),
-                    child: Text(
-                      '${camera.settings.resolution.label.split(' ').first} | ${camera.settings.fps.label} | ${camera.settings.bitrateMbps.toStringAsFixed(0)}M',
-                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.cyanAccent),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '${camera.settings.resolution.label.split(' ').first} | ${camera.settings.fps.label} | ${camera.settings.bitrateMbps.toStringAsFixed(0)}M',
+                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.cyanAccent),
+                        ),
+                        const SizedBox(width: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: Colors.deepPurpleAccent.withValues(alpha: 0.3),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            '9:16',
+                            style: TextStyle(fontSize: 9, fontWeight: FontWeight.w900, color: Colors.purpleAccent),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(width: 6),
@@ -1430,7 +1538,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
             ),
             const SizedBox(width: 8),
 
-            // PARAMETRY TRANSMISJI I KODOWANIA
+            // PARAMETRY TRANSMISJI I KODOWANIA ORAZ PROPORCJE KADRU
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
               decoration: BoxDecoration(
@@ -1438,9 +1546,27 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: Colors.white12),
               ),
-              child: Text(
-                '${camera.settings.resolution.label.split(' ').first} | ${camera.settings.fps.label} | ${camera.settings.bitrateMbps.toStringAsFixed(0)}M',
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.cyanAccent),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '${camera.settings.resolution.label.split(' ').first} | ${camera.settings.fps.label} | ${camera.settings.bitrateMbps.toStringAsFixed(0)}M',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.cyanAccent),
+                  ),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                    decoration: BoxDecoration(
+                      color: AppTheme.cyanAccent.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.4)),
+                    ),
+                    child: const Text(
+                      '16:9 STREAM',
+                      style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w900, color: AppTheme.cyanAccent),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(width: 8),

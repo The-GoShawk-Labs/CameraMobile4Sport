@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:volleylive/core/services/video_storage_service.dart';
 import 'package:volleylive/domain/models/camera_config.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
+import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/domain/services/recording_service.dart';
 import 'package:volleylive/domain/services/video_transport_service.dart';
 import 'package:volleylive/presentation/providers/camera_provider.dart';
@@ -139,6 +141,38 @@ void main() {
       expect(result.formattedDuration, isNotEmpty);
       expect(result.fileName, contains('MASTER_REC_'));
       expect(result.isSimulated, isTrue);
+      expect(result.aspectRatioString, equals('16:9'));
+      expect(result.isStreamingOptimized, isTrue);
+
+      recordingService.dispose();
+    });
+
+    test('RecordingService records 16:9 for landscape and 9:16 for portrait orientation', () async {
+      final recordingService = RecordingService();
+
+      // 1. Zapis poziomy (Landscape 16:9) - zoptymalizowany pod streaming
+      await recordingService.startMasterRecording(
+        isSimulation: true,
+        deviceOrientation: DeviceOrientation.landscapeLeft,
+      );
+      final landscapeResult = await recordingService.stopRecording();
+      expect(landscapeResult, isNotNull);
+      expect(landscapeResult!.recordedOrientation, equals(RecordedVideoOrientation.landscape));
+      expect(landscapeResult.aspectRatioString, equals('16:9'));
+      expect(landscapeResult.isStreamingOptimized, isTrue);
+      expect(landscapeResult.formattedResolution(1920, 1080), equals('1920x1080 (16:9)'));
+
+      // 2. Zapis pionowy (Portrait 9:16) - zoptymalizowany pod wideo pionowe
+      await recordingService.startMasterRecording(
+        isSimulation: true,
+        deviceOrientation: DeviceOrientation.portraitUp,
+      );
+      final portraitResult = await recordingService.stopRecording();
+      expect(portraitResult, isNotNull);
+      expect(portraitResult!.recordedOrientation, equals(RecordedVideoOrientation.portrait));
+      expect(portraitResult.aspectRatioString, equals('9:16'));
+      expect(portraitResult.isStreamingOptimized, isFalse);
+      expect(portraitResult.formattedResolution(1920, 1080), equals('1080x1920 (9:16)'));
 
       recordingService.dispose();
     });
@@ -205,6 +239,61 @@ void main() {
       await cameraProvider.toggleMasterRecording();
       expect(cameraProvider.recordingState, RecordingState.failed);
       expect(cameraProvider.recordingErrorMessage, contains('przestrzeni dyskowej'));
+
+      cameraProvider.dispose();
+    });
+
+    test('Pozwala na wielokrotne kolejne nagrywanie wideo w tej samej sesji aplikacji', () async {
+      final recordingService = RecordingService();
+      final cameraProvider = CameraProvider(
+        enableAudioSim: false,
+        recordingService: recordingService,
+      );
+
+      // --- SESJA 1: Pierwsze nagranie ---
+      expect(cameraProvider.recordingState, RecordingState.idle);
+      await cameraProvider.toggleMasterRecording();
+      expect(cameraProvider.recordingState, RecordingState.recording);
+      expect(cameraProvider.isRecording, isTrue);
+
+      await Future.delayed(const Duration(milliseconds: 100));
+      await cameraProvider.toggleMasterRecording();
+      expect(cameraProvider.recordingState, RecordingState.saved);
+      final result1 = cameraProvider.lastRecordingResult;
+      expect(result1, isNotNull);
+      expect(result1!.filePath, isNotEmpty);
+
+      // Reset stanu po zakończeniu/zamknięciu dialogu (lub automatycznie przed startem kolejnego nagrania)
+      cameraProvider.resetRecordingState();
+      expect(cameraProvider.recordingState, RecordingState.idle);
+      expect(cameraProvider.isRecording, isFalse);
+
+      // --- SESJA 2: Kolejne nagranie w tej samej sesji aplikacji ---
+      await cameraProvider.toggleMasterRecording();
+      expect(cameraProvider.recordingState, RecordingState.recording);
+      expect(cameraProvider.isRecording, isTrue);
+
+      await Future.delayed(const Duration(milliseconds: 100));
+      await cameraProvider.toggleMasterRecording();
+      expect(cameraProvider.recordingState, RecordingState.saved);
+      final result2 = cameraProvider.lastRecordingResult;
+      expect(result2, isNotNull);
+      expect(result2!.filePath, isNotEmpty);
+
+      // Upewnij się, że oba nagrania utworzyły niezależne pliki
+      expect(result1.filePath != result2.filePath, isTrue, reason: 'Pliki kolejnych nagrań powinny mieć unikalne ścieżki i nazwy');
+
+      // --- SESJA 3: Trzecie nagranie bez jawnego wywołania resetRecordingState() (automatyczny reset w toggleMasterRecording) ---
+      expect(cameraProvider.recordingState, RecordingState.saved);
+      await cameraProvider.toggleMasterRecording();
+      expect(cameraProvider.recordingState, RecordingState.recording);
+      expect(cameraProvider.isRecording, isTrue);
+
+      await cameraProvider.toggleMasterRecording();
+      expect(cameraProvider.recordingState, RecordingState.saved);
+      final result3 = cameraProvider.lastRecordingResult;
+      expect(result3, isNotNull);
+      expect(result3!.filePath != result2.filePath, isTrue);
 
       cameraProvider.dispose();
     });
@@ -380,6 +469,8 @@ void main() {
       expect(find.text('Czas nagrania'), findsOneWidget);
       expect(find.text('Rozmiar'), findsOneWidget);
       expect(find.text('Ścieżka zapisu'), findsOneWidget);
+      expect(find.text('Format i Proporcje'), findsOneWidget);
+      expect(find.textContaining('Format 16:9'), findsOneWidget);
 
       // 5. Zamknięcie dialogu
       await tester.tap(find.text('ZAMKNIJ'));

@@ -9,6 +9,18 @@ enum VideoResolution {
   final int width;
   final int height;
   const VideoResolution(this.label, this.width, this.height);
+
+  /// Zwraca wymiary klatki w formacie 16:9 (poziomo) lub 9:16 (pionowo)
+  String getDimensionsForOrientation(bool isLandscape) {
+    if (isLandscape) {
+      return '${width}x$height (16:9)';
+    } else {
+      return '${height}x$width (9:16)';
+    }
+  }
+
+  /// Zwraca etykietę proporcji
+  String getAspectRatioLabel(bool isLandscape) => isLandscape ? '16:9' : '9:16';
 }
 
 enum VideoFps {

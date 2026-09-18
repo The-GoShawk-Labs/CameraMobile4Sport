@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:camera/camera.dart';
+import 'package:flutter/services.dart';
 import 'package:volleylive/core/services/video_storage_service.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
 import 'package:volleylive/domain/models/recording_result.dart';
@@ -18,6 +19,7 @@ abstract class IRecordingService {
     CameraController? cameraController,
     bool isSimulation = false,
     String? storageFolder,
+    DeviceOrientation? deviceOrientation,
   });
 
   Future<MasterRecordingResult?> stopRecording({
@@ -25,6 +27,8 @@ abstract class IRecordingService {
     bool simulatedDelay = false,
     String? storageFolder,
   });
+
+  void reset();
 }
 
 /// Serwis nagrywania wideo Master REC MP4 na Phone A
@@ -42,6 +46,7 @@ class RecordingService implements IRecordingService {
   String? _lastErrorMessage;
   bool _isCurrentSessionSimulated = false;
   String? _activeStorageFolder;
+  RecordedVideoOrientation _activeOrientation = RecordedVideoOrientation.landscape;
 
   RecordingService({VideoStorageService? storageService})
       : _storageService = storageService ?? VideoStorageService();
@@ -79,11 +84,15 @@ class RecordingService implements IRecordingService {
     CameraController? cameraController,
     bool isSimulation = false,
     String? storageFolder,
+    DeviceOrientation? deviceOrientation,
   }) async {
     if (_currentState == RecordingState.recording) return;
 
     _lastErrorMessage = null;
     _activeStorageFolder = storageFolder;
+
+    // Zapisz orientację widoku kamery w momencie startu nagrywania
+    _activeOrientation = _resolveOrientation(deviceOrientation);
 
     // 1. Weryfikacja przestrzeni dyskowej i uprawnień zapisu przed startem nagrania
     final hasSpace = await _storageService.hasSufficientStorageSpace(subDirectory: storageFolder);
@@ -99,6 +108,15 @@ class RecordingService implements IRecordingService {
     // 2. Start nagrywania sprzętowego przez CameraController (jeśli podłączony)
     if (!_isCurrentSessionSimulated && cameraController != null) {
       try {
+        // Zablokuj orientację nagrywania na aktualną orientację urządzenia,
+        // aby plik MP4 zachował spójność z widokiem kamery
+        if (deviceOrientation != null) {
+          try {
+            await cameraController.lockCaptureOrientation(deviceOrientation);
+          } catch (_) {
+            // Niektóre urządzenia mogą nie obsługiwać blokowania orientacji
+          }
+        }
         await cameraController.startVideoRecording();
       } on CameraException catch (e) {
         _currentState = RecordingState.failed;
@@ -151,6 +169,14 @@ class RecordingService implements IRecordingService {
       try {
         final XFile videoFile = await cameraController.stopVideoRecording();
         recordedSourcePath = videoFile.path;
+
+        // Odblokuj orientację nagrywania po zakończeniu zapisu,
+        // aby kamera mogła swobodnie reagować na obroty urządzenia
+        try {
+          await cameraController.unlockCaptureOrientation();
+        } catch (_) {
+          // Ignoruj — niektóre urządzenia mogą nie obsługiwać odblokowania
+        }
       } on CameraException catch (e) {
         _currentState = RecordingState.failed;
         _lastErrorMessage = 'Błąd zapisu pliku wideo przez kamerę: ${e.description ?? e.code}';
@@ -176,6 +202,7 @@ class RecordingService implements IRecordingService {
         duration: _duration,
         isSimulated: _isCurrentSessionSimulated,
         subDirectory: targetFolder,
+        recordedOrientation: _activeOrientation,
       );
 
       _lastRecordingResult = result;
@@ -189,6 +216,31 @@ class RecordingService implements IRecordingService {
       _stateController.add(_currentState);
       return null;
     }
+  }
+
+  /// Rozpoznaje orientację wideo na podstawie DeviceOrientation z sensora urządzenia
+  static RecordedVideoOrientation _resolveOrientation(DeviceOrientation? deviceOrientation) {
+    if (deviceOrientation == null) return RecordedVideoOrientation.landscape;
+    switch (deviceOrientation) {
+      case DeviceOrientation.landscapeLeft:
+      case DeviceOrientation.landscapeRight:
+        return RecordedVideoOrientation.landscape;
+      case DeviceOrientation.portraitUp:
+      case DeviceOrientation.portraitDown:
+        return RecordedVideoOrientation.portrait;
+    }
+  }
+
+  /// Resetuje stan sesji nagrywania do trybu idle, umożliwiając natychmiastowe nagranie kolejnego klipu
+  @override
+  void reset() {
+    _timer?.cancel();
+    _timer = null;
+    _currentState = RecordingState.idle;
+    _duration = Duration.zero;
+    _lastErrorMessage = null;
+    _stateController.add(_currentState);
+    _durationController.add(_duration);
   }
 
   void dispose() {

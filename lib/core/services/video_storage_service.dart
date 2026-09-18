@@ -212,7 +212,7 @@ class VideoStorageService {
   /// Generuje nową, unikalną ścieżkę dla pliku nagrania MP4 w zadanym folderze
   Future<String> generateNewRecordingPath([String? subDirectory]) async {
     final dir = await getMasterRecordingDirectory(subDirectory);
-    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    final timestamp = DateFormat('yyyyMMdd_HHmmss_SSS').format(DateTime.now());
     return '${dir.path}/MASTER_REC_$timestamp.mp4';
   }
 
@@ -261,6 +261,7 @@ class VideoStorageService {
     required Duration duration,
     bool isSimulated = false,
     String? subDirectory,
+    RecordedVideoOrientation recordedOrientation = RecordedVideoOrientation.landscape,
   }) async {
     final targetPath = await generateNewRecordingPath(subDirectory);
     final relativeDisplay = toRelativeDisplayPath(targetPath);
@@ -291,6 +292,7 @@ class VideoStorageService {
           duration: duration,
           recordedAt: DateTime.now(),
           isSimulated: isSimulated,
+          recordedOrientation: recordedOrientation,
         );
       }
 
@@ -303,6 +305,7 @@ class VideoStorageService {
         duration: duration,
         recordedAt: DateTime.now(),
         isSimulated: isSimulated,
+        recordedOrientation: recordedOrientation,
       );
     } else {
       // Tryb symulacyjny (testy jednostkowe / brak fizycznego sensora)
@@ -315,6 +318,7 @@ class VideoStorageService {
         duration: duration,
         recordedAt: DateTime.now(),
         isSimulated: isSimulated,
+        recordedOrientation: recordedOrientation,
       );
     }
   }
@@ -357,6 +361,7 @@ class VideoStorageService {
       duration: currentResult.duration,
       recordedAt: currentResult.recordedAt,
       isSimulated: currentResult.isSimulated,
+      recordedOrientation: currentResult.recordedOrientation,
     );
   }
 }

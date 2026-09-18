@@ -75,53 +75,89 @@ class VideoSettingsModal extends StatelessWidget {
               const SizedBox(height: 20),
 
               // SEKCJA 1: ROZDZIELCZOŚĆ WIDEO
-              const Text(
-                'ROZDZIELCZOŚĆ KADRU',
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.cyanAccent),
-              ),
-              const SizedBox(height: 10),
-              Row(
-                children: VideoResolution.values.map((res) {
-                  final isSelected = settings.resolution == res;
-                  return Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: InkWell(
-                        onTap: () => camera.setResolution(res),
-                        borderRadius: BorderRadius.circular(12),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          decoration: BoxDecoration(
-                            color: isSelected ? AppTheme.cyanAccent.withValues(alpha: 0.2) : AppTheme.surfaceCard,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: isSelected ? AppTheme.cyanAccent : Colors.white12,
-                              width: isSelected ? 2 : 1,
+              Builder(
+                builder: (context) {
+                  final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'ROZDZIELCZOŚĆ KADRU',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.cyanAccent),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: isLandscape
+                                  ? AppTheme.cyanAccent.withValues(alpha: 0.2)
+                                  : Colors.deepPurpleAccent.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: isLandscape ? AppTheme.cyanAccent : Colors.purpleAccent,
+                                width: 0.8,
+                              ),
+                            ),
+                            child: Text(
+                              isLandscape ? '16:9 (STREAMING)' : '9:16 (PION)',
+                              style: TextStyle(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.bold,
+                                color: isLandscape ? AppTheme.cyanAccent : Colors.purpleAccent,
+                              ),
                             ),
                           ),
-                          child: Column(
-                            children: [
-                              Text(
-                                res.label,
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: isSelected ? AppTheme.cyanAccent : Colors.white,
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: VideoResolution.values.map((res) {
+                          final isSelected = settings.resolution == res;
+                          return Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              child: InkWell(
+                                onTap: () => camera.setResolution(res),
+                                borderRadius: BorderRadius.circular(12),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  decoration: BoxDecoration(
+                                    color: isSelected ? AppTheme.cyanAccent.withValues(alpha: 0.2) : AppTheme.surfaceCard,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: isSelected ? AppTheme.cyanAccent : Colors.white12,
+                                      width: isSelected ? 2 : 1,
+                                    ),
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      Text(
+                                        res.label,
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                          color: isSelected ? AppTheme.cyanAccent : Colors.white,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        res.getDimensionsForOrientation(isLandscape),
+                                        style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
-                              const SizedBox(height: 2),
-                              Text(
-                                '${res.width}x${res.height}',
-                                style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary),
-                              ),
-                            ],
-                          ),
-                        ),
+                            ),
+                          );
+                        }).toList(),
                       ),
-                    ),
+                    ],
                   );
-                }).toList(),
+                },
               ),
               const SizedBox(height: 20),
 
