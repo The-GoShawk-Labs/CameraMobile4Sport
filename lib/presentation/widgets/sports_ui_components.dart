@@ -112,13 +112,17 @@ class SportBadge extends StatelessWidget {
             Icon(icon, color: color, size: 13),
             const SizedBox(width: 5),
           ],
-          Text(
-            label.toUpperCase(),
-            style: TextStyle(
-              fontSize: 9,
-              fontWeight: FontWeight.w900,
-              color: color,
-              letterSpacing: 0.8,
+          Flexible(
+            child: Text(
+              label.toUpperCase(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w900,
+                color: color,
+                letterSpacing: 0.8,
+              ),
             ),
           ),
         ],

@@ -8,10 +8,14 @@ import 'package:volleylive/core/services/video_storage_service.dart';
 import 'package:volleylive/core/utils/camera_frame_converter.dart';
 import 'package:volleylive/domain/models/camera_config.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
+import 'package:volleylive/domain/models/match_session.dart';
+import 'package:volleylive/domain/models/score_event.dart';
 import 'package:volleylive/domain/models/recording_result.dart';
+import 'package:volleylive/domain/models/streaming_config.dart';
 import 'package:volleylive/domain/services/recording_service.dart';
 import 'package:volleylive/domain/services/video_transport_service.dart';
 import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
+import 'package:volleylive/presentation/services/scoreboard_widget_burner.dart';
 
 class CameraProvider extends ChangeNotifier {
   final RecordingService _recordingService;
@@ -22,6 +26,7 @@ class CameraProvider extends ChangeNotifier {
   bool _isCameraInitialized = false;
   bool _isSimulationMode = false;
   String? _cameraErrorMessage;
+  String? _appliedCameraSettingsKey;
 
   StreamSubscription<RecordingState>? _recordingStateSub;
   StreamSubscription<Duration>? _durationSub;
@@ -33,10 +38,22 @@ class CameraProvider extends ChangeNotifier {
   final int _batteryLevel = 85;
   String _pairedHostCode = '';
 
+  RecordingType _recordingType = RecordingType.programWithScoreboard;
+  CameraDescription? _currentCameraDesc;
+  bool _isTorchOn = false;
+  RecordingType? _activeRecordingType;
+  String? _recordingOverrideError;
+  StreamSubscription? _scoreEventsSub;
+
   bool _isLiveTransmitting = false;
   bool _isStreamingFrames = false;
   int _lastFrameTimestamp = 0;
   bool _isConvertingFrame = false;
+  bool _isProgramPreviewCaptureEnabled = false;
+  Uint8List? _programPreviewFrame;
+  Completer<Uint8List?>? _firstProgramFrameCompleter;
+  final StreamController<Uint8List> _programPreviewFrameController =
+      StreamController<Uint8List>.broadcast();
 
   Timer? _audioSimTimer;
 
@@ -44,24 +61,86 @@ class CameraProvider extends ChangeNotifier {
     bool? enableAudioSim,
     RecordingService? recordingService,
     VideoTransportService? transportService,
-  })  : _recordingService = recordingService ?? RecordingService(),
-        _transportService = transportService ?? VideoTransportService() {
-    final bool shouldEnableAudioSim = enableAudioSim ?? !Platform.environment.containsKey('FLUTTER_TEST');
+  }) : _recordingService = recordingService ?? RecordingService(),
+       _transportService = transportService ?? VideoTransportService() {
+    final bool shouldEnableAudioSim =
+        enableAudioSim ?? !Platform.environment.containsKey('FLUTTER_TEST');
     _initListeners(enableAudioSim: shouldEnableAudioSim);
     _loadSavedStorageFolder();
     _recordingService.storageService.ensureInitialDirectoriesCreated();
   }
 
   CameraController? get cameraController => _cameraController;
+  CameraDescription? get currentCameraDescription => _currentCameraDesc;
+  CameraLensDirection get currentLensDirection =>
+      _currentCameraDesc?.lensDirection ?? CameraLensDirection.back;
+  bool get isTorchOn => _isTorchOn;
+  Uint8List? get programPreviewFrame => _programPreviewFrame;
+  Stream<Uint8List> get programPreviewFrames =>
+      _programPreviewFrameController.stream;
   List<CameraDescription> get availableCamerasList => _availableCameras;
   bool get isCameraInitialized => _isCameraInitialized;
   bool get isSimulationMode => _isSimulationMode;
   String? get cameraErrorMessage => _cameraErrorMessage;
 
+  RecordingType get recordingType => _recordingType;
+  RecordingType? get activeRecordingType => _activeRecordingType;
+
+  void setRecordingType(RecordingType type) {
+    if (isRecording) return;
+    if (_recordingType != type) {
+      _recordingType = type;
+      notifyListeners();
+    }
+  }
+
+  MatchSession? _currentSession;
+  StreamSubscription? _matchSessionSub;
+
+  MatchSession? get currentSession => _currentSession;
+
+  /// Aktualizuje powiązaną sesję meczową
+  void updateMatchSession(MatchSession session) {
+    _currentSession = session;
+  }
+
+  /// Podłącza strumień zdarzeń punktowych z MatchProvider
+  void attachMatchProvider(
+    Stream<ScoreEvent> eventsStream, {
+    MatchSession? currentSession,
+    Stream<MatchSession>? sessionStream,
+  }) {
+    if (currentSession != null) {
+      _currentSession = currentSession;
+    }
+    _matchSessionSub?.cancel();
+    if (sessionStream != null) {
+      _matchSessionSub = sessionStream.listen((session) {
+        _currentSession = session;
+        if (isRecording) {
+          _recordingService.recordTimelineEvent(
+            eventType: 'scoreUpdate',
+            session: session,
+          );
+        }
+      });
+    }
+    _scoreEventsSub?.cancel();
+    _scoreEventsSub = eventsStream.listen((event) {
+      if (sessionStream == null && isRecording && _currentSession != null) {
+        _recordingService.recordTimelineEvent(
+          eventType: event.type.name,
+          session: _currentSession!,
+        );
+      }
+    });
+  }
+
   CameraSettings get settings => _settings;
   CameraConnectionState get connectionState => _transportService.currentState;
   RecordingState get recordingState => _recordingService.currentState;
-  bool get isRecording => _recordingService.currentState == RecordingState.recording;
+  bool get isRecording =>
+      _recordingService.currentState == RecordingState.recording;
   bool get isLiveTransmitting => _isLiveTransmitting;
   Duration get masterRecDuration => _recordingService.recordedDuration;
   bool get isTripodLocked => _isTripodLocked;
@@ -69,8 +148,10 @@ class CameraProvider extends ChangeNotifier {
   int get batteryLevel => _batteryLevel;
   String get pairedHostCode => _pairedHostCode;
 
-  MasterRecordingResult? get lastRecordingResult => _recordingService.lastRecordingResult;
-  String? get recordingErrorMessage => _recordingService.lastErrorMessage;
+  MasterRecordingResult? get lastRecordingResult =>
+      _recordingService.lastRecordingResult;
+  String? get recordingErrorMessage =>
+      _recordingOverrideError ?? _recordingService.lastErrorMessage;
   RecordingService get recordingService => _recordingService;
   VideoTransportService get transportService => _transportService;
 
@@ -92,7 +173,9 @@ class CameraProvider extends ChangeNotifier {
 
     if (enableAudioSim) {
       // Symulacja wysterowania mikrofonu
-      _audioSimTimer = Timer.periodic(const Duration(milliseconds: 300), (timer) {
+      _audioSimTimer = Timer.periodic(const Duration(milliseconds: 300), (
+        timer,
+      ) {
         _audioLevel = 0.4 + (DateTime.now().millisecond % 50) / 100;
         if (hasListeners) notifyListeners();
       });
@@ -114,18 +197,22 @@ class CameraProvider extends ChangeNotifier {
         (cam) => cam.lensDirection == CameraLensDirection.back,
         orElse: () => _availableCameras.first,
       );
+      _currentCameraDesc = cameraDesc;
 
       final controller = CameraController(
         cameraDesc,
-        ResolutionPreset.high,
+        _resolutionPresetFor(_settings.resolution),
         enableAudio: _settings.isMicrophoneEnabled,
-        imageFormatGroup: ImageFormatGroup.jpeg,
+        imageFormatGroup: ImageFormatGroup.nv21,
       );
 
       await controller.initialize();
       _cameraController = controller;
       _isCameraInitialized = true;
       _isSimulationMode = false;
+      _appliedCameraSettingsKey = _cameraSettingsKeyFor(
+        _resolutionPresetFor(_settings.resolution),
+      );
 
       // Pobierz limity zoomu i kompensacji ekspozycji dla urządzenia
       double minZoom = 1.0;
@@ -162,17 +249,115 @@ class CameraProvider extends ChangeNotifier {
     }
   }
 
+  static ResolutionPreset _resolutionPresetFor(VideoResolution resolution) {
+    switch (resolution) {
+      case VideoResolution.res720p:
+        return ResolutionPreset.high;
+      case VideoResolution.res1080p:
+        return ResolutionPreset.veryHigh;
+      case VideoResolution.res4k:
+        return ResolutionPreset.ultraHigh;
+    }
+  }
+
+  String _cameraSettingsKeyFor(ResolutionPreset preset) =>
+      '${preset.name}:${_settings.fps.fps}:${(_settings.bitrateMbps * 1000000).round()}:${_settings.isMicrophoneEnabled}';
+
+  /// Recreates the native camera session when quality settings have changed,
+  /// so capture cadence and sensor resolution match the selected profile.
+  Future<bool> prepareCameraForRecording({
+    bool prioritizeSmoothFrameCapture = false,
+    P2PConnectionProvider? p2pProvider,
+  }) async {
+    final previous = _cameraController;
+    if (previous == null ||
+        !previous.value.isInitialized ||
+        _isSimulationMode) {
+      return false;
+    }
+    // Flutter's image stream drops heavily at 1080p on many devices. Program
+    // composition needs a steady sequence of frames for its widget capture.
+    // Keep the encoded output resolution separately at the user's chosen size.
+    final desiredPreset = _resolutionPresetFor(_settings.resolution);
+    final desiredSettingsKey = _cameraSettingsKeyFor(desiredPreset);
+    if (_appliedCameraSettingsKey == desiredSettingsKey) return true;
+
+    final description = previous.description;
+    final previousPreset = previous.resolutionPreset;
+    _isCameraInitialized = false;
+    _cameraController = null;
+    notifyListeners();
+    try {
+      if (previous.value.isStreamingImages) {
+        try {
+          await previous.stopImageStream();
+        } catch (_) {}
+      }
+      _isStreamingFrames = false;
+      await previous.dispose();
+      final controller = CameraController(
+        description,
+        desiredPreset,
+        enableAudio: _settings.isMicrophoneEnabled,
+        imageFormatGroup: ImageFormatGroup.nv21,
+      );
+      await controller.initialize();
+      if (_settings.zoom > 1.0) {
+        try {
+          await controller.setZoomLevel(_settings.zoom);
+        } catch (_) {}
+      }
+      if (_settings.exposureOffset != 0.0) {
+        try {
+          await controller.setExposureOffset(_settings.exposureOffset);
+        } catch (_) {}
+      }
+      _currentCameraDesc = description;
+      _cameraController = controller;
+      _isCameraInitialized = true;
+      _isSimulationMode = false;
+      _appliedCameraSettingsKey = desiredSettingsKey;
+      if (_isLiveTransmitting || _isProgramPreviewCaptureEnabled) {
+        _startImageStreamLoop(p2pProvider);
+      }
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _cameraErrorMessage = 'Nie udało się zastosować profilu kamery: $e';
+      try {
+        final fallback = CameraController(
+          description,
+          previousPreset,
+          enableAudio: _settings.isMicrophoneEnabled,
+          imageFormatGroup: ImageFormatGroup.nv21,
+        );
+        await fallback.initialize();
+        _currentCameraDesc = description;
+        _cameraController = fallback;
+        _isCameraInitialized = true;
+        _isSimulationMode = false;
+      } catch (_) {
+        _isSimulationMode = true;
+      }
+      notifyListeners();
+      return false;
+    }
+  }
+
   Future<void> connectToScorer(String pairingCode) async {
     _pairedHostCode = pairingCode;
     await _transportService.connectToHost(pairingCode);
   }
 
-  Future<void> startLiveTransmission({required P2PConnectionProvider p2pProvider}) async {
+  Future<void> startLiveTransmission({
+    required P2PConnectionProvider p2pProvider,
+  }) async {
     _isLiveTransmitting = true;
     notifyListeners();
 
     // Uruchom jako host dla sesji P2P, aby sędzia mógł się podłączyć
-    if (!p2pProvider.isHost && p2pProvider.connectionState != CameraConnectionState.connected) {
+    if (!p2pProvider.isHost &&
+        p2pProvider.connectionState != CameraConnectionState.connected) {
       await p2pProvider.hostSession(
         pairingCode: _pairedHostCode.isNotEmpty ? _pairedHostCode : 'VL-8492',
         role: DeviceRole.cameraPhoneA,
@@ -182,28 +367,80 @@ class CameraProvider extends ChangeNotifier {
     _startImageStreamLoop(p2pProvider);
   }
 
-  void _startImageStreamLoop(P2PConnectionProvider p2pProvider) {
+  Future<Uint8List?> startProgramPreviewFrameCapture() async {
+    final controller = _cameraController;
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        _isSimulationMode) {
+      return null;
+    }
+    _isProgramPreviewCaptureEnabled = true;
+    final completer = Completer<Uint8List?>();
+    _firstProgramFrameCompleter = completer;
+    if (!_isStreamingFrames) _startImageStreamLoop();
+    try {
+      return await completer.future.timeout(const Duration(seconds: 3));
+    } catch (_) {
+      return null;
+    } finally {
+      if (identical(_firstProgramFrameCompleter, completer)) {
+        _firstProgramFrameCompleter = null;
+      }
+    }
+  }
+
+  Future<void> stopProgramPreviewFrameCapture() async {
+    _isProgramPreviewCaptureEnabled = false;
+    _firstProgramFrameCompleter = null;
+    if (!_isLiveTransmitting &&
+        _isStreamingFrames &&
+        _cameraController != null) {
+      try {
+        await _cameraController!.stopImageStream();
+      } catch (_) {}
+      _isStreamingFrames = false;
+    }
+    _programPreviewFrame = null;
+    notifyListeners();
+  }
+
+  void _startImageStreamLoop([P2PConnectionProvider? p2pProvider]) {
     if (_cameraController != null &&
         _cameraController!.value.isInitialized &&
         !_isStreamingFrames &&
-        !isRecording) {
+        !isRecording &&
+        (_isLiveTransmitting || _isProgramPreviewCaptureEnabled)) {
       try {
         _isStreamingFrames = true;
         _cameraController!.startImageStream((CameraImage image) async {
-          if (!_isLiveTransmitting) return;
+          if (!_isLiveTransmitting && !_isProgramPreviewCaptureEnabled) return;
 
           final now = DateTime.now().millisecondsSinceEpoch;
-          // Ogranicz do ~18-20 FPS (min. 55 ms między klatkami)
-          if (now - _lastFrameTimestamp < 55) return;
+          final minFrameIntervalMs = (1000 / _settings.fps.fps).floor();
+          if (now - _lastFrameTimestamp < minFrameIntervalMs) return;
           if (_isConvertingFrame) return;
 
           _isConvertingFrame = true;
           _lastFrameTimestamp = now;
 
           try {
-            final jpeg = await CameraFrameConverter.convertYuvToJpeg(image, quality: 50);
-            if (jpeg != null && _isLiveTransmitting) {
-              p2pProvider.broadcastVideoFrame(jpeg);
+            final jpeg = await CameraFrameConverter.convertYuvToJpeg(
+              image,
+              quality: _isLiveTransmitting ? 88 : 96,
+            );
+            if (jpeg != null) {
+              if (_isLiveTransmitting) p2pProvider?.broadcastVideoFrame(jpeg);
+              if (_isProgramPreviewCaptureEnabled) {
+                _programPreviewFrame = jpeg;
+                if (!_programPreviewFrameController.isClosed) {
+                  _programPreviewFrameController.add(jpeg);
+                }
+                final firstFrame = _firstProgramFrameCompleter;
+                if (firstFrame != null && !firstFrame.isCompleted) {
+                  firstFrame.complete(jpeg);
+                }
+                notifyListeners();
+              }
             }
           } catch (_) {
           } finally {
@@ -217,9 +454,13 @@ class CameraProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> stopLiveTransmission({required P2PConnectionProvider p2pProvider}) async {
+  Future<void> stopLiveTransmission({
+    required P2PConnectionProvider p2pProvider,
+  }) async {
     _isLiveTransmitting = false;
-    if (_isStreamingFrames && _cameraController != null) {
+    if (_isStreamingFrames &&
+        !_isProgramPreviewCaptureEnabled &&
+        _cameraController != null) {
       try {
         await _cameraController!.stopImageStream();
       } catch (_) {}
@@ -228,7 +469,9 @@ class CameraProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> toggleLiveTransmission({required P2PConnectionProvider p2pProvider}) async {
+  Future<void> toggleLiveTransmission({
+    required P2PConnectionProvider p2pProvider,
+  }) async {
     if (_isLiveTransmitting) {
       await stopLiveTransmission(p2pProvider: p2pProvider);
     } else {
@@ -238,17 +481,42 @@ class CameraProvider extends ChangeNotifier {
 
   /// Resetuje stan nagrywania do gotowości (idle), czyszcząc ewentualne komunikaty błędów
   void resetRecordingState() {
+    _recordingOverrideError = null;
+    _programPreviewFrame = null;
     _recordingService.reset();
     notifyListeners();
   }
 
-  Future<void> toggleMasterRecording({P2PConnectionProvider? p2pProvider, DeviceOrientation? deviceOrientation}) async {
+  Future<void> toggleMasterRecording({
+    P2PConnectionProvider? p2pProvider,
+    DeviceOrientation? deviceOrientation,
+    MatchSession? matchSession,
+    RecordingType? recordingType,
+    Stream<Uint8List>? programFrameStream,
+    Uint8List? initialProgramFrame,
+    Stream<Uint8List>? rawCameraFrameStream,
+    Uint8List? initialRawCameraFrame,
+    ScoreboardThemeStyle? scoreboardStyle,
+  }) async {
+    final typeToRecord = recordingType ?? _recordingType;
+    _recordingOverrideError = null;
+
+    if (matchSession != null) {
+      _currentSession = matchSession;
+    }
+
     if (_recordingService.currentState == RecordingState.recording) {
       notifyListeners();
       await _recordingService.stopRecording(
         cameraController: _cameraController,
         storageFolder: _settings.storageFolder,
+        finalSession: matchSession ?? _currentSession,
+        scoreboardStyle: scoreboardStyle ?? ScoreboardThemeStyle.tvProBroadcast,
+        overlayImagePath: ScoreboardWidgetBurner.latestOverlayImagePath,
+        overlayPngBytes: ScoreboardWidgetBurner.latestCapturedPngBytes,
       );
+      _activeRecordingType = null;
+      _programPreviewFrame = null;
       if (_isLiveTransmitting && p2pProvider != null) {
         _startImageStreamLoop(p2pProvider);
       }
@@ -259,23 +527,104 @@ class CameraProvider extends ChangeNotifier {
         _recordingService.reset();
       }
 
-      if (_isStreamingFrames && _cameraController != null) {
-        try {
-          await _cameraController!.stopImageStream();
-        } catch (_) {}
+      final isSimulation = _isSimulationMode ||
+          _cameraController == null ||
+          !_cameraController!.value.isInitialized ||
+          Platform.environment.containsKey('FLUTTER_TEST');
+
+      if (_cameraController != null) {
+        if (_cameraController!.value.isStreamingImages) {
+          try {
+            await _cameraController!.stopImageStream();
+          } catch (_) {}
+        }
         _isStreamingFrames = false;
+        _programPreviewFrame = null;
         // Krótka pauza zapobiegająca race condition w Camera2 pipeline na urządzeniach z Androidem
-        await Future.delayed(const Duration(milliseconds: 100));
+        await Future.delayed(const Duration(milliseconds: 150));
       }
       notifyListeners();
+      _activeRecordingType = typeToRecord;
       await _recordingService.startMasterRecording(
-        cameraController: _cameraController,
-        isSimulation: _isSimulationMode || _cameraController == null,
+        cameraController: isSimulation ? null : _cameraController,
+        remoteFrameStream: programFrameStream,
+        initialFrame: initialProgramFrame,
+        rawCameraFrameStream: rawCameraFrameStream,
+        initialRawCameraFrame: initialRawCameraFrame,
+        remoteFrameExtension: 'png',
+        remoteFramesIncludeProgramOverlay: programFrameStream != null,
+        encodingBitrateMbps: _settings.bitrateMbps,
+        encodingFps: _settings.fps.fps,
+        encodingWidth: _settings.resolution.width,
+        encodingHeight: _settings.resolution.height,
+        isSimulation: isSimulation,
         storageFolder: _settings.storageFolder,
         deviceOrientation: deviceOrientation,
+        recordingType: typeToRecord,
+        initialSession: matchSession ?? _currentSession,
       );
     }
     notifyListeners();
+  }
+
+  Future<void> switchCamera() async {
+    if (_availableCameras.length <= 1) return;
+    final currentDirection =
+        _currentCameraDesc?.lensDirection ?? CameraLensDirection.back;
+    final targetDirection = currentDirection == CameraLensDirection.back
+        ? CameraLensDirection.front
+        : CameraLensDirection.back;
+    final nextDesc = _availableCameras.firstWhere(
+      (cam) => cam.lensDirection == targetDirection,
+      orElse: () => _availableCameras.firstWhere(
+        (cam) => cam != _currentCameraDesc,
+        orElse: () => _availableCameras.first,
+      ),
+    );
+    if (nextDesc == _currentCameraDesc) return;
+
+    final prevController = _cameraController;
+    _isCameraInitialized = false;
+    _cameraController = null;
+    notifyListeners();
+
+    try {
+      if (prevController != null) {
+        if (prevController.value.isStreamingImages) {
+          try {
+            await prevController.stopImageStream();
+          } catch (_) {}
+        }
+        await prevController.dispose();
+      }
+      final controller = CameraController(
+        nextDesc,
+        _resolutionPresetFor(_settings.resolution),
+        enableAudio: _settings.isMicrophoneEnabled,
+        imageFormatGroup: ImageFormatGroup.nv21,
+      );
+      await controller.initialize();
+      _currentCameraDesc = nextDesc;
+      _cameraController = controller;
+      _isCameraInitialized = true;
+      _isSimulationMode = false;
+      _isTorchOn = false;
+      notifyListeners();
+    } catch (e) {
+      _cameraErrorMessage = 'Błąd przełączania kamery: $e';
+      notifyListeners();
+    }
+  }
+
+  Future<void> toggleTorch() async {
+    final controller = _cameraController;
+    if (controller == null || !controller.value.isInitialized) return;
+    try {
+      final nextState = !_isTorchOn;
+      await controller.setFlashMode(nextState ? FlashMode.torch : FlashMode.off);
+      _isTorchOn = nextState;
+      notifyListeners();
+    } catch (_) {}
   }
 
   Future<void> setZoom(double zoom) async {
@@ -295,7 +644,10 @@ class CameraProvider extends ChangeNotifier {
   }
 
   Future<void> setExposureOffset(double offset) async {
-    final clamped = offset.clamp(_settings.minExposureOffset, _settings.maxExposureOffset);
+    final clamped = offset.clamp(
+      _settings.minExposureOffset,
+      _settings.maxExposureOffset,
+    );
     _settings = _settings.copyWith(exposureOffset: clamped);
     if (_cameraController != null && _cameraController!.value.isInitialized) {
       try {
@@ -391,12 +743,16 @@ class CameraProvider extends ChangeNotifier {
   }
 
   void toggleStabilization() {
-    _settings = _settings.copyWith(isStabilizationEnabled: !_settings.isStabilizationEnabled);
+    _settings = _settings.copyWith(
+      isStabilizationEnabled: !_settings.isStabilizationEnabled,
+    );
     notifyListeners();
   }
 
   void toggleMicrophone() {
-    _settings = _settings.copyWith(isMicrophoneEnabled: !_settings.isMicrophoneEnabled);
+    _settings = _settings.copyWith(
+      isMicrophoneEnabled: !_settings.isMicrophoneEnabled,
+    );
     notifyListeners();
   }
 
@@ -445,9 +801,15 @@ class CameraProvider extends ChangeNotifier {
   @override
   void dispose() {
     _audioSimTimer?.cancel();
+    _scoreEventsSub?.cancel();
+    _matchSessionSub?.cancel();
     _recordingStateSub?.cancel();
     _durationSub?.cancel();
     _transportSub?.cancel();
+    if (_isStreamingFrames) {
+      unawaited(_cameraController?.stopImageStream() ?? Future<void>.value());
+    }
+    _programPreviewFrameController.close();
     _cameraController?.dispose();
     _recordingService.dispose();
     _transportService.dispose();

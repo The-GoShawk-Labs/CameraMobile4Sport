@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:volleylive/core/router/app_router.dart';
+import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/main.dart';
 import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/screens/mode_select_screen.dart';
 import 'package:volleylive/presentation/screens/phone_a_camera/phone_a_camera_screen.dart';
 import 'package:volleylive/presentation/screens/phone_b_scorer/phone_b_scorer_screen.dart';
+import 'package:volleylive/domain/models/connection_state.dart';
+import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
 import 'package:volleylive/presentation/screens/pairing/phone_a_join_screen.dart';
 import 'package:volleylive/presentation/screens/pairing/phone_b_match_setup_screen.dart';
 
@@ -21,9 +24,37 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
 
       expect(find.textContaining('TRYB JEDNEGO SMARTFONA'), findsOneWidget);
+      expect(find.text('PROGRAM'), findsOneWidget);
+      expect(find.text('RAW CZYSTA'), findsOneWidget);
+      expect(find.text('DUAL'), findsOneWidget);
       expect(find.text('1. KAMERA'), findsOneWidget);
       expect(find.text('2. SĘDZIA'), findsOneWidget);
       expect(find.textContaining('STAT'), findsWidgets);
+    });
+
+    testWidgets('Tapping Recording Type chips updates CameraProvider recordingType', (WidgetTester tester) async {
+      await tester.pumpWidget(const VolleyLiveApp());
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final BuildContext context = tester.element(find.byType(ModeSelectScreen).first);
+      final camera = Provider.of<CameraProvider>(context, listen: false);
+
+      expect(camera.recordingType, equals(RecordingType.programWithScoreboard));
+
+      // Klikamy RAW CZYSTA
+      await tester.tap(find.text('RAW CZYSTA'));
+      await tester.pump();
+      expect(camera.recordingType, equals(RecordingType.rawCamera));
+
+      // Klikamy DUAL
+      await tester.tap(find.text('DUAL'));
+      await tester.pump();
+      expect(camera.recordingType, equals(RecordingType.dual));
+
+      // Klikamy z powrotem PROGRAM
+      await tester.tap(find.text('PROGRAM'));
+      await tester.pump();
+      expect(camera.recordingType, equals(RecordingType.programWithScoreboard));
     });
 
     testWidgets('Tapping 1. KAMERA opens PhoneACameraScreen and presents safe exit and quick pills', (WidgetTester tester) async {
@@ -167,6 +198,36 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
 
       // Bezpieczne odmontowanie drzewa widgetów (zatrzymuje animacje PulseDot i zwalnia zasoby)
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+    });
+
+    testWidgets('Scorer screen in Single Phone mode displays local camera controls and does not show Phone A connect button', (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(const VolleyLiveApp());
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final BuildContext context = tester.element(find.byType(ModeSelectScreen).first);
+      final p2p = Provider.of<P2PConnectionProvider>(context, listen: false);
+      p2p.selectRole(DeviceRole.singlePhoneAllInOne);
+
+      AppRouter.router.go(AppRouter.scorerRoute);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Weryfikacja że nie ma przycisku 'Phone A POŁĄCZ'
+      expect(find.textContaining('Phone A\nPOŁĄCZ'), findsNothing);
+
+      // Weryfikacja że jest przycisk lokalnej kamery w HUD
+      expect(find.textContaining('KAMERA'), findsWidgets);
+
+      // Weryfikacja że są przyciski punktacji
+      expect(find.textContaining('TAP: +1'), findsWidgets);
+
       await tester.pumpWidget(const SizedBox());
       await tester.pump();
     });

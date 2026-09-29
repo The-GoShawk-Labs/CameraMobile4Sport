@@ -24,7 +24,7 @@ android {
         applicationId = "com.goshawk.volleylive.volleylive"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -42,3 +42,17 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // StreamPack (ThibaultBee) for RTMP streaming and frame manipulation
+    implementation("io.github.thibaultbee:streampack:2.6.1")
+    implementation("io.github.thibaultbee:streampack-extension-rtmp:2.6.1")
+
+    // Kotlin Coroutines & AndroidX Lifecycle
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
+
+    // JSON serialization
+    implementation("com.google.code.gson:gson:2.10.1")
+}
+

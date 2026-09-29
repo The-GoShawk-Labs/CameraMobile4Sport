@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,14 +10,18 @@ import 'package:volleylive/core/services/wakelock_service.dart';
 import 'package:volleylive/core/theme/app_theme.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
 import 'package:volleylive/domain/models/match_session.dart';
+import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/providers/match_provider.dart';
 import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
 import 'package:volleylive/presentation/providers/streamer_provider.dart';
+import 'package:volleylive/presentation/services/program_widget_capture.dart';
 import 'package:volleylive/presentation/screens/settings/camera_connection_modal.dart';
 import 'package:volleylive/presentation/screens/settings/scoreboard_customizer_modal.dart';
+import 'package:volleylive/presentation/screens/settings/storage_folder_picker_modal.dart';
 import 'package:volleylive/presentation/screens/settings/stream_settings_modal.dart';
 import 'package:volleylive/presentation/screens/settings/video_settings_modal.dart';
+import 'package:volleylive/presentation/widgets/recording_summary_dialog.dart';
 import 'package:volleylive/presentation/widgets/recovery_banner.dart';
 import 'package:volleylive/presentation/widgets/scoreboard_overlay.dart';
 import 'package:volleylive/presentation/widgets/tactile_score_pad.dart';
@@ -27,17 +33,391 @@ class PhoneBScorerScreen extends StatefulWidget {
   State<PhoneBScorerScreen> createState() => _PhoneBScorerScreenState();
 }
 
-class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTickerProviderStateMixin {
+class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
+    with SingleTickerProviderStateMixin {
   int _selectedNavIndex = 0;
   AnimationController? _unlockHoldController;
   bool _showLocalCameraPreview = true;
   bool _isControlsHidden = false;
+  late final ProgramWidgetCapture _programCapture = ProgramWidgetCapture(
+    boundaryKey: GlobalKey(),
+    isSourceAvailable: _isProgramVideoSourceAvailable,
+  );
+
+  bool _isProgramVideoSourceAvailable() {
+    if (!mounted) return false;
+    final p2p = context.read<P2PConnectionProvider>();
+    if (p2p.currentRole == DeviceRole.singlePhoneAllInOne) {
+      final camera = context.read<CameraProvider>();
+      return camera.isCameraInitialized && !camera.isSimulationMode;
+    }
+    return p2p.connectionState == CameraConnectionState.connected &&
+        p2p.hasFreshVideoFrame;
+  }
+
+  Future<Uint8List?> _ensureProgramCapture({
+    int framesPerSecond = 10,
+    int targetWidth = 1920,
+    int targetHeight = 1080,
+  }) async {
+    if (_programCapture.isCapturing) {
+      return _programCapture.captureFrame(reuseLastIfBusy: true);
+    }
+    return _programCapture.start(
+      framesPerSecond: framesPerSecond,
+      targetWidth: targetWidth,
+      targetHeight: targetHeight,
+    );
+  }
+
+  Future<void> _onToggleLiveStream(
+    BuildContext context,
+    StreamerProvider streamer,
+    MatchProvider match,
+  ) async {
+    final isLive =
+        streamer.streamingState == StreamingState.live ||
+        streamer.streamingState == StreamingState.connecting;
+    if (isLive) {
+      await streamer.toggleLiveStream(matchSession: match.session);
+      if (streamer.programRecState != RecordingState.recording) {
+        _programCapture.stop();
+      }
+      return;
+    }
+
+    final p2p = context.read<P2PConnectionProvider>();
+    final camera = context.read<CameraProvider>();
+    final hasVideo = p2p.currentRole == DeviceRole.singlePhoneAllInOne
+        ? camera.isCameraInitialized && !camera.isSimulationMode
+        : p2p.hasFreshVideoFrame &&
+              p2p.connectionState == CameraConnectionState.connected;
+    if (!hasVideo) {
+      _showRecordingErrorNotice(
+        context,
+        'Brak aktywnego obrazu z kamery. Połącz lub uruchom kamerę przed rozpoczęciem LIVE.',
+      );
+      return;
+    }
+    final initialFrame = await _ensureProgramCapture(
+      framesPerSecond: camera.settings.fps.fps,
+      targetWidth: camera.settings.resolution.width,
+      targetHeight: camera.settings.resolution.height,
+    );
+    if (initialFrame == null) {
+      if (!context.mounted) return;
+      _showRecordingErrorNotice(
+        context,
+        'Nie można przechwycić widocznej kompozycji programu.',
+      );
+      return;
+    }
+    final started = await streamer.toggleLiveStream(
+      matchSession: match.session,
+      composedFrameStream: _programCapture.frameStream,
+      initialProgramFrame: initialFrame,
+    );
+    if (!started && context.mounted) {
+      _showRecordingErrorNotice(
+        context,
+        'Nie udało się rozpocząć strumieniowania skomponowanego obrazu. Sprawdź ustawienia RTMP i klucz transmisji.',
+      );
+      if (streamer.programRecState != RecordingState.recording) {
+        _programCapture.stop();
+      }
+    }
+  }
 
   String _formatDuration(Duration d) {
     String twoDigits(int n) => n.toString().padLeft(2, '0');
     final minutes = twoDigits(d.inMinutes.remainder(60));
     final seconds = twoDigits(d.inSeconds.remainder(60));
     return '${d.inHours > 0 ? '${twoDigits(d.inHours)}:' : ''}$minutes:$seconds';
+  }
+
+  void _showRecordingSummaryDialog(
+    BuildContext context,
+    MasterRecordingResult result,
+  ) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => RecordingSummaryDialog(
+        initialResult: result,
+        onMoveFolder: (newFolder) async {
+          final p2p = context.read<P2PConnectionProvider>();
+          final isSingleMode =
+              p2p.currentRole == DeviceRole.singlePhoneAllInOne;
+          if (isSingleMode) {
+            return await context.read<CameraProvider>().moveLastRecording(
+              newFolder,
+            );
+          } else {
+            return await context
+                .read<StreamerProvider>()
+                .moveLastProgramRecording(newFolder);
+          }
+        },
+        onRecordNext: () {
+          // Gotowy na następne nagranie
+        },
+      ),
+    );
+  }
+
+  void _showRecordingErrorNotice(BuildContext context, String error) {
+    if (error.toLowerCase().contains('przestrzeni') ||
+        error.toLowerCase().contains('folderu') ||
+        error.toLowerCase().contains('uprawnień')) {
+      _showStorageIssueDialog(context, error);
+      return;
+    }
+
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xFFE53935),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+        content: Row(
+          children: [
+            const Icon(Icons.error_outline, color: Colors.white, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                error,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showStorageIssueDialog(BuildContext context, String error) {
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: const Color(0xFF141A26),
+        title: const Row(
+          children: [
+            Icon(
+              Icons.folder_off_outlined,
+              color: AppTheme.amberAccent,
+              size: 24,
+            ),
+            SizedBox(width: 8),
+            Text(
+              'Wymagany Folder Zapisu',
+              style: TextStyle(color: Colors.white, fontSize: 16),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              error,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Aplikacja spróbuje zapisać plik w bezpiecznym folderze tymczasowym. '
+              'Możesz też wskazać inny folder w pamięci telefonu.',
+              style: TextStyle(
+                color: Colors.white54,
+                fontSize: 11,
+                height: 1.3,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text(
+              'ANULUJ',
+              style: TextStyle(color: Colors.white60),
+            ),
+          ),
+          ElevatedButton.icon(
+            onPressed: () async {
+              Navigator.pop(dialogCtx);
+              await showModalBottomSheet<String>(
+                context: context,
+                backgroundColor: Colors.transparent,
+                isScrollControlled: true,
+                builder: (_) => const StorageFolderPickerModal(),
+              );
+            },
+            icon: const Icon(Icons.folder_open, size: 16),
+            label: const Text('WYBIERZ FOLDER'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.amberAccent,
+              foregroundColor: Colors.black,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handleToggleRecording(BuildContext context) async {
+    final p2p = context.read<P2PConnectionProvider>();
+    final match = context.read<MatchProvider>();
+    final camera = context.read<CameraProvider>();
+    final streamer = context.read<StreamerProvider>();
+
+    final isSingleMode = p2p.currentRole == DeviceRole.singlePhoneAllInOne;
+
+    if (isSingleMode) {
+      // W trybie All-in-One nagrywamy przez CameraProvider (RAW / PROGRAM / DUAL wg wybranego camera.recordingType)
+      final wasRecording = camera.recordingState == RecordingState.recording;
+      if (camera.recordingState == RecordingState.stopping) return;
+
+      final selectedType = wasRecording
+          ? camera.activeRecordingType ?? camera.recordingType
+          : camera.recordingType;
+      final isLandscape =
+          MediaQuery.of(context).orientation == Orientation.landscape;
+      final currentOrientation = isLandscape
+          ? DeviceOrientation.landscapeLeft
+          : DeviceOrientation.portraitUp;
+
+      if (!wasRecording) {
+        final hasLocalCamera =
+            camera.isCameraInitialized &&
+            !camera.isSimulationMode &&
+            _showLocalCameraPreview;
+        if (!hasLocalCamera && !camera.isSimulationMode) {
+          _showRecordingErrorNotice(
+            context,
+            'Uruchom lokalną kamerę przed rozpoczęciem nagrywania.',
+          );
+          return;
+        }
+      }
+
+      await camera.toggleMasterRecording(
+        p2pProvider: p2p,
+        deviceOrientation: currentOrientation,
+        matchSession: match.session,
+        recordingType: selectedType,
+      );
+
+      if (!context.mounted) return;
+
+      if (wasRecording) {
+        if (camera.recordingState == RecordingState.saved &&
+            camera.lastRecordingResult != null) {
+          _showRecordingSummaryDialog(context, camera.lastRecordingResult!);
+        } else if (camera.recordingState == RecordingState.failed) {
+          _showRecordingErrorNotice(
+            context,
+            camera.recordingErrorMessage ??
+                'Nie udało się zapisać pliku wideo.',
+          );
+        }
+      } else {
+        if (camera.recordingState == RecordingState.failed) {
+          _showRecordingErrorNotice(
+            context,
+            camera.recordingErrorMessage ??
+                'Nie udało się rozpocząć nagrywania.',
+          );
+        }
+      }
+    } else {
+      // W trybie Phone B (sędzia / komentator z tablicą wyników)
+      final wasRecording = streamer.programRecState == RecordingState.recording;
+      if (streamer.programRecState == RecordingState.stopping) return;
+
+      final isConnected =
+          p2p.connectionState == CameraConnectionState.connected;
+      final hasFrames = p2p.hasFreshVideoFrame;
+
+      // Blokuj start nagrywania jeśli brak obrazu z Phone A
+      if (!wasRecording && (!isConnected || !hasFrames)) {
+        _showRecordingErrorNotice(
+          context,
+          'Brak aktywnego połączenia z kamerą Phone A lub brak odebranego obrazu wideo. Połącz urządzenia przed rozpoczęciem nagrywania.',
+        );
+        return;
+      }
+
+      final isLandscape =
+          MediaQuery.of(context).orientation == Orientation.landscape;
+      final targetWidth = isLandscape
+          ? camera.settings.resolution.width
+          : camera.settings.resolution.height;
+      final targetHeight = isLandscape
+          ? camera.settings.resolution.height
+          : camera.settings.resolution.width;
+
+      Uint8List? initialProgramFrame;
+      if (!wasRecording) {
+        initialProgramFrame = await _ensureProgramCapture(
+          framesPerSecond: camera.settings.fps.fps,
+          targetWidth: targetWidth,
+          targetHeight: targetHeight,
+        );
+      }
+      await streamer.toggleProgramRecording(
+        matchSession: match.session,
+        frameStream: _programCapture.frameStream,
+        initialFrame: initialProgramFrame,
+        isConnected: isConnected,
+        framesContainProgramComposition: true,
+        encodingBitrateMbps: camera.settings.bitrateMbps,
+        encodingFps: camera.settings.fps.fps,
+        encodingWidth: targetWidth,
+        encodingHeight: targetHeight,
+      );
+      if (wasRecording && streamer.streamingState != StreamingState.live) {
+        _programCapture.stop();
+      }
+      if (!wasRecording &&
+          streamer.programRecState == RecordingState.failed &&
+          streamer.streamingState != StreamingState.live) {
+        _programCapture.stop();
+      }
+
+      if (!context.mounted) return;
+
+      if (wasRecording) {
+        if (streamer.programRecState == RecordingState.saved &&
+            streamer.lastProgramRecordingResult != null) {
+          _showRecordingSummaryDialog(
+            context,
+            streamer.lastProgramRecordingResult!,
+          );
+        } else if (streamer.programRecState == RecordingState.failed) {
+          _showRecordingErrorNotice(
+            context,
+            streamer.programRecordingErrorMessage ??
+                'Nie udało się zapisać wideo z tablicą.',
+          );
+        }
+      } else {
+        if (streamer.programRecState == RecordingState.failed) {
+          _showRecordingErrorNotice(
+            context,
+            streamer.programRecordingErrorMessage ??
+                'Nie udało się rozpocząć nagrywania z tablicą.',
+          );
+        }
+      }
+    }
   }
 
   @override
@@ -51,6 +431,20 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final p2p = context.read<P2PConnectionProvider>();
       final camera = context.read<CameraProvider>();
+      final match = context.read<MatchProvider>();
+      final streamer = context.read<StreamerProvider>();
+
+      camera.attachMatchProvider(
+        match.scoreEventsStream,
+        currentSession: match.session,
+        sessionStream: match.sessionStream,
+      );
+      streamer.attachMatchProvider(
+        match.scoreEventsStream,
+        currentSession: match.session,
+        sessionStream: match.sessionStream,
+      );
+
       if (p2p.currentRole == DeviceRole.singlePhoneAllInOne &&
           !camera.isCameraInitialized &&
           !camera.isSimulationMode) {
@@ -63,6 +457,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
   void dispose() {
     WakelockService.disable();
     _unlockHoldController?.dispose();
+    unawaited(_programCapture.dispose());
     super.dispose();
   }
 
@@ -73,13 +468,16 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
     final camera = context.watch<CameraProvider>();
     final p2p = context.watch<P2PConnectionProvider>();
     final isOutdoor = match.isOutdoorModeEnabled;
-    final isPortrait = MediaQuery.of(context).orientation == Orientation.portrait;
+    final isPortrait =
+        MediaQuery.of(context).orientation == Orientation.portrait;
 
     // Phone B: blokada wygaszania ekranu podczas trwania meczu i nagrywania/streamingu
-    final isStreamingOrRecording = camera.isRecording ||
+    final isStreamingOrRecording =
+        camera.isRecording ||
         streamer.programRecState == RecordingState.recording ||
         streamer.streamingState == StreamingState.live;
-    final shouldKeepAwake = !match.session.isMatchOver || isStreamingOrRecording;
+    final shouldKeepAwake =
+        !match.session.isMatchOver || isStreamingOrRecording;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         WakelockService.setEnabled(shouldKeepAwake);
@@ -109,7 +507,14 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                 Column(
                   children: [
                     // 1. GÓRNY PASEK STATUSU HUD (MENU, LIVE/REC, STATUS PHONE A)
-                    _buildTopBroadcastHUD(context, streamer, match, camera, p2p, true),
+                    _buildTopBroadcastHUD(
+                      context,
+                      streamer,
+                      match,
+                      camera,
+                      p2p,
+                      true,
+                    ),
 
                     // 2. AWARYJNY BANER PRZYWRACANIA POŁĄCZENIA
                     if (p2p.currentRole != DeviceRole.singlePhoneAllInOne &&
@@ -118,7 +523,9 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                         connectionState: p2p.connectionState,
                         onManualReconnect: () async {
                           await p2p.joinSession(
-                            hostAddress: p2p.hostAddress.isNotEmpty ? p2p.hostAddress : '192.168.68.51',
+                            hostAddress: p2p.hostAddress.isNotEmpty
+                                ? p2p.hostAddress
+                                : '192.168.68.51',
                             pairingCode: 'VL-8492',
                             role: DeviceRole.scorerPhoneB,
                           );
@@ -142,17 +549,23 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                         fit: StackFit.expand,
                         children: [
                           AnimatedSlide(
-                            offset: _isControlsHidden ? const Offset(0, 1.05) : Offset.zero,
+                            offset: _isControlsHidden
+                                ? const Offset(0, 1.05)
+                                : Offset.zero,
                             duration: const Duration(milliseconds: 250),
                             curve: Curves.easeInOutCubic,
                             child: Align(
-                              alignment: Alignment.bottomCenter,
+                              alignment: Alignment.topCenter,
                               child: SingleChildScrollView(
                                 physics: const ClampingScrollPhysics(),
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    _buildTactileScorePadWidget(context, match, isOutdoor),
+                                    _buildTactileScorePadWidget(
+                                      context,
+                                      match,
+                                      isOutdoor,
+                                    ),
                                     _buildBottomModernNavBar(context, streamer),
                                   ],
                                 ),
@@ -198,12 +611,20 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                       top: 0,
                       left: 0,
                       right: 0,
-                      child: _buildTopBroadcastHUD(context, streamer, match, camera, p2p, false),
+                      child: _buildTopBroadcastHUD(
+                        context,
+                        streamer,
+                        match,
+                        camera,
+                        p2p,
+                        false,
+                      ),
                     ),
 
                     // 3. AWARYJNY BANER W POZIOMIE (TYLKO PODCZAS AKTYWNEGO WZNAWIANIA, PONIŻEJ TABLICY)
                     if (p2p.currentRole != DeviceRole.singlePhoneAllInOne &&
-                        p2p.connectionState == CameraConnectionState.reconnecting)
+                        p2p.connectionState ==
+                            CameraConnectionState.reconnecting)
                       Positioned(
                         top: 108,
                         left: 40,
@@ -213,7 +634,9 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                             connectionState: p2p.connectionState,
                             onManualReconnect: () async {
                               await p2p.joinSession(
-                                hostAddress: p2p.hostAddress.isNotEmpty ? p2p.hostAddress : '192.168.68.51',
+                                hostAddress: p2p.hostAddress.isNotEmpty
+                                    ? p2p.hostAddress
+                                    : '192.168.68.51',
                                 pairingCode: 'VL-8492',
                                 role: DeviceRole.scorerPhoneB,
                               );
@@ -239,14 +662,12 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
               // =============================================================
               // EKRAN ZWYCIĘSTWA W MECZU
               // =============================================================
-              if (match.session.isMatchOver)
-                _buildVictoryOverlay(match),
+              if (match.session.isMatchOver) _buildVictoryOverlay(match),
 
               // =============================================================
               // OVERLAY BLOKADY DOTYKU SĘDZIEGO (GHOST TOUCH LOCK)
               // =============================================================
-              if (match.isScreenLocked)
-                _buildScreenLockOverlay(match),
+              if (match.isScreenLocked) _buildScreenLockOverlay(match),
             ],
           ),
         ),
@@ -263,8 +684,29 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
     bool isPortrait,
   ) {
     final isLive = streamer.streamingState == StreamingState.live;
-    final isRec = streamer.programRecState == RecordingState.recording;
     final isOutdoor = match.isOutdoorModeEnabled;
+    final isSingleMode = p2p.currentRole == DeviceRole.singlePhoneAllInOne;
+
+    final isRecActive = isSingleMode
+        ? camera.isRecording
+        : streamer.programRecState == RecordingState.recording;
+    final isRecStopping = isSingleMode
+        ? camera.recordingState == RecordingState.stopping
+        : streamer.programRecState == RecordingState.stopping;
+    final recDuration = isSingleMode
+        ? camera.masterRecDuration
+        : streamer.programRecDuration;
+
+    String recLabel;
+    if (isRecStopping) {
+      recLabel = 'ZAPIS...';
+    } else if (isRecActive) {
+      recLabel = 'REC ${_formatDuration(recDuration)}';
+    } else {
+      recLabel = isSingleMode
+          ? 'START REC (${camera.recordingType.shortLabel})'
+          : 'START REC';
+    }
 
     if (isPortrait) {
       return Container(
@@ -273,7 +715,11 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
           color: isOutdoor ? Colors.black : const Color(0xF20A0E17),
           border: const Border(bottom: BorderSide(color: Colors.white12)),
           boxShadow: const [
-            BoxShadow(color: Colors.black54, blurRadius: 8, offset: Offset(0, 2)),
+            BoxShadow(
+              color: Colors.black54,
+              blurRadius: 8,
+              offset: Offset(0, 2),
+            ),
           ],
         ),
         child: Column(
@@ -293,7 +739,10 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                   },
                   borderRadius: BorderRadius.circular(8),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white12,
                       borderRadius: BorderRadius.circular(8),
@@ -302,7 +751,11 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                     child: const Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 12),
+                        Icon(
+                          Icons.arrow_back_ios_new,
+                          color: Colors.white,
+                          size: 12,
+                        ),
                         SizedBox(width: 5),
                         Text(
                           'MENU',
@@ -330,21 +783,32 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                   },
                   borderRadius: BorderRadius.circular(8),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
-                      color: _isControlsHidden ? AppTheme.amberAccent : Colors.white12,
+                      color: _isControlsHidden
+                          ? AppTheme.amberAccent
+                          : Colors.white12,
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                        color: _isControlsHidden ? AppTheme.amberAccent : Colors.white24,
+                        color: _isControlsHidden
+                            ? AppTheme.amberAccent
+                            : Colors.white24,
                       ),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
-                          _isControlsHidden ? Icons.sports_volleyball : Icons.visibility_outlined,
+                          _isControlsHidden
+                              ? Icons.sports_volleyball
+                              : Icons.visibility_outlined,
                           size: 14,
-                          color: _isControlsHidden ? Colors.black : Colors.white,
+                          color: _isControlsHidden
+                              ? Colors.black
+                              : Colors.white,
                         ),
                         const SizedBox(width: 4),
                         Text(
@@ -352,7 +816,9 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w900,
-                            color: _isControlsHidden ? Colors.black : Colors.white,
+                            color: _isControlsHidden
+                                ? Colors.black
+                                : Colors.white,
                             letterSpacing: 0.3,
                           ),
                         ),
@@ -366,8 +832,15 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                 // PRZYCISK PARAMETRY WIDEO
                 IconButton(
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 26, minHeight: 28),
-                  icon: const Icon(Icons.tune, size: 16, color: AppTheme.cyanAccent),
+                  constraints: const BoxConstraints(
+                    minWidth: 26,
+                    minHeight: 28,
+                  ),
+                  icon: const Icon(
+                    Icons.tune,
+                    size: 16,
+                    color: AppTheme.cyanAccent,
+                  ),
                   tooltip: 'Parametry Zapisu Wideo i Kodera',
                   onPressed: () => _openVideoSettings(context),
                 ),
@@ -375,7 +848,10 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                 // TOGGLE OUTDOOR HIGH CONTRAST
                 IconButton(
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 26, minHeight: 28),
+                  constraints: const BoxConstraints(
+                    minWidth: 26,
+                    minHeight: 28,
+                  ),
                   icon: Icon(
                     isOutdoor ? Icons.wb_sunny : Icons.wb_sunny_outlined,
                     size: 16,
@@ -391,7 +867,10 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                 // TOGGLE SCREEN LOCK (GHOST TOUCH PREVENTION)
                 IconButton(
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 26, minHeight: 28),
+                  constraints: const BoxConstraints(
+                    minWidth: 26,
+                    minHeight: 28,
+                  ),
                   icon: const Icon(
                     Icons.lock_outline,
                     size: 16,
@@ -405,199 +884,308 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                 ),
 
                 const SizedBox(width: 4),
-                const Icon(Icons.battery_5_bar, size: 13, color: AppTheme.greenLive),
+                const Icon(
+                  Icons.battery_5_bar,
+                  size: 13,
+                  color: AppTheme.greenLive,
+                ),
                 const SizedBox(width: 2),
                 const Text(
                   '88%',
-                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white70),
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white70,
+                  ),
                 ),
               ],
             ),
 
             const SizedBox(height: 6),
 
-            // RZĄD 2: DUŻE PRZYCISKI START LIVE, START REC, TELEMETRIA PHONE A I REC W TLE
-            Row(
-              children: [
-                // PRZYCISK START / STOP LIVE BROADCAST
-                Expanded(
-                  child: InkWell(
-                    onTap: () {
-                      HapticFeedback.heavyImpact();
-                      streamer.toggleLiveStream();
-                    },
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      height: 38,
-                      decoration: BoxDecoration(
-                        color: isLive ? AppTheme.redLive.withValues(alpha: 0.25) : Colors.white10,
+            // RZĄD 2: DUŻE PRZYCISKI START LIVE, START REC, TELEMETRIA PHONE A I REC W TLE (ZABEZPIECZONE PRZED OVERFLOW)
+            LayoutBuilder(
+              builder: (context, constraints) => SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      // PRZYCISK START / STOP LIVE BROADCAST
+                      InkWell(
+                        onTap: () async {
+                          HapticFeedback.heavyImpact();
+                          await _onToggleLiveStream(
+                            context,
+                            streamer,
+                            context.read<MatchProvider>(),
+                          );
+                        },
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: isLive ? AppTheme.redLive : Colors.white24,
-                          width: isLive ? 1.5 : 1,
+                        child: Container(
+                          height: 38,
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          decoration: BoxDecoration(
+                            color: isLive
+                                ? AppTheme.redLive.withValues(alpha: 0.25)
+                                : Colors.white10,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: isLive ? AppTheme.redLive : Colors.white24,
+                              width: isLive ? 1.5 : 1,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Container(
+                                width: 9,
+                                height: 9,
+                                decoration: BoxDecoration(
+                                  color: isLive
+                                      ? AppTheme.redLive
+                                      : const Color(0xFF757575),
+                                  shape: BoxShape.circle,
+                                  boxShadow: [
+                                    if (isLive)
+                                      const BoxShadow(
+                                        color: AppTheme.redLive,
+                                        blurRadius: 6,
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                isLive ? 'LIVE' : 'START LIVE',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w900,
+                                  color: isLive
+                                      ? AppTheme.redLive
+                                      : Colors.white,
+                                  letterSpacing: 0.4,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            width: 9,
-                            height: 9,
+
+                      const SizedBox(width: 8),
+
+                      // PRZYCISK START / STOP REC
+                      InkWell(
+                        onTap: isRecStopping
+                            ? null
+                            : () {
+                                HapticFeedback.mediumImpact();
+                                _handleToggleRecording(context);
+                              },
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          height: 38,
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          decoration: BoxDecoration(
+                            color: isRecActive
+                                ? AppTheme.redLive.withValues(alpha: 0.25)
+                                : (isRecStopping
+                                      ? Colors.amber.withValues(alpha: 0.2)
+                                      : Colors.white10),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: isRecActive
+                                  ? AppTheme.redLive
+                                  : (isRecStopping
+                                        ? AppTheme.amberAccent
+                                        : Colors.white24),
+                              width: isRecActive ? 1.5 : 1,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: isRecActive
+                                      ? AppTheme.redLive
+                                      : (isRecStopping
+                                            ? AppTheme.amberAccent
+                                            : Colors.white38),
+                                  shape: BoxShape.circle,
+                                  boxShadow: [
+                                    if (isRecActive)
+                                      const BoxShadow(
+                                        color: AppTheme.redLive,
+                                        blurRadius: 4,
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                recLabel,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
+                                  color: isRecActive
+                                      ? AppTheme.redLive
+                                      : (isRecStopping
+                                            ? AppTheme.amberAccent
+                                            : Colors.white),
+                                  letterSpacing: 0.3,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(width: 8),
+
+                      // WEBRTC CAMERA LINK TELEMETRY (PHONE A) LUB LOKALNA KAMERA W SINGLE MODE
+                      if (!isSingleMode)
+                        InkWell(
+                          onTap: () => _openCameraConnectionModal(context),
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            height: 38,
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
                             decoration: BoxDecoration(
-                              color: isLive ? AppTheme.redLive : const Color(0xFF757575),
-                              shape: BoxShape.circle,
-                              boxShadow: [
-                                if (isLive)
-                                  const BoxShadow(color: AppTheme.redLive, blurRadius: 6),
+                              color:
+                                  p2p.connectionState ==
+                                      CameraConnectionState.connected
+                                  ? AppTheme.cyanAccent.withValues(alpha: 0.15)
+                                  : AppTheme.amberAccent.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color:
+                                    p2p.connectionState ==
+                                        CameraConnectionState.connected
+                                    ? AppTheme.cyanAccent.withValues(alpha: 0.4)
+                                    : AppTheme.amberAccent.withValues(alpha: 0.4),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.videocam,
+                                  color:
+                                      p2p.connectionState ==
+                                          CameraConnectionState.connected
+                                      ? AppTheme.cyanAccent
+                                      : AppTheme.amberAccent,
+                                  size: 16,
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  p2p.connectionState ==
+                                          CameraConnectionState.connected
+                                      ? 'Phone A\n${p2p.healthMetrics.latencyMs}ms'
+                                      : 'Phone A\nPOŁĄCZ',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color:
+                                        p2p.connectionState ==
+                                            CameraConnectionState.connected
+                                        ? AppTheme.cyanAccent
+                                        : AppTheme.amberAccent,
+                                    height: 1.1,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
-                          const SizedBox(width: 6),
-                          Text(
-                            isLive ? 'LIVE' : 'START LIVE',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w900,
-                              color: isLive ? AppTheme.redLive : Colors.white,
-                              letterSpacing: 0.4,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(width: 8),
-
-                // PRZYCISK START / STOP REC
-                Expanded(
-                  child: InkWell(
-                    onTap: () {
-                      HapticFeedback.mediumImpact();
-                      streamer.toggleProgramRecording();
-                    },
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      height: 38,
-                      decoration: BoxDecoration(
-                        color: isRec ? AppTheme.redLive.withValues(alpha: 0.25) : Colors.white10,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: isRec ? AppTheme.redLive : Colors.white24,
-                          width: isRec ? 1.5 : 1,
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
+                        )
+                      else
+                        // W TRYBIE SINGLE PHONE: SKRÓT DO PARAMETRÓW KAMERY LOKALNEJ
+                        InkWell(
+                          onTap: () => _openVideoSettings(context),
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            height: 38,
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
                             decoration: BoxDecoration(
-                              color: isRec ? AppTheme.redLive : Colors.white38,
-                              shape: BoxShape.circle,
+                              color: AppTheme.cyanAccent.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: AppTheme.cyanAccent.withValues(alpha: 0.4),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.camera_alt,
+                                  color: AppTheme.cyanAccent,
+                                  size: 16,
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  'KAMERA\n${camera.settings.resolution.label}',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppTheme.cyanAccent,
+                                    height: 1.1,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          const SizedBox(width: 6),
-                          Text(
-                            isRec ? 'REC' : 'START REC',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w900,
-                              color: isRec ? AppTheme.redLive : Colors.white,
-                              letterSpacing: 0.4,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(width: 8),
-
-                // WEBRTC CAMERA LINK TELEMETRY (PHONE A)
-                InkWell(
-                  onTap: () => _openCameraConnectionModal(context),
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    height: 38,
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    decoration: BoxDecoration(
-                      color: p2p.connectionState == CameraConnectionState.connected
-                          ? AppTheme.cyanAccent.withValues(alpha: 0.15)
-                          : AppTheme.amberAccent.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: p2p.connectionState == CameraConnectionState.connected
-                            ? AppTheme.cyanAccent.withValues(alpha: 0.4)
-                            : AppTheme.amberAccent.withValues(alpha: 0.4),
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.videocam,
-                          color: p2p.connectionState == CameraConnectionState.connected
-                              ? AppTheme.cyanAccent
-                              : AppTheme.amberAccent,
-                          size: 16,
                         ),
-                        const SizedBox(width: 5),
-                        Text(
-                          p2p.connectionState == CameraConnectionState.connected
-                              ? 'Phone A\n${p2p.healthMetrics.latencyMs}ms'
-                              : 'Phone A\nPOŁĄCZ',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: p2p.connectionState == CameraConnectionState.connected
-                                ? AppTheme.cyanAccent
-                                : AppTheme.amberAccent,
-                            height: 1.1,
+
+                      // WSKAŹNIK PRACY LOKALNEJ KAMERY W TLE (JEŚLI NAGRYWA NA PHONE B)
+                      if (camera.isRecording && !isSingleMode) ...[
+                        const SizedBox(width: 6),
+                        InkWell(
+                          onTap: () => context.push(AppRouter.cameraRoute),
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            height: 38,
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            decoration: BoxDecoration(
+                              color: AppTheme.redLive.withValues(alpha: 0.25),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: AppTheme.redLive),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.fiber_manual_record,
+                                  color: AppTheme.redLive,
+                                  size: 10,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _formatDuration(camera.masterRecDuration),
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w900,
+                                    color: AppTheme.redLive,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ],
-                    ),
+                    ],
                   ),
                 ),
-
-                // WSKAŹNIK PRACY LOKALNEJ KAMERY W TLE (JEŚLI NAGRYWA)
-                if (camera.isRecording) ...[
-                  const SizedBox(width: 6),
-                  InkWell(
-                    onTap: () => context.push(AppRouter.cameraRoute),
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      height: 38,
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      decoration: BoxDecoration(
-                        color: AppTheme.redLive.withValues(alpha: 0.25),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: AppTheme.redLive),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.fiber_manual_record, color: AppTheme.redLive, size: 10),
-                          const SizedBox(width: 4),
-                          Text(
-                            _formatDuration(camera.masterRecDuration),
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w900,
-                              color: AppTheme.redLive,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ],
+              ),
             ),
           ],
         ),
@@ -619,296 +1207,444 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-          // LEWA SEKCJA
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // PRZYCISK WYJŚCIA DO MENU GŁÓWNEGO
-              InkWell(
-                onTap: () {
-                  if (context.canPop()) {
-                    context.pop();
-                  } else {
-                    context.go(AppRouter.initialRoute);
-                  }
-                },
-                borderRadius: BorderRadius.circular(6),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: Colors.white12,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: Colors.white24),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 11),
-                      SizedBox(width: 4),
-                      Text(
-                        'MENU',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(width: 8),
-
-              // WSKAŹNIK PRACY LOKALNEJ KAMERY W TLE
-              if (camera.isRecording) ...[
-                InkWell(
-                  onTap: () => context.push(AppRouter.cameraRoute),
-                  borderRadius: BorderRadius.circular(6),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: AppTheme.redLive.withValues(alpha: 0.25),
+                // LEWA SEKCJA
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // PRZYCISK WYJŚCIA DO MENU GŁÓWNEGO
+                    InkWell(
+                      onTap: () {
+                        if (context.canPop()) {
+                          context.pop();
+                        } else {
+                          context.go(AppRouter.initialRoute);
+                        }
+                      },
                       borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: AppTheme.redLive),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.fiber_manual_record, color: AppTheme.redLive, size: 9),
-                        const SizedBox(width: 4),
-                        Text(
-                          'REC W TLE: ${_formatDuration(camera.masterRecDuration)}',
-                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: AppTheme.redLive),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
                         ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-              ],
-
-              // PRZYCISK START / STOP LIVE BROADCAST
-              InkWell(
-                onTap: () {
-                  HapticFeedback.heavyImpact();
-                  streamer.toggleLiveStream();
-                },
-                borderRadius: BorderRadius.circular(6),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: isLive ? AppTheme.redLive.withValues(alpha: 0.2) : Colors.white10,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: isLive ? AppTheme.redLive : Colors.white24),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
                         decoration: BoxDecoration(
-                          color: isLive ? AppTheme.redLive : const Color(0xFF616161),
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            if (isLive)
-                              const BoxShadow(color: AppTheme.redLive, blurRadius: 6),
+                          color: Colors.white12,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.arrow_back_ios_new,
+                              color: Colors.white,
+                              size: 11,
+                            ),
+                            SizedBox(width: 4),
+                            Text(
+                              'MENU',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
                           ],
                         ),
                       ),
-                      const SizedBox(width: 5),
-                      Text(
-                        isLive ? 'LIVE' : 'START LIVE',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w900,
-                          color: isLive ? AppTheme.redLive : Colors.white70,
-                          letterSpacing: 0.3,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(width: 8),
-
-              // PRZYCISK START / STOP REC
-              InkWell(
-                onTap: () {
-                  HapticFeedback.mediumImpact();
-                  streamer.toggleProgramRecording();
-                },
-                borderRadius: BorderRadius.circular(6),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: isRec ? AppTheme.redLive.withValues(alpha: 0.2) : Colors.white10,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: isRec ? AppTheme.redLive : Colors.white24),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 7,
-                        height: 7,
-                        decoration: BoxDecoration(
-                          color: isRec ? AppTheme.redLive : Colors.white38,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 5),
-                      Text(
-                        isRec ? 'REC' : 'START REC',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w900,
-                          color: isRec ? AppTheme.redLive : Colors.white70,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(width: 8),
-              const Text('|', style: TextStyle(color: Colors.white24, fontSize: 12)),
-              const SizedBox(width: 8),
-
-              // WEBRTC CAMERA LINK TELEMETRY
-              InkWell(
-                onTap: () => _openCameraConnectionModal(context),
-                borderRadius: BorderRadius.circular(6),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.videocam,
-                        color: p2p.connectionState == CameraConnectionState.connected
-                            ? AppTheme.cyanAccent
-                            : AppTheme.amberAccent,
-                        size: 15,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        p2p.connectionState == CameraConnectionState.connected
-                            ? 'Phone A (${p2p.healthMetrics.latencyMs}ms)'
-                            : 'Phone A (POŁĄCZ)',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: p2p.connectionState == CameraConnectionState.connected
-                              ? AppTheme.cyanAccent
-                              : AppTheme.amberAccent,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          // PRAWA SEKCJA
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // PRZYCISK SZYBKIEGO UKRYWANIA / POKAZYWANIA STEROWANIA
-              InkWell(
-                onTap: () {
-                  HapticFeedback.selectionClick();
-                  setState(() {
-                    _isControlsHidden = !_isControlsHidden;
-                  });
-                },
-                borderRadius: BorderRadius.circular(6),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _isControlsHidden ? AppTheme.amberAccent : Colors.white12,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: _isControlsHidden ? AppTheme.amberAccent : Colors.white24,
                     ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        _isControlsHidden ? Icons.sports_volleyball : Icons.visibility_outlined,
-                        size: 13,
-                        color: _isControlsHidden ? Colors.black : Colors.white,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        _isControlsHidden ? 'KOKPIT' : 'WIDOK STRUMIENIA',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w900,
-                          color: _isControlsHidden ? Colors.black : Colors.white,
-                          letterSpacing: 0.3,
+
+                    const SizedBox(width: 8),
+
+                    // WSKAŹNIK PRACY LOKALNEJ KAMERY W TLE
+                    if (camera.isRecording) ...[
+                      InkWell(
+                        onTap: () => context.push(AppRouter.cameraRoute),
+                        borderRadius: BorderRadius.circular(6),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.redLive.withValues(alpha: 0.25),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: AppTheme.redLive),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.fiber_manual_record,
+                                color: AppTheme.redLive,
+                                size: 9,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'REC W TLE: ${_formatDuration(camera.masterRecDuration)}',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w900,
+                                  color: AppTheme.redLive,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
+                      const SizedBox(width: 8),
                     ],
-                  ),
+
+                    // PRZYCISK START / STOP LIVE BROADCAST
+                    InkWell(
+                      onTap: () async {
+                        HapticFeedback.heavyImpact();
+                        await _onToggleLiveStream(
+                          context,
+                          streamer,
+                          context.read<MatchProvider>(),
+                        );
+                      },
+                      borderRadius: BorderRadius.circular(6),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isLive
+                              ? AppTheme.redLive.withValues(alpha: 0.2)
+                              : Colors.white10,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: isLive ? AppTheme.redLive : Colors.white24,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: isLive
+                                    ? AppTheme.redLive
+                                    : const Color(0xFF616161),
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  if (isLive)
+                                    const BoxShadow(
+                                      color: AppTheme.redLive,
+                                      blurRadius: 6,
+                                    ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              isLive ? 'LIVE' : 'START LIVE',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w900,
+                                color: isLive
+                                    ? AppTheme.redLive
+                                    : Colors.white70,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(width: 8),
+
+                    // PRZYCISK START / STOP REC
+                    InkWell(
+                      onTap: isRecStopping
+                          ? null
+                          : () {
+                              HapticFeedback.mediumImpact();
+                              _handleToggleRecording(context);
+                            },
+                      borderRadius: BorderRadius.circular(6),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isRecActive
+                              ? AppTheme.redLive.withValues(alpha: 0.25)
+                              : (isRecStopping
+                                    ? Colors.amber.withValues(alpha: 0.2)
+                                    : Colors.white10),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: isRecActive
+                                ? AppTheme.redLive
+                                : (isRecStopping
+                                      ? AppTheme.amberAccent
+                                      : Colors.white24),
+                            width: isRecActive ? 1.5 : 1,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 7,
+                              height: 7,
+                              decoration: BoxDecoration(
+                                color: isRecActive
+                                    ? AppTheme.redLive
+                                    : (isRecStopping
+                                          ? AppTheme.amberAccent
+                                          : Colors.white38),
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  if (isRecActive)
+                                    const BoxShadow(
+                                      color: AppTheme.redLive,
+                                      blurRadius: 4,
+                                    ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              recLabel,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w900,
+                                color: isRecActive
+                                    ? AppTheme.redLive
+                                    : (isRecStopping
+                                          ? AppTheme.amberAccent
+                                          : Colors.white70),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(width: 8),
+                    const Text(
+                      '|',
+                      style: TextStyle(color: Colors.white24, fontSize: 12),
+                    ),
+                    const SizedBox(width: 8),
+
+                    // WEBRTC CAMERA LINK TELEMETRY LUB LOKALNA KAMERA
+                    if (p2p.currentRole != DeviceRole.singlePhoneAllInOne)
+                      InkWell(
+                        onTap: () => _openCameraConnectionModal(context),
+                        borderRadius: BorderRadius.circular(6),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 2,
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.videocam,
+                                color:
+                                    p2p.connectionState ==
+                                        CameraConnectionState.connected
+                                    ? AppTheme.cyanAccent
+                                    : AppTheme.amberAccent,
+                                size: 15,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                p2p.connectionState ==
+                                        CameraConnectionState.connected
+                                    ? 'Phone A (${p2p.healthMetrics.latencyMs}ms)'
+                                    : 'Phone A (POŁĄCZ)',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color:
+                                      p2p.connectionState ==
+                                          CameraConnectionState.connected
+                                      ? AppTheme.cyanAccent
+                                      : AppTheme.amberAccent,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    else
+                      InkWell(
+                        onTap: () => _openVideoSettings(context),
+                        borderRadius: BorderRadius.circular(6),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 2,
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.camera_alt,
+                                color: AppTheme.cyanAccent,
+                                size: 14,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'LOKALNA (${camera.settings.resolution.label})',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.cyanAccent,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
-              ),
 
-              const SizedBox(width: 6),
+                // PRAWA SEKCJA
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // PRZYCISK SZYBKIEGO UKRYWANIA / POKAZYWANIA STEROWANIA
+                    InkWell(
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        setState(() {
+                          _isControlsHidden = !_isControlsHidden;
+                        });
+                      },
+                      borderRadius: BorderRadius.circular(6),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _isControlsHidden
+                              ? AppTheme.amberAccent
+                              : Colors.white12,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: _isControlsHidden
+                                ? AppTheme.amberAccent
+                                : Colors.white24,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _isControlsHidden
+                                  ? Icons.sports_volleyball
+                                  : Icons.visibility_outlined,
+                              size: 13,
+                              color: _isControlsHidden
+                                  ? Colors.black
+                                  : Colors.white,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              _isControlsHidden ? 'KOKPIT' : 'WIDOK STRUMIENIA',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w900,
+                                color: _isControlsHidden
+                                    ? Colors.black
+                                    : Colors.white,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
 
-              // PRZYCISK PARAMETRY WIDEO
-              IconButton(
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                icon: const Icon(Icons.tune, size: 16, color: AppTheme.cyanAccent),
-                tooltip: 'Parametry Zapisu Wideo i Kodera',
-                onPressed: () => _openVideoSettings(context),
-              ),
+                    const SizedBox(width: 6),
 
-              // TOGGLE OUTDOOR HIGH CONTRAST
-              IconButton(
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                icon: Icon(
-                  isOutdoor ? Icons.wb_sunny : Icons.wb_sunny_outlined,
-                  size: 16,
-                  color: isOutdoor ? AppTheme.amberAccent : Colors.white54,
+                    // PRZYCISK PARAMETRY WIDEO
+                    IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 28,
+                        minHeight: 28,
+                      ),
+                      icon: const Icon(
+                        Icons.tune,
+                        size: 16,
+                        color: AppTheme.cyanAccent,
+                      ),
+                      tooltip: 'Parametry Zapisu Wideo i Kodera',
+                      onPressed: () => _openVideoSettings(context),
+                    ),
+
+                    // TOGGLE OUTDOOR HIGH CONTRAST
+                    IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 28,
+                        minHeight: 28,
+                      ),
+                      icon: Icon(
+                        isOutdoor ? Icons.wb_sunny : Icons.wb_sunny_outlined,
+                        size: 16,
+                        color: isOutdoor
+                            ? AppTheme.amberAccent
+                            : Colors.white54,
+                      ),
+                      tooltip: 'Tryb Pełne Słońce (High Contrast)',
+                      onPressed: () {
+                        HapticFeedback.selectionClick();
+                        match.toggleOutdoorMode();
+                      },
+                    ),
+
+                    // TOGGLE SCREEN LOCK (GHOST TOUCH PREVENTION)
+                    IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 28,
+                        minHeight: 28,
+                      ),
+                      icon: const Icon(
+                        Icons.lock_outline,
+                        size: 16,
+                        color: Colors.white70,
+                      ),
+                      tooltip: 'Zablokuj Ekran Sędziego',
+                      onPressed: () {
+                        HapticFeedback.mediumImpact();
+                        match.toggleScreenLock();
+                      },
+                    ),
+
+                    const SizedBox(width: 2),
+                    const Icon(
+                      Icons.battery_5_bar,
+                      size: 14,
+                      color: AppTheme.greenLive,
+                    ),
+                    const SizedBox(width: 2),
+                    const Text(
+                      '88%',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ],
                 ),
-                tooltip: 'Tryb Pełne Słońce (High Contrast)',
-                onPressed: () {
-                  HapticFeedback.selectionClick();
-                  match.toggleOutdoorMode();
-                },
-              ),
-
-              // TOGGLE SCREEN LOCK (GHOST TOUCH PREVENTION)
-              IconButton(
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                icon: const Icon(
-                  Icons.lock_outline,
-                  size: 16,
-                  color: Colors.white70,
-                ),
-                tooltip: 'Zablokuj Ekran Sędziego',
-                onPressed: () {
-                  HapticFeedback.mediumImpact();
-                  match.toggleScreenLock();
-                },
-              ),
-
-              const SizedBox(width: 2),
-              const Icon(Icons.battery_5_bar, size: 14, color: AppTheme.greenLive),
-              const SizedBox(width: 2),
-              const Text(
-                '88%',
-                style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white70),
-              ),
-            ],
+              ],
+            ),
           ),
-        ],
+        ),
       ),
-    ),
-  ),
-),
-);
+    );
   }
 
   // ===========================================================================
@@ -939,34 +1675,176 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
           child: Stack(
             fit: StackFit.expand,
             children: [
-              // 1. ZASADNICZY STRUMIEŃ WIDEO (KAMERA P2P / KAMERA LOKALNA / MAKIETA BOISKA)
-              _buildStreamMediaLayer(match, camera, p2p, isOutdoor, isPortrait),
-
-              // 2. TABLICA WYNIKÓW (SCOREBOARD OVERLAY) NAŁOŻONA BEZPOŚREDNIO NA STRUMIEŃ WIDEO
-              Positioned(
-                top: isPortrait ? 8 : 52,
-                left: 8,
-                right: 8,
-                child: Center(
-                  child: ScoreboardOverlay(
-                    session: match.session,
-                    style: streamer.scoreboardStyle,
-                    isTimeoutActive: match.isTimeoutActive,
-                    timeoutSeconds: match.timeoutSecondsRemaining,
-                    timeoutTeam: match.timeoutCallingTeam,
-                    showServeIndicator: streamer.showServeIndicator,
-                    activeSpecialEvent: match.activeSpecialEvent,
-                  ),
+              // Only this isolated program layer is captured; referee controls,
+              // LIVE/REC buttons, status HUD and dialogs remain outside it.
+              RepaintBoundary(
+                key: _programCapture.boundaryKey,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    _buildStreamMediaLayer(
+                      match,
+                      camera,
+                      p2p,
+                      isOutdoor,
+                      isPortrait,
+                    ),
+                    Positioned(
+                      top: isPortrait ? 8 : 52,
+                      left: 8,
+                      right: 8,
+                      child: Center(
+                        child: ScoreboardOverlay(
+                          session: match.session,
+                          style: streamer.scoreboardStyle,
+                          isTimeoutActive: match.isTimeoutActive,
+                          timeoutSeconds: match.timeoutSecondsRemaining,
+                          timeoutTeam: match.timeoutCallingTeam,
+                          showServeIndicator: streamer.showServeIndicator,
+                          activeSpecialEvent: match.activeSpecialEvent,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
 
-              // 3. TELEMETRIA STRUMIENIA I PRZEŁĄCZNIK WIDOKU W DOLNYM ROGU STRUMIENIA
+              // Telemetry is intentionally outside the encoded program frame.
               if (isPortrait || _isControlsHidden)
                 Positioned(
                   bottom: 6,
                   left: isPortrait ? 10 : 16,
                   right: isPortrait ? 10 : null,
-                  child: _buildStreamStatusAndControlsRow(context, camera, p2p, isPortrait: isPortrait),
+                  child: _buildStreamStatusAndControlsRow(
+                    context,
+                    camera,
+                    p2p,
+                    isPortrait: isPortrait,
+                  ),
+                ),
+
+              // Pływający pasek sterowania kamerą w trybie Single Mode (Obiektyw, Latarka, Tryb REC)
+              if (p2p.currentRole == DeviceRole.singlePhoneAllInOne &&
+                  camera.isCameraInitialized)
+                Positioned(
+                  top: isPortrait ? 8 : 12,
+                  right: 10,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Przełącznik kamery Tył / Przód
+                      if (camera.availableCamerasList.length > 1)
+                        InkWell(
+                          onTap: () async {
+                            HapticFeedback.selectionClick();
+                            await camera.switchCamera();
+                          },
+                          borderRadius: BorderRadius.circular(16),
+                          child: Container(
+                            padding: const EdgeInsets.all(5),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.65),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.white24),
+                            ),
+                            child: const Icon(
+                              Icons.flip_camera_android,
+                              color: Colors.white,
+                              size: 15,
+                            ),
+                          ),
+                        ),
+                      const SizedBox(width: 5),
+
+                      // Włącznik latarki / doświetlenia
+                      InkWell(
+                        onTap: () async {
+                          HapticFeedback.selectionClick();
+                          await camera.toggleTorch();
+                        },
+                        borderRadius: BorderRadius.circular(16),
+                        child: Container(
+                          padding: const EdgeInsets.all(5),
+                          decoration: BoxDecoration(
+                            color: camera.isTorchOn
+                                ? AppTheme.amberAccent
+                                : Colors.black.withValues(alpha: 0.65),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: camera.isTorchOn
+                                  ? AppTheme.amberAccent
+                                  : Colors.white24,
+                            ),
+                          ),
+                          child: Icon(
+                            camera.isTorchOn ? Icons.flash_on : Icons.flash_off,
+                            color: camera.isTorchOn
+                                ? Colors.black
+                                : Colors.white70,
+                            size: 15,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 5),
+
+                      // Szybki wybór trybu nagrywania (RAW / PROG / DUAL)
+                      InkWell(
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          final current = camera.recordingType;
+                          final next =
+                              current == RecordingType.programWithScoreboard
+                              ? RecordingType.rawCamera
+                              : (current == RecordingType.rawCamera
+                                    ? RecordingType.dual
+                                    : RecordingType.programWithScoreboard);
+                          camera.setRecordingType(next);
+                        },
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.75),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: AppTheme.amberAccent,
+                              width: 1.2,
+                            ),
+                          ),
+                          child: Text(
+                            camera.recordingType.shortLabel,
+                            style: const TextStyle(
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w900,
+                              color: AppTheme.amberAccent,
+                              letterSpacing: 0.4,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              // Paski szybkiego zoomu w trybie Single Mode
+              if (p2p.currentRole == DeviceRole.singlePhoneAllInOne &&
+                  camera.isCameraInitialized)
+                Positioned(
+                  top: isPortrait ? 40 : 48,
+                  right: 10,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (camera.settings.minZoomLevel < 1.0)
+                        _buildQuickZoomPill(camera, 0.6, '0.6x'),
+                      _buildQuickZoomPill(camera, 1.0, '1x'),
+                      if (camera.settings.maxZoomLevel >= 2.0)
+                        _buildQuickZoomPill(camera, 2.0, '2x'),
+                    ],
+                  ),
                 ),
             ],
           ),
@@ -982,30 +1860,48 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
     bool isOutdoor,
     bool isPortrait,
   ) {
-    // 1. BEZPRZEWODOWY OBRAZ Z KAMERY PHONE A (P2P REALME)
-    if (p2p.currentVideoFrame != null) {
-      return FittedBox(
-        fit: BoxFit.cover,
-        child: Image.memory(
-          p2p.currentVideoFrame!,
-          gaplessPlayback: true,
-        ),
-      );
-    }
-
-    // 2. LOKALNA KAMERA W TRYBIE POJEDYNCZEGO TELEFONU (ALL-IN-ONE)
+    // 1. LOKALNA KAMERA W TRYBIE POJEDYNCZEGO TELEFONU (ALL-IN-ONE) LUB GDY ZAINICJOWANA
     if (_showLocalCameraPreview &&
         camera.isCameraInitialized &&
         camera.cameraController != null &&
         camera.cameraController!.value.isInitialized) {
       final controller = camera.cameraController!;
+      final previewSize = controller.value.previewSize;
+      final double pWidth = previewSize?.width ?? 1920.0;
+      final double pHeight = previewSize?.height ?? 1080.0;
+      final double sensorLong = pWidth > pHeight ? pWidth : pHeight;
+      final double sensorShort = pWidth > pHeight ? pHeight : pWidth;
+
+      final double targetWidth = isPortrait ? sensorShort : sensorLong;
+      final double targetHeight = isPortrait ? sensorLong : sensorShort;
+
+      return Container(
+        color: Colors.black,
+        alignment: Alignment.center,
+        child: FittedBox(
+          fit: BoxFit.contain,
+          child: SizedBox(
+            width: targetWidth,
+            height: targetHeight,
+            child: CameraPreview(controller),
+          ),
+        ),
+      );
+    }
+
+    // 2. BEZPRZEWODOWY OBRAZ Z KAMERY PHONE A (P2P REALME)
+    if (!p2p.isSinglePhoneMode && p2p.currentVideoFrame != null) {
       return FittedBox(
         fit: BoxFit.cover,
-        child: SizedBox(
-          width: controller.value.previewSize?.width ?? 1920.0,
-          height: controller.value.previewSize?.height ?? 1080.0,
-          child: CameraPreview(controller),
-        ),
+        child: Image.memory(p2p.currentVideoFrame!, gaplessPlayback: true),
+      );
+    }
+
+    // 3. AWARYJNY OBRAZ PROGRAM PREVIEW (TYLKO JEŚLI BRAK LOKALNEJ KAMERY I STRUMIENIA P2P)
+    if (camera.programPreviewFrame != null && !camera.isCameraInitialized) {
+      return FittedBox(
+        fit: BoxFit.cover,
+        child: Image.memory(camera.programPreviewFrame!, gaplessPlayback: true),
       );
     }
 
@@ -1062,7 +1958,10 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                     height: 8,
                     decoration: const BoxDecoration(
                       border: Border(
-                        bottom: BorderSide(color: AppTheme.cyanAccent, width: 2),
+                        bottom: BorderSide(
+                          color: AppTheme.cyanAccent,
+                          width: 2,
+                        ),
                         left: BorderSide(color: AppTheme.cyanAccent, width: 2),
                       ),
                     ),
@@ -1075,14 +1974,21 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                     height: 8,
                     decoration: const BoxDecoration(
                       border: Border(
-                        bottom: BorderSide(color: AppTheme.cyanAccent, width: 2),
+                        bottom: BorderSide(
+                          color: AppTheme.cyanAccent,
+                          width: 2,
+                        ),
                         right: BorderSide(color: AppTheme.cyanAccent, width: 2),
                       ),
                     ),
                   ),
                 ),
                 Center(
-                  child: Icon(match.session.sport.icon, size: 28, color: Colors.white.withValues(alpha: 0.15)),
+                  child: Icon(
+                    match.session.sport.icon,
+                    size: 28,
+                    color: Colors.white.withValues(alpha: 0.15),
+                  ),
                 ),
               ],
             ),
@@ -1117,7 +2023,10 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                 onTap: () => _openVideoSettings(context),
                 borderRadius: BorderRadius.circular(6),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 2,
+                  ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -1125,7 +2034,9 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                         width: 6,
                         height: 6,
                         decoration: BoxDecoration(
-                          color: camera.isRecording ? AppTheme.redLive : AppTheme.greenLive,
+                          color: camera.isRecording
+                              ? AppTheme.redLive
+                              : AppTheme.greenLive,
                           shape: BoxShape.circle,
                         ),
                       ),
@@ -1133,15 +2044,15 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                       Text(
                         isPortrait
                             ? (p2p.currentVideoFrame != null
-                                ? 'LIVE FEED • REALME (${p2p.healthMetrics.latencyMs}ms • P2P)'
-                                : (camera.isCameraInitialized
-                                    ? 'LOKALNA KAMERA (${camera.settings.resolution.label} ${camera.settings.fps.label})'
-                                    : 'OCZEKIWANIE NA KAMERĘ REALME...'))
+                                  ? 'LIVE FEED • REALME (${p2p.healthMetrics.latencyMs}ms • P2P)'
+                                  : (camera.isCameraInitialized
+                                        ? 'LOKALNA KAMERA (${camera.settings.resolution.label} ${camera.settings.fps.label})'
+                                        : 'OCZEKIWANIE NA KAMERĘ REALME...'))
                             : (p2p.currentVideoFrame != null
-                                ? 'P2P ${p2p.healthMetrics.latencyMs}ms'
-                                : (camera.isCameraInitialized
-                                    ? 'KAMERA ${camera.settings.fps.label}'
-                                    : 'BRAK ŹRÓDŁA')),
+                                  ? 'P2P ${p2p.healthMetrics.latencyMs}ms'
+                                  : (camera.isCameraInitialized
+                                        ? 'KAMERA ${camera.settings.fps.label}'
+                                        : 'BRAK ŹRÓDŁA')),
                         style: const TextStyle(
                           fontSize: 9,
                           fontWeight: FontWeight.bold,
@@ -1150,7 +2061,11 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                         ),
                       ),
                       const SizedBox(width: 4),
-                      const Icon(Icons.settings, size: 10, color: AppTheme.cyanAccent),
+                      const Icon(
+                        Icons.settings,
+                        size: 10,
+                        color: AppTheme.cyanAccent,
+                      ),
                     ],
                   ),
                 ),
@@ -1170,24 +2085,35 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                 },
                 borderRadius: BorderRadius.circular(6),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white10,
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.5)),
+                    border: Border.all(
+                      color: AppTheme.cyanAccent.withValues(alpha: 0.5),
+                    ),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
-                        _showLocalCameraPreview ? Icons.sports_volleyball : Icons.videocam,
+                        _showLocalCameraPreview
+                            ? Icons.sports_volleyball
+                            : Icons.videocam,
                         size: 11,
                         color: AppTheme.cyanAccent,
                       ),
                       const SizedBox(width: 4),
                       Text(
                         _showLocalCameraPreview ? 'MAKIETA' : 'KAMERA LIVE',
-                        style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white),
+                        style: const TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
                       ),
                     ],
                   ),
@@ -1209,47 +2135,69 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
       session: match.session,
       onAddPointA: (pts) {
         match.addPointA(points: pts);
-        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+        context.read<P2PConnectionProvider>().broadcastScore(
+          match.toScorePayload,
+        );
       },
       onAddPointB: (pts) {
         match.addPointB(points: pts);
-        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+        context.read<P2PConnectionProvider>().broadcastScore(
+          match.toScorePayload,
+        );
       },
       onSubtractPointA: () {
         match.subtractPointA();
-        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+        context.read<P2PConnectionProvider>().broadcastScore(
+          match.toScorePayload,
+        );
       },
       onSubtractPointB: () {
         match.subtractPointB();
-        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+        context.read<P2PConnectionProvider>().broadcastScore(
+          match.toScorePayload,
+        );
       },
       onAddFoulA: () {
         match.addFoulA();
-        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+        context.read<P2PConnectionProvider>().broadcastScore(
+          match.toScorePayload,
+        );
       },
       onAddFoulB: () {
         match.addFoulB();
-        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+        context.read<P2PConnectionProvider>().broadcastScore(
+          match.toScorePayload,
+        );
       },
       onNextPeriod: () {
         match.nextPeriod();
-        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+        context.read<P2PConnectionProvider>().broadcastScore(
+          match.toScorePayload,
+        );
       },
       onUndo: () {
         match.undo();
-        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+        context.read<P2PConnectionProvider>().broadcastScore(
+          match.toScorePayload,
+        );
       },
       onToggleRotation: () {
         match.toggleRotation();
-        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+        context.read<P2PConnectionProvider>().broadcastScore(
+          match.toScorePayload,
+        );
       },
       onRequestTimeoutA: () {
         match.startTimeout(ServingTeam.teamA);
-        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+        context.read<P2PConnectionProvider>().broadcastScore(
+          match.toScorePayload,
+        );
       },
       onRequestTimeoutB: () {
         match.startTimeout(ServingTeam.teamB);
-        context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+        context.read<P2PConnectionProvider>().broadcastScore(
+          match.toScorePayload,
+        );
       },
       onRequestSubA: () => match.requestSubstitutionA(),
       onRequestSubB: () => match.requestSubstitutionB(),
@@ -1293,7 +2241,11 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
           child: const Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.sports_volleyball, size: 16, color: AppTheme.amberAccent),
+              Icon(
+                Icons.sports_volleyball,
+                size: 16,
+                color: AppTheme.amberAccent,
+              ),
               SizedBox(width: 8),
               Text(
                 'POKAŻ KOKPIT SĘDZIEGO',
@@ -1305,8 +2257,50 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                 ),
               ),
               SizedBox(width: 4),
-              Icon(Icons.keyboard_arrow_up_rounded, size: 18, color: AppTheme.amberAccent),
+              Icon(
+                Icons.keyboard_arrow_up_rounded,
+                size: 18,
+                color: AppTheme.amberAccent,
+              ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuickZoomPill(
+    CameraProvider camera,
+    double targetZoom,
+    String label,
+  ) {
+    final isSelected = (camera.settings.zoom - targetZoom).abs() < 0.2;
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: InkWell(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          camera.setZoom(targetZoom);
+        },
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? AppTheme.amberAccent
+                : Colors.black.withValues(alpha: 0.65),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected ? AppTheme.amberAccent : Colors.white24,
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+              color: isSelected ? Colors.black : Colors.white,
+            ),
           ),
         ),
       ),
@@ -1346,11 +2340,15 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
               subsUsed: session.substitutionsA,
               onAddPoint: () {
                 match.addPointA(points: 1);
-                context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+                context.read<P2PConnectionProvider>().broadcastScore(
+                  match.toScorePayload,
+                );
               },
               onSubtractPoint: () {
                 match.subtractPointA();
-                context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+                context.read<P2PConnectionProvider>().broadcastScore(
+                  match.toScorePayload,
+                );
               },
               tag1Label: 'AS!',
               tag1Color: AppTheme.amberAccent,
@@ -1375,11 +2373,15 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
               subsUsed: session.substitutionsB,
               onAddPoint: () {
                 match.addPointB(points: 1);
-                context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+                context.read<P2PConnectionProvider>().broadcastScore(
+                  match.toScorePayload,
+                );
               },
               onSubtractPoint: () {
                 match.subtractPointB();
-                context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
+                context.read<P2PConnectionProvider>().broadcastScore(
+                  match.toScorePayload,
+                );
               },
               tag1Label: 'ATAK',
               tag1Color: AppTheme.amberAccent,
@@ -1394,102 +2396,172 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
           // DOLNY PASEK NAWIGACJI I KONTROLI MECZU: ROTACJA, UNDO, TIMEOUT, ZWIŃ
           Positioned(
             bottom: 12,
-            left: 235,
-            right: 235,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: isOutdoor ? Colors.black : const Color(0xF20A0E17),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white24),
-                boxShadow: const [
-                  BoxShadow(color: Colors.black87, blurRadius: 10, offset: Offset(0, 2)),
-                ],
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  // ROTACJA
-                  InkWell(
-                    onTap: () {
-                      match.toggleRotation();
-                      context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
-                    },
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: AppTheme.amberAccent.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: AppTheme.amberAccent.withValues(alpha: 0.6)),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.sync_alt, size: 13, color: AppTheme.amberAccent),
-                          SizedBox(width: 4),
-                          Text('ROTACJA', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: AppTheme.amberAccent)),
-                        ],
-                      ),
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 250),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: isOutdoor ? Colors.black : const Color(0xF20A0E17),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white24),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Colors.black87,
+                      blurRadius: 10,
+                      offset: Offset(0, 2),
                     ),
-                  ),
-
-                  // UNDO (COFNIJ)
-                  InkWell(
-                    onTap: match.canUndo
-                        ? () {
-                            match.undo();
-                            context.read<P2PConnectionProvider>().broadcastScore(match.toScorePayload);
-                          }
-                        : null,
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: match.canUndo ? Colors.white12 : Colors.white10,
+                  ],
+                ),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // ROTACJA
+                      InkWell(
+                        onTap: () {
+                          match.toggleRotation();
+                          context.read<P2PConnectionProvider>().broadcastScore(
+                            match.toScorePayload,
+                          );
+                        },
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: match.canUndo ? Colors.white24 : Colors.white10),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.undo, size: 13, color: match.canUndo ? Colors.white : Colors.white30),
-                          const SizedBox(width: 4),
-                          Text(
-                            'COFNIJ',
-                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: match.canUndo ? Colors.white : Colors.white30),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 5,
                           ),
-                        ],
+                          decoration: BoxDecoration(
+                            color: AppTheme.amberAccent.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: AppTheme.amberAccent.withValues(
+                                alpha: 0.6,
+                              ),
+                            ),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.sync_alt,
+                                size: 13,
+                                color: AppTheme.amberAccent,
+                              ),
+                              SizedBox(width: 4),
+                              Text(
+                                'ROTACJA',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w900,
+                                  color: AppTheme.amberAccent,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
+                      const SizedBox(width: 6),
 
-                  // PRZYCISK UKRYCIA KOKPITU
-                  InkWell(
-                    onTap: () {
-                      HapticFeedback.selectionClick();
-                      setState(() {
-                        _isControlsHidden = true;
-                      });
-                    },
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: Colors.white12,
+                      // UNDO (COFNIJ)
+                      InkWell(
+                        onTap: match.canUndo
+                            ? () {
+                                match.undo();
+                                context
+                                    .read<P2PConnectionProvider>()
+                                    .broadcastScore(match.toScorePayload);
+                              }
+                            : null,
                         borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: match.canUndo
+                                ? Colors.white12
+                                : Colors.white10,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: match.canUndo
+                                  ? Colors.white24
+                                  : Colors.white10,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.undo,
+                                size: 13,
+                                color: match.canUndo
+                                    ? Colors.white
+                                    : Colors.white30,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'COFNIJ',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w900,
+                                  color: match.canUndo
+                                      ? Colors.white
+                                      : Colors.white30,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.keyboard_arrow_down_rounded, size: 15, color: Colors.white70),
-                          SizedBox(width: 2),
-                          Text('UKRYJ', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white70)),
-                        ],
+                      const SizedBox(width: 6),
+
+                      // PRZYCISK UKRYCIA KOKPITU
+                      InkWell(
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          setState(() {
+                            _isControlsHidden = true;
+                          });
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white12,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.keyboard_arrow_down_rounded,
+                                size: 15,
+                                color: Colors.white70,
+                              ),
+                              SizedBox(width: 2),
+                              Text(
+                                'UKRYJ',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white70,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           ),
@@ -1532,7 +2604,11 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
               blurRadius: 12,
               spreadRadius: 1,
             ),
-          const BoxShadow(color: Colors.black87, blurRadius: 10, offset: Offset(0, 3)),
+          const BoxShadow(
+            color: Colors.black87,
+            blurRadius: 10,
+            offset: Offset(0, 3),
+          ),
         ],
       ),
       child: Column(
@@ -1541,7 +2617,14 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
           // NAZWA DRUŻYNY I ZNACZNIK SERWISU
           Row(
             children: [
-              Container(width: 4, height: 14, decoration: BoxDecoration(color: teamColor, borderRadius: BorderRadius.circular(2))),
+              Container(
+                width: 4,
+                height: 14,
+                decoration: BoxDecoration(
+                  color: teamColor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
@@ -1558,13 +2641,23 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
               ),
               if (isServing)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 1,
+                  ),
                   decoration: BoxDecoration(
                     color: teamColor.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(color: teamColor, width: 1),
                   ),
-                  child: const Text('SERW', style: TextStyle(fontSize: 8, fontWeight: FontWeight.w900, color: Colors.white)),
+                  child: const Text(
+                    'SERW',
+                    style: TextStyle(
+                      fontSize: 8,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                    ),
+                  ),
                 ),
             ],
           ),
@@ -1587,10 +2680,14 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
               height: 72,
               width: double.infinity,
               decoration: BoxDecoration(
-                color: isOutdoor ? const Color(0xFF101622) : const Color(0xFF141D2D),
+                color: isOutdoor
+                    ? const Color(0xFF101622)
+                    : const Color(0xFF141D2D),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: isServing ? teamColor.withValues(alpha: 0.5) : Colors.white12,
+                  color: isServing
+                      ? teamColor.withValues(alpha: 0.5)
+                      : Colors.white12,
                 ),
               ),
               child: Stack(
@@ -1599,12 +2696,26 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                   Positioned(
                     top: 4,
                     left: 8,
-                    child: Text('TAP: +1', style: TextStyle(fontSize: 8, color: Colors.white.withValues(alpha: 0.4), fontWeight: FontWeight.bold)),
+                    child: Text(
+                      'TAP: +1',
+                      style: TextStyle(
+                        fontSize: 8,
+                        color: Colors.white.withValues(alpha: 0.4),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                   Positioned(
                     top: 4,
                     right: 8,
-                    child: Text('SWIPE: -1', style: TextStyle(fontSize: 8, color: Colors.white.withValues(alpha: 0.4), fontWeight: FontWeight.bold)),
+                    child: Text(
+                      'SWIPE: -1',
+                      style: TextStyle(
+                        fontSize: 8,
+                        color: Colors.white.withValues(alpha: 0.4),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                   Text(
                     points.toString(),
@@ -1637,12 +2748,18 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                     decoration: BoxDecoration(
                       color: tag1Color.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: tag1Color.withValues(alpha: 0.4)),
+                      border: Border.all(
+                        color: tag1Color.withValues(alpha: 0.4),
+                      ),
                     ),
                     alignment: Alignment.center,
                     child: Text(
                       tag1Label,
-                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: tag1Color),
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        color: tag1Color,
+                      ),
                     ),
                   ),
                 ),
@@ -1660,12 +2777,18 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                     decoration: BoxDecoration(
                       color: tag2Color.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: tag2Color.withValues(alpha: 0.4)),
+                      border: Border.all(
+                        color: tag2Color.withValues(alpha: 0.4),
+                      ),
                     ),
                     alignment: Alignment.center,
                     child: Text(
                       tag2Label,
-                      style: TextStyle(fontSize: 9, fontWeight: FontWeight.w900, color: tag2Color),
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w900,
+                        color: tag2Color,
+                      ),
                     ),
                   ),
                 ),
@@ -1685,16 +2808,28 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.emoji_events, color: AppTheme.amberAccent, size: 64),
+              const Icon(
+                Icons.emoji_events,
+                color: AppTheme.amberAccent,
+                size: 64,
+              ),
               const SizedBox(height: 12),
               const Text(
                 'KONIEC MECZU!',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.white),
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                ),
               ),
               const SizedBox(height: 6),
               Text(
                 'Zwycięzca: ${match.session.matchWinner}',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.cyanAccent),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.cyanAccent,
+                ),
               ),
               const SizedBox(height: 16),
               Text(
@@ -1716,11 +2851,20 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.lock_rounded, color: AppTheme.amberAccent, size: 64),
+              const Icon(
+                Icons.lock_rounded,
+                color: AppTheme.amberAccent,
+                size: 64,
+              ),
               const SizedBox(height: 16),
               const Text(
                 'TRYB SĘDZIEGO ZABLOKOWANY',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 0.5),
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                  letterSpacing: 0.5,
+                ),
               ),
               const SizedBox(height: 6),
               const Text(
@@ -1749,7 +2893,10 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                       decoration: BoxDecoration(
                         color: AppTheme.surfaceCard,
                         borderRadius: BorderRadius.circular(25),
-                        border: Border.all(color: AppTheme.amberAccent, width: 1.5),
+                        border: Border.all(
+                          color: AppTheme.amberAccent,
+                          width: 1.5,
+                        ),
                       ),
                       child: Stack(
                         alignment: Alignment.centerLeft,
@@ -1757,7 +2904,9 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
                           Container(
                             width: 220 * progress,
                             decoration: BoxDecoration(
-                              color: AppTheme.amberAccent.withValues(alpha: 0.4),
+                              color: AppTheme.amberAccent.withValues(
+                                alpha: 0.4,
+                              ),
                               borderRadius: BorderRadius.circular(25),
                             ),
                           ),
@@ -1811,7 +2960,10 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen> with SingleTick
     );
   }
 
-  Widget _buildBottomModernNavBar(BuildContext context, StreamerProvider streamer) {
+  Widget _buildBottomModernNavBar(
+    BuildContext context,
+    StreamerProvider streamer,
+  ) {
     final items = [
       {'label': 'SCORER', 'icon': Icons.sports_score},
       {'label': 'KAMERA', 'icon': Icons.camera_alt_outlined},
@@ -1900,12 +3052,16 @@ class SportCourtPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final courtPaint = Paint()
-      ..color = isHighContrast ? const Color(0xFF263A5C) : const Color(0xFF16253B)
+      ..color = isHighContrast
+          ? const Color(0xFF263A5C)
+          : const Color(0xFF16253B)
       ..strokeWidth = isHighContrast ? 2.5 : 1.5
       ..style = PaintingStyle.stroke;
 
     final accentPaint = Paint()
-      ..color = AppTheme.cyanAccent.withValues(alpha: isHighContrast ? 0.8 : 0.4)
+      ..color = AppTheme.cyanAccent.withValues(
+        alpha: isHighContrast ? 0.8 : 0.4,
+      )
       ..strokeWidth = isHighContrast ? 3.0 : 2.0
       ..style = PaintingStyle.stroke;
 
@@ -1915,7 +3071,11 @@ class SportCourtPainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
 
     final center = Offset(size.width / 2, size.height / 2);
-    final rect = Rect.fromCenter(center: center, width: size.width * 0.9, height: size.height * 0.75);
+    final rect = Rect.fromCenter(
+      center: center,
+      width: size.width * 0.9,
+      height: size.height * 0.75,
+    );
 
     // Główny obrys boiska
     canvas.drawRect(rect, courtPaint);
@@ -1924,35 +3084,88 @@ class SportCourtPainter extends CustomPainter {
       case MatchSport.volleyball:
       case MatchSport.beachVolleyball:
         // Siatka i linie ataku 3m
-        canvas.drawLine(Offset(rect.left, center.dy), Offset(rect.right, center.dy), accentPaint);
-        canvas.drawLine(Offset(rect.left, center.dy - 40), Offset(rect.right, center.dy - 40), linePaint);
-        canvas.drawLine(Offset(rect.left, center.dy + 40), Offset(rect.right, center.dy + 40), linePaint);
+        canvas.drawLine(
+          Offset(rect.left, center.dy),
+          Offset(rect.right, center.dy),
+          accentPaint,
+        );
+        canvas.drawLine(
+          Offset(rect.left, center.dy - 40),
+          Offset(rect.right, center.dy - 40),
+          linePaint,
+        );
+        canvas.drawLine(
+          Offset(rect.left, center.dy + 40),
+          Offset(rect.right, center.dy + 40),
+          linePaint,
+        );
         break;
 
       case MatchSport.basketball:
         // Linia środkowa, koło środkowe, trumny podkoszowe
-        canvas.drawLine(Offset(rect.left, center.dy), Offset(rect.right, center.dy), accentPaint);
+        canvas.drawLine(
+          Offset(rect.left, center.dy),
+          Offset(rect.right, center.dy),
+          accentPaint,
+        );
         canvas.drawCircle(center, 28, linePaint);
         // Trumny i kosze
-        canvas.drawRect(Rect.fromCenter(center: Offset(center.dx, rect.top + 20), width: 60, height: 40), linePaint);
-        canvas.drawRect(Rect.fromCenter(center: Offset(center.dx, rect.bottom - 20), width: 60, height: 40), linePaint);
+        canvas.drawRect(
+          Rect.fromCenter(
+            center: Offset(center.dx, rect.top + 20),
+            width: 60,
+            height: 40,
+          ),
+          linePaint,
+        );
+        canvas.drawRect(
+          Rect.fromCenter(
+            center: Offset(center.dx, rect.bottom - 20),
+            width: 60,
+            height: 40,
+          ),
+          linePaint,
+        );
         break;
 
       case MatchSport.football:
         // Linia środkowa, koło środkowe, pola karne
-        canvas.drawLine(Offset(rect.left, center.dy), Offset(rect.right, center.dy), accentPaint);
+        canvas.drawLine(
+          Offset(rect.left, center.dy),
+          Offset(rect.right, center.dy),
+          accentPaint,
+        );
         canvas.drawCircle(center, 34, linePaint);
-        canvas.drawRect(Rect.fromCenter(center: Offset(center.dx, rect.top + 25), width: 100, height: 50), linePaint);
-        canvas.drawRect(Rect.fromCenter(center: Offset(center.dx, rect.bottom - 25), width: 100, height: 50), linePaint);
+        canvas.drawRect(
+          Rect.fromCenter(
+            center: Offset(center.dx, rect.top + 25),
+            width: 100,
+            height: 50,
+          ),
+          linePaint,
+        );
+        canvas.drawRect(
+          Rect.fromCenter(
+            center: Offset(center.dx, rect.bottom - 25),
+            width: 100,
+            height: 50,
+          ),
+          linePaint,
+        );
         break;
 
       case MatchSport.generic:
-        canvas.drawLine(Offset(rect.left, center.dy), Offset(rect.right, center.dy), accentPaint);
+        canvas.drawLine(
+          Offset(rect.left, center.dy),
+          Offset(rect.right, center.dy),
+          accentPaint,
+        );
         break;
     }
   }
 
   @override
   bool shouldRepaint(covariant SportCourtPainter oldDelegate) =>
-      oldDelegate.sport != sport || oldDelegate.isHighContrast != isHighContrast;
+      oldDelegate.sport != sport ||
+      oldDelegate.isHighContrast != isHighContrast;
 }

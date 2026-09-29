@@ -20,6 +20,7 @@ class P2PConnectionProvider extends ChangeNotifier {
   int _clientCount = 0;
 
   Uint8List? _currentVideoFrame;
+  DateTime? _lastVideoFrameAt;
   ScoreUpdatePayload? _lastReceivedScore;
   CameraControlPayload? _lastReceivedCameraControl;
   bool? _lastReceivedRecorderTrigger;
@@ -31,7 +32,7 @@ class P2PConnectionProvider extends ChangeNotifier {
   StreamSubscription? _clientCountSub;
 
   P2PConnectionProvider({IP2PConnectionRepository? repository})
-      : _repository = repository ?? P2PConnectionRepository() {
+    : _repository = repository ?? P2PConnectionRepository() {
     _initListeners();
   }
 
@@ -41,12 +42,26 @@ class P2PConnectionProvider extends ChangeNotifier {
   String get pairingCode => _pairingCode;
   String get hostAddress => _hostAddress;
   int get serverPort => _serverPort;
-  String get pairingUri => PairingSchemeHelper.buildUri(host: _hostAddress, port: _serverPort, code: _pairingCode);
+  String get pairingUri => PairingSchemeHelper.buildUri(
+    host: _hostAddress,
+    port: _serverPort,
+    code: _pairingCode,
+  );
   bool get isHost => _isHost;
   int get clientCount => _clientCount;
   Uint8List? get currentVideoFrame => _currentVideoFrame;
+  bool get hasFreshVideoFrame =>
+      _currentVideoFrame != null &&
+      _lastVideoFrameAt != null &&
+      DateTime.now().difference(_lastVideoFrameAt!) <=
+          const Duration(seconds: 2);
+  Stream<Uint8List> get incomingVideoFrames => _repository.incomingVideoFrames;
+  bool get hasActiveVideoStream =>
+      _currentVideoFrame != null &&
+      _connectionState == CameraConnectionState.connected;
   ScoreUpdatePayload? get lastReceivedScore => _lastReceivedScore;
-  CameraControlPayload? get lastReceivedCameraControl => _lastReceivedCameraControl;
+  CameraControlPayload? get lastReceivedCameraControl =>
+      _lastReceivedCameraControl;
   bool? get lastReceivedRecorderTrigger => _lastReceivedRecorderTrigger;
   bool get isSinglePhoneMode => _currentRole == DeviceRole.singlePhoneAllInOne;
 
@@ -58,6 +73,10 @@ class P2PConnectionProvider extends ChangeNotifier {
   void _initListeners() {
     _stateSub = _repository.connectionStateStream.listen((state) {
       _connectionState = state;
+      if (state != CameraConnectionState.connected) {
+        _currentVideoFrame = null;
+        _lastVideoFrameAt = null;
+      }
       notifyListeners();
     });
 
@@ -72,6 +91,7 @@ class P2PConnectionProvider extends ChangeNotifier {
 
     _videoSub = _repository.incomingVideoFrames.listen((frame) {
       _currentVideoFrame = frame;
+      _lastVideoFrameAt = DateTime.now();
       notifyListeners();
     });
 
@@ -110,7 +130,11 @@ class P2PConnectionProvider extends ChangeNotifier {
     _serverPort = port;
     _isHost = true;
     _currentRole = role;
-    await _repository.hostMatchSession(pairingCode: pairingCode, role: _currentRole.idName, port: port);
+    await _repository.hostMatchSession(
+      pairingCode: pairingCode,
+      role: _currentRole.idName,
+      port: port,
+    );
     _hostAddress = _repository.hostAddress ?? '127.0.0.1';
     notifyListeners();
   }
@@ -137,7 +161,10 @@ class P2PConnectionProvider extends ChangeNotifier {
   }
 
   /// Dołączanie na podstawie sparsowanych danych kodu QR
-  Future<void> joinWithPairingData(PairingData data, {DeviceRole role = DeviceRole.cameraPhoneA}) {
+  Future<void> joinWithPairingData(
+    PairingData data, {
+    DeviceRole role = DeviceRole.cameraPhoneA,
+  }) {
     return joinSession(
       hostAddress: data.host,
       pairingCode: data.code,
@@ -158,11 +185,17 @@ class P2PConnectionProvider extends ChangeNotifier {
 
   /// Wysłanie polecenia zmiany parametrów kamery do Phone A
   Future<void> sendCameraCommand(CameraControlPayload cameraPayload) async {
-    await _repository.sendCameraControl(cameraPayload, role: _currentRole.idName);
+    await _repository.sendCameraControl(
+      cameraPayload,
+      role: _currentRole.idName,
+    );
   }
 
   /// Wysłanie polecenia start/stop nagrywania Master REC do Phone A
-  Future<void> sendRecorderTrigger({required bool isRecording, String? matchId}) async {
+  Future<void> sendRecorderTrigger({
+    required bool isRecording,
+    String? matchId,
+  }) async {
     await _repository.sendRecorderControl(
       isRecording: isRecording,
       role: _currentRole.idName,
@@ -174,6 +207,7 @@ class P2PConnectionProvider extends ChangeNotifier {
     await _repository.disconnect();
     _isHost = false;
     _currentVideoFrame = null;
+    _lastVideoFrameAt = null;
     _clientCount = 0;
     _connectionState = CameraConnectionState.disconnected;
     notifyListeners();

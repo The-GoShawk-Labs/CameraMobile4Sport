@@ -1,0 +1,25 @@
+{
+  "manifestVersion": 1,
+  "id": "0231961c-f9a7-49e7-8ad8-01b67a41864b",
+  "name": "CameraMobile4Sport",
+  "path": "C:\\Users\\kusoj\\Desktop\\Projekty\\GoGoShawk\\CameraMobile4Sport\\.zvec-grep",
+  "rootPaths": [
+    {
+      "absolutePath": "C:\\Users\\kusoj\\Desktop\\Projekty\\GoGoShawk\\CameraMobile4Sport",
+      "recursive": true
+    }
+  ],
+  "indexPolicy": "enabled",
+  "embedding": {
+    "provider": "local",
+    "model": "potion-code-16m-v2",
+    "dimension": 256,
+    "metric": "cosine"
+  },
+  "indexVersion": 1,
+  "createdTime": 1790256874766,
+  "updatedTime": 1790342622038,
+  "embeddingRuntime": {
+    "device": "auto"
+  }
+}

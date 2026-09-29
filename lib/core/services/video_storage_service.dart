@@ -22,6 +22,7 @@ class StorageFolderPreset {
 
 class VideoStorageService {
   static const String _defaultSubDirectoryName = 'Movies/CameraMobile4Sport/mecze';
+  static int _fileSequence = 0;
 
   /// Predefiniowane presety folderów dla wygody użytkownika
   static const List<StorageFolderPreset> defaultPresets = [
@@ -209,11 +210,16 @@ class VideoStorageService {
     }
   }
 
-  /// Generuje nową, unikalną ścieżkę dla pliku nagrania MP4 w zadanym folderze
-  Future<String> generateNewRecordingPath([String? subDirectory]) async {
+  /// Generuje nową, unikalną ścieżkę dla pliku nagrania MP4 w zadanym folderze z uwzględnieniem typu nagrania
+  Future<String> generateNewRecordingPath({
+    String? subDirectory,
+    RecordingType recordingType = RecordingType.rawCamera,
+  }) async {
     final dir = await getMasterRecordingDirectory(subDirectory);
+    final seq = ++_fileSequence;
     final timestamp = DateFormat('yyyyMMdd_HHmmss_SSS').format(DateTime.now());
-    return '${dir.path}/MASTER_REC_$timestamp.mp4';
+    final prefix = recordingType.filePrefix;
+    return '${dir.path}/${prefix}_${timestamp}_$seq.mp4';
   }
 
   /// Sprawdza czy na nośniku pamięci jest wystarczająco dużo miejsca
@@ -255,72 +261,60 @@ class VideoStorageService {
   /// Finalizuje plik nagrania:
   /// Jeśli plik tymczasowy pochodzi z CameraController (XFile),
   /// przenosi go lub kopiuje do dedykowanego katalogu docelowego.
-  /// Dla trybu symulacji tworzy syntetyczny plik o adekwatnym rozmiarze.
+  /// Zgodnie z wymaganiami zapisywany jest wyłącznie pojedynczy, kompletny plik wideo .mp4
+  /// bez żadnych dodatkowych plików bocznych (.meta.json, .srt).
   Future<MasterRecordingResult> finalizeRecording({
     required String? sourcePath,
     required Duration duration,
     bool isSimulated = false,
     String? subDirectory,
     RecordedVideoOrientation recordedOrientation = RecordedVideoOrientation.landscape,
+    RecordingType recordingType = RecordingType.rawCamera,
   }) async {
-    final targetPath = await generateNewRecordingPath(subDirectory);
+    final targetPath = await generateNewRecordingPath(
+      subDirectory: subDirectory,
+      recordingType: recordingType,
+    );
     final relativeDisplay = toRelativeDisplayPath(targetPath);
+
+    String finalVideoPath = targetPath;
+    int finalSizeBytes = 0;
 
     if (sourcePath != null && sourcePath.isNotEmpty && File(sourcePath).existsSync() && !isSimulated) {
       final sourceFile = File(sourcePath);
       try {
-        // Przenosimy lub kopiujemy plik do dedykowanego katalogu
         await sourceFile.copy(targetPath);
         try {
           await sourceFile.delete();
         } catch (_) {}
 
-        // Zapewnij publiczne uprawnienia odczytu (chmod 666) dla MTP i innych aplikacji
         try {
           if (!Platform.isWindows) {
             await Process.run('chmod', ['666', targetPath]);
           }
         } catch (_) {}
+        finalVideoPath = targetPath;
       } catch (_) {
-        // Jeśli kopiowanie się nie powiodło, używamy pliku źródłowego
-        final targetFile = File(sourcePath);
-        final fileSizeBytes = await targetFile.length();
-        return MasterRecordingResult(
-          filePath: sourcePath,
-          displayRelativePath: toRelativeDisplayPath(sourcePath),
-          fileSizeBytes: fileSizeBytes,
-          duration: duration,
-          recordedAt: DateTime.now(),
-          isSimulated: isSimulated,
-          recordedOrientation: recordedOrientation,
-        );
+        finalVideoPath = sourcePath;
       }
-
-      final savedFile = File(targetPath);
-      final fileSizeBytes = await savedFile.length();
-      return MasterRecordingResult(
-        filePath: targetPath,
-        displayRelativePath: relativeDisplay,
-        fileSizeBytes: fileSizeBytes,
-        duration: duration,
-        recordedAt: DateTime.now(),
-        isSimulated: isSimulated,
-        recordedOrientation: recordedOrientation,
-      );
+      final savedFile = File(finalVideoPath);
+      finalSizeBytes = await savedFile.length();
     } else {
       // Tryb symulacyjny (testy jednostkowe / brak fizycznego sensora)
-      // Szacowany rozmiar dla 8 Mbps: ok. 1MB na sekundę
       final simulatedSize = (duration.inSeconds * 1024 * 1024).clamp(1024 * 256, 1024 * 1024 * 500);
-      return MasterRecordingResult(
-        filePath: targetPath,
-        displayRelativePath: relativeDisplay,
-        fileSizeBytes: simulatedSize,
-        duration: duration,
-        recordedAt: DateTime.now(),
-        isSimulated: isSimulated,
-        recordedOrientation: recordedOrientation,
-      );
+      finalSizeBytes = simulatedSize;
     }
+
+    return MasterRecordingResult(
+      filePath: finalVideoPath,
+      displayRelativePath: relativeDisplay,
+      fileSizeBytes: finalSizeBytes,
+      duration: duration,
+      recordedAt: DateTime.now(),
+      isSimulated: isSimulated,
+      recordedOrientation: recordedOrientation,
+      recordingType: recordingType,
+    );
   }
 
   /// Przenosi istniejący plik nagrania do nowej lokalizacji podfolderu
@@ -348,20 +342,14 @@ class VideoStorageService {
           }
         } catch (_) {}
       } catch (_) {
-        // W razie błędu kopiowania pozostajemy przy pierwotnym pliku
         return currentResult;
       }
     }
 
     final newDisplayRelative = toRelativeDisplayPath(newFilePath);
-    return MasterRecordingResult(
+    return currentResult.copyWith(
       filePath: newFilePath,
       displayRelativePath: newDisplayRelative,
-      fileSizeBytes: currentResult.fileSizeBytes,
-      duration: currentResult.duration,
-      recordedAt: currentResult.recordedAt,
-      isSimulated: currentResult.isSimulated,
-      recordedOrientation: currentResult.recordedOrientation,
     );
   }
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:volleylive/core/theme/app_theme.dart';
 import 'package:volleylive/domain/models/camera_config.dart';
+import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/screens/settings/storage_folder_picker_modal.dart';
 
@@ -69,8 +70,92 @@ class VideoSettingsModal extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               const Text(
-                'Dostosuj jakość kodowania, klatkaż oraz przepustowość transmisji na żywo.',
+                'Dostosuj rodzaj nagrywania, jakość kodowania oraz przepustowość transmisji na żywo.',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 18),
+
+              // SEKCJA 0: WYBÓR RODZAJU NAGRYWANIA (RAW vs PROGRAM+SCOREBOARD)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.layers_outlined, color: AppTheme.amberAccent, size: 16),
+                      SizedBox(width: 6),
+                      Text(
+                        'RODZAJ NAGRYWANIA WIDEO (TRYB SINGLE / PRO)',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.amberAccent),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: RecordingType.values.map((type) {
+                      final isSelected = camera.recordingType == type;
+                      return Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 3),
+                          child: InkWell(
+                            onTap: () => camera.setRecordingType(type),
+                            borderRadius: BorderRadius.circular(10),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? AppTheme.amberAccent.withValues(alpha: 0.2)
+                                    : AppTheme.surfaceCard,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: isSelected ? AppTheme.amberAccent : Colors.white12,
+                                  width: isSelected ? 1.8 : 1,
+                                ),
+                              ),
+                              child: Column(
+                                children: [
+                                  Icon(
+                                    type == RecordingType.rawCamera
+                                        ? Icons.videocam_outlined
+                                        : (type == RecordingType.programWithScoreboard
+                                            ? Icons.live_tv
+                                            : Icons.auto_awesome_motion),
+                                    size: 18,
+                                    color: isSelected ? AppTheme.amberAccent : Colors.white60,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    type.shortLabel,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                      color: isSelected ? AppTheme.amberAccent : Colors.white,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    type == RecordingType.rawCamera
+                                        ? 'Czysty sensor'
+                                        : (type == RecordingType.programWithScoreboard
+                                            ? 'Z tablicą wyników'
+                                            : 'RAW + Program'),
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(fontSize: 8.5, color: AppTheme.textSecondary),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    camera.recordingType.description,
+                    style: const TextStyle(fontSize: 10.5, color: Colors.white70, fontStyle: FontStyle.italic),
+                  ),
+                ],
               ),
               const SizedBox(height: 20),
 

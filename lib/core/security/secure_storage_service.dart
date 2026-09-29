@@ -14,7 +14,7 @@ class SecureStorageService {
   static const _uuid = Uuid();
 
   static const _androidOptions = AndroidOptions(
-    encryptedSharedPreferences: true,
+    resetOnError: true,
   );
 
   static const _iosOptions = IOSOptions(

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:volleylive/core/theme/app_theme.dart';
+import 'package:volleylive/domain/models/match_recording_metadata.dart';
 import 'package:volleylive/domain/models/match_session.dart';
 import 'package:volleylive/domain/models/streaming_config.dart';
 
@@ -11,6 +12,7 @@ class ScoreboardOverlay extends StatelessWidget {
   final ServingTeam timeoutTeam;
   final bool showServeIndicator;
   final String? activeSpecialEvent; // np. 'ACE!', 'CHALLENGE'
+  final bool animate;
 
   const ScoreboardOverlay({
     super.key,
@@ -21,6 +23,7 @@ class ScoreboardOverlay extends StatelessWidget {
     this.timeoutTeam = ServingTeam.none,
     this.showServeIndicator = true,
     this.activeSpecialEvent,
+    this.animate = true,
   });
 
   bool get _isDecidingSet {
@@ -113,6 +116,7 @@ class ScoreboardOverlay extends StatelessWidget {
           // TEAM A: NAZWA I SERWIS
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12),
+            constraints: const BoxConstraints(maxWidth: 150),
             alignment: Alignment.center,
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -121,13 +125,17 @@ class ScoreboardOverlay extends StatelessWidget {
                   _buildServeBallIndicator(session.teamAColor),
                   const SizedBox(width: 6),
                 ],
-                Text(
-                  session.teamA.toUpperCase(),
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.8,
-                    color: Colors.white,
+                Flexible(
+                  child: Text(
+                    session.teamA.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.8,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
               ],
@@ -147,6 +155,7 @@ class ScoreboardOverlay extends StatelessWidget {
               score: session.currentSetPointsA,
               color: session.teamAColor,
               fontSize: 22,
+              animate: animate,
             ),
           ),
 
@@ -203,6 +212,7 @@ class ScoreboardOverlay extends StatelessWidget {
               score: session.currentSetPointsB,
               color: session.teamBColor,
               fontSize: 22,
+              animate: animate,
             ),
           ),
 
@@ -212,17 +222,22 @@ class ScoreboardOverlay extends StatelessWidget {
           // TEAM B: NAZWA I SERWIS
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12),
+            constraints: const BoxConstraints(maxWidth: 150),
             alignment: Alignment.center,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  session.teamB.toUpperCase(),
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.8,
-                    color: Colors.white,
+                Flexible(
+                  child: Text(
+                    session.teamB.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.8,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
                 if (isServingB) ...[
@@ -361,6 +376,7 @@ class ScoreboardOverlay extends StatelessWidget {
                       score: session.currentSetPointsA,
                       color: session.teamAColor,
                       fontSize: 26,
+                      animate: animate,
                     ),
                   ],
                 ),
@@ -423,6 +439,7 @@ class ScoreboardOverlay extends StatelessWidget {
                       score: session.currentSetPointsB,
                       color: session.teamBColor,
                       fontSize: 26,
+                      animate: animate,
                     ),
                     if (isServingB) ...[
                       const SizedBox(width: 6),
@@ -476,6 +493,7 @@ class ScoreboardOverlay extends StatelessWidget {
             score: session.currentSetPointsA,
             color: Colors.white,
             fontSize: 16,
+            animate: animate,
           ),
 
           // ROZDZIELACZ & SETY
@@ -492,6 +510,7 @@ class ScoreboardOverlay extends StatelessWidget {
             score: session.currentSetPointsB,
             color: Colors.white,
             fontSize: 16,
+            animate: animate,
           ),
           const SizedBox(width: 6),
           Text(
@@ -602,6 +621,7 @@ class ScoreboardOverlay extends StatelessWidget {
                   score: session.currentSetPointsA,
                   color: const Color(0xFFFFD54F),
                   fontSize: 18,
+                  animate: animate,
                 ),
               ),
 
@@ -625,6 +645,7 @@ class ScoreboardOverlay extends StatelessWidget {
                   score: session.currentSetPointsB,
                   color: const Color(0xFF00E5FF),
                   fontSize: 18,
+                  animate: animate,
                 ),
               ),
 
@@ -692,7 +713,8 @@ class ScoreboardOverlay extends StatelessWidget {
     }
 
     // 2. Aktywne zdarzenie specjalne (np. Ace / Challenge)
-    if (activeSpecialEvent != null && activeSpecialEvent!.isNotEmpty) {
+    if (activeSpecialEvent != null &&
+        ScoreTimelineEntry.isDisplayableSpecialBanner(activeSpecialEvent)) {
       return Container(
         margin: const EdgeInsets.only(top: 6),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
@@ -830,15 +852,32 @@ class _AnimatedScoreDigit extends StatelessWidget {
   final int score;
   final Color color;
   final double fontSize;
+  final bool animate;
 
   const _AnimatedScoreDigit({
     required this.score,
     required this.color,
     required this.fontSize,
+    this.animate = true,
   });
 
   @override
   Widget build(BuildContext context) {
+    final textWidget = Text(
+      '$score',
+      key: ValueKey<int>(score),
+      style: TextStyle(
+        fontSize: fontSize,
+        fontWeight: FontWeight.w900,
+        color: color,
+        height: 1.0,
+      ),
+    );
+
+    if (!animate) {
+      return textWidget;
+    }
+
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 250),
       transitionBuilder: (Widget child, Animation<double> animation) {
@@ -855,16 +894,7 @@ class _AnimatedScoreDigit extends StatelessWidget {
           ),
         );
       },
-      child: Text(
-        '$score',
-        key: ValueKey<int>(score),
-        style: TextStyle(
-          fontSize: fontSize,
-          fontWeight: FontWeight.w900,
-          color: color,
-          height: 1.0,
-        ),
-      ),
+      child: textWidget,
     );
   }
 }

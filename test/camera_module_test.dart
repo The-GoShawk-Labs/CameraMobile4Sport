@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,8 +7,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:volleylive/core/services/video_storage_service.dart';
 import 'package:volleylive/domain/models/camera_config.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
+import 'package:volleylive/domain/models/match_recording_metadata.dart';
+import 'package:volleylive/domain/models/match_session.dart';
 import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/domain/services/recording_service.dart';
+import 'package:volleylive/domain/services/video_overlay_burner_service.dart';
 import 'package:volleylive/domain/services/video_transport_service.dart';
 import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/providers/match_provider.dart';
@@ -139,7 +143,7 @@ void main() {
       expect(result.fileSizeBytes, greaterThan(0));
       expect(result.formattedSize, isNotEmpty);
       expect(result.formattedDuration, isNotEmpty);
-      expect(result.fileName, contains('MASTER_REC_'));
+      expect(result.fileName.contains('RAW_REC_') || result.fileName.contains('MASTER_REC_'), isTrue);
       expect(result.isSimulated, isTrue);
       expect(result.aspectRatioString, equals('16:9'));
       expect(result.isStreamingOptimized, isTrue);
@@ -296,6 +300,88 @@ void main() {
       expect(result3!.filePath != result2.filePath, isTrue);
 
       cameraProvider.dispose();
+    });
+
+    test('VideoOverlayBurnerService builds dynamic timeline filtergraph and burns overlay into MP4', () async {
+      final session = MatchSession(
+        id: 'test-session',
+        createdAt: DateTime.now(),
+        pairingCode: 'TEST-01',
+        teamA: 'PRO-A',
+        teamB: 'PRO-B',
+        currentSetNumber: 1,
+        currentSetPointsA: 24,
+        currentSetPointsB: 23,
+        setsA: 1,
+        setsB: 0,
+        currentServer: ServingTeam.teamA,
+      );
+
+      final timeline = [
+        const ScoreTimelineEntry(
+          offsetMs: 0,
+          eventType: 'start',
+          setNumber: 1,
+          scoreA: 23,
+          scoreB: 23,
+          setsA: 1,
+          setsB: 0,
+          servingTeam: 'A',
+          eventTag: 'POCZĄTEK',
+        ),
+        const ScoreTimelineEntry(
+          offsetMs: 3000,
+          eventType: 'pointAddedA',
+          setNumber: 1,
+          scoreA: 24,
+          scoreB: 23,
+          setsA: 1,
+          setsB: 0,
+          servingTeam: 'A',
+          eventTag: 'SET POINT!',
+        ),
+      ];
+
+      final filtergraph = VideoOverlayBurnerService.buildBurnInFiltergraph(
+        timeline: timeline,
+        fallbackSession: session,
+        totalDuration: const Duration(seconds: 10),
+      );
+
+      expect(filtergraph, contains('drawbox'));
+      expect(filtergraph, contains('drawtext'));
+      expect(filtergraph, contains('PRO-A'));
+      expect(filtergraph, contains('PRO-B'));
+      expect(filtergraph, contains("enable='between(t\\,0.0\\,3.0)'"));
+      expect(filtergraph, contains("enable='between(t\\,3.0\\,10.0)'"));
+      expect(filtergraph, contains('SET POINT!'));
+
+      // Test RecordingService in programWithScoreboard mode
+      final recordingService = RecordingService();
+      await recordingService.startMasterRecording(
+        isSimulation: true,
+        recordingType: RecordingType.programWithScoreboard,
+        initialSession: session,
+      );
+
+      recordingService.recordTimelineEvent(
+        eventType: 'pointAddedA',
+        session: session.copyWith(currentSetPointsA: 25),
+        eventTag: 'POINT!',
+      );
+
+      final result = await recordingService.stopRecording(finalSession: session);
+      expect(result, isNotNull);
+      expect(result!.recordingType, equals(RecordingType.programWithScoreboard));
+      expect(result.filePath.endsWith('.mp4'), isTrue);
+
+      // Sprawdź brak jakichkolwiek zbędnych plików tymczasowych/duplikatów
+      final burnDuplicate = File('${result.filePath}.burned.mp4');
+      final tempDuplicate = File('${result.filePath}.temp_burn.mp4');
+      expect(burnDuplicate.existsSync(), isFalse, reason: 'Nie może istnieć plik ze słowem burned/burn w nazwie');
+      expect(tempDuplicate.existsSync(), isFalse, reason: 'Plik tymczasowy musi zostać usunięty');
+
+      recordingService.dispose();
     });
   });
 

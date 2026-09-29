@@ -1,0 +1,15 @@
+{
+  "model": "qwen-coder-8k",
+  "provider": "ollama",
+  "providers": {
+    "ollama": {
+      "type": "openai",
+      "baseURL": "http://localhost:11434/v1",
+      "apiKey": "ollama"
+    }
+  },
+  "options": {
+    "temperature": 0.1,
+    "max_tokens": 4096
+  }
+}

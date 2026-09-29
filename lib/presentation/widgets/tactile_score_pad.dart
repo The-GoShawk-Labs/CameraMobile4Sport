@@ -240,21 +240,24 @@ class TactileScorePad extends StatelessWidget {
                             borderRadius: BorderRadius.circular(10),
                             border: Border.all(color: AppTheme.amberAccent, width: 1.2),
                           ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.sync_alt_rounded, color: AppTheme.amberAccent, size: 14),
-                              const SizedBox(width: 4),
-                              Text(
-                                session.sport == MatchSport.volleyball ? 'ROTACJA' : 'PIŁKA',
-                                style: const TextStyle(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w900,
-                                  color: AppTheme.amberAccent,
-                                  letterSpacing: 0.5,
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.sync_alt_rounded, color: AppTheme.amberAccent, size: 14),
+                                const SizedBox(width: 4),
+                                Text(
+                                  session.sport == MatchSport.volleyball ? 'ROTACJA' : 'PIŁKA',
+                                  style: const TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w900,
+                                    color: AppTheme.amberAccent,
+                                    letterSpacing: 0.5,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -281,24 +284,27 @@ class TactileScorePad extends StatelessWidget {
                               width: 1.2,
                             ),
                           ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.undo_rounded,
-                                color: canUndo ? AppTheme.redLive : Colors.white24,
-                                size: 14,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                'UNDO',
-                                style: TextStyle(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w900,
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.undo_rounded,
                                   color: canUndo ? AppTheme.redLive : Colors.white24,
+                                  size: 14,
                                 ),
-                              ),
-                            ],
+                                const SizedBox(width: 4),
+                                Text(
+                                  'UNDO',
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w900,
+                                    color: canUndo ? AppTheme.redLive : Colors.white24,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -471,28 +477,32 @@ class TactileScorePad extends StatelessWidget {
           children: [
             Positioned(
               top: 4,
-              left: 6,
-              right: 6,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'TAP: +1',
-                    style: TextStyle(
-                      fontSize: 8,
-                      fontWeight: FontWeight.bold,
-                      color: teamColor.withValues(alpha: 0.8),
+              left: 4,
+              right: 4,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'TAP: +1',
+                      style: TextStyle(
+                        fontSize: 8,
+                        fontWeight: FontWeight.bold,
+                        color: teamColor.withValues(alpha: 0.8),
+                      ),
                     ),
-                  ),
-                  const Text(
-                    'SWIPE ⬇: -1',
-                    style: TextStyle(
-                      fontSize: 8,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white38,
+                    const SizedBox(width: 8),
+                    const Text(
+                      'SWIPE ⬇: -1',
+                      style: TextStyle(
+                        fontSize: 8,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white38,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
             Center(
@@ -552,77 +562,17 @@ class TactileScorePad extends StatelessWidget {
     required int substitutionsUsed,
     required Color teamColor,
   }) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        // PIGUŁKA TIMEOUTÓW
-        InkWell(
-          onTap: () {
-            if (timeoutsUsed < 5 && !isTimeoutActive) {
-              HapticFeedback.selectionClick();
-              isTeamA ? onRequestTimeoutA() : onRequestTimeoutB();
-            }
-          },
-          borderRadius: BorderRadius.circular(8),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
-            decoration: BoxDecoration(
-              color: const Color(0xFF161E2E),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.white12),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('TO: ', style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.white54)),
-                ...List.generate(2, (idx) {
-                  final isUsed = idx < timeoutsUsed;
-                  return Container(
-                    width: 6,
-                    height: 6,
-                    margin: const EdgeInsets.symmetric(horizontal: 1.5),
-                    decoration: BoxDecoration(
-                      color: isUsed ? teamColor : Colors.white24,
-                      shape: BoxShape.circle,
-                    ),
-                  );
-                }),
-              ],
-            ),
-          ),
-        ),
-
-        // FAULE (DLA KOSZYKÓWKI I PIŁKI) LUB ZMIANY (DLA SIATKÓWKI)
-        if (session.sport == MatchSport.basketball || session.sport == MatchSport.football)
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // PIGUŁKA TIMEOUTÓW
           InkWell(
             onTap: () {
-              HapticFeedback.selectionClick();
-              isTeamA ? onAddFoulA() : onAddFoulB();
-            },
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-              decoration: BoxDecoration(
-                color: const Color(0xFF161E2E),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.white12),
-              ),
-              child: Text(
-                'FAULE: $foulsUsed',
-                style: TextStyle(
-                  fontSize: 8,
-                  fontWeight: FontWeight.bold,
-                  color: foulsUsed >= 4 ? AppTheme.redLive : AppTheme.textSecondary,
-                ),
-              ),
-            ),
-          )
-        else
-          InkWell(
-            onTap: () {
-              if (substitutionsUsed < 6) {
+              if (timeoutsUsed < 5 && !isTimeoutActive) {
                 HapticFeedback.selectionClick();
-                isTeamA ? onRequestSubA() : onRequestSubB();
+                isTeamA ? onRequestTimeoutA() : onRequestTimeoutB();
               }
             },
             borderRadius: BorderRadius.circular(8),
@@ -633,17 +583,81 @@ class TactileScorePad extends StatelessWidget {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Colors.white12),
               ),
-              child: Text(
-                'SUB: $substitutionsUsed/6',
-                style: TextStyle(
-                  fontSize: 8,
-                  fontWeight: FontWeight.bold,
-                  color: substitutionsUsed >= 5 ? AppTheme.redLive : AppTheme.textSecondary,
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('TO: ', style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.white54)),
+                  ...List.generate(2, (idx) {
+                    final isUsed = idx < timeoutsUsed;
+                    return Container(
+                      width: 6,
+                      height: 6,
+                      margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                      decoration: BoxDecoration(
+                        color: isUsed ? teamColor : Colors.white24,
+                        shape: BoxShape.circle,
+                      ),
+                    );
+                  }),
+                ],
               ),
             ),
           ),
-      ],
+          const SizedBox(width: 4),
+
+          // FAULE (DLA KOSZYKÓWKI I PIŁKI) LUB ZMIANY (DLA SIATKÓWKI)
+          if (session.sport == MatchSport.basketball || session.sport == MatchSport.football)
+            InkWell(
+              onTap: () {
+                HapticFeedback.selectionClick();
+                isTeamA ? onAddFoulA() : onAddFoulB();
+              },
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF161E2E),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: Text(
+                  'FAULE: $foulsUsed',
+                  style: TextStyle(
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                    color: foulsUsed >= 4 ? AppTheme.redLive : AppTheme.textSecondary,
+                  ),
+                ),
+              ),
+            )
+          else
+            InkWell(
+              onTap: () {
+                if (substitutionsUsed < 6) {
+                  HapticFeedback.selectionClick();
+                  isTeamA ? onRequestSubA() : onRequestSubB();
+                }
+              },
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF161E2E),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white12),
+                ),
+                child: Text(
+                  'SUB: $substitutionsUsed/6',
+                  style: TextStyle(
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                    color: substitutionsUsed >= 5 ? AppTheme.redLive : AppTheme.textSecondary,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 

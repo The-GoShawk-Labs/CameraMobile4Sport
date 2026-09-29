@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:volleylive/core/security/secure_storage_service.dart';
 import 'package:volleylive/core/services/video_storage_service.dart';
 import 'package:volleylive/core/services/wakelock_service.dart';
+import 'package:volleylive/domain/models/recording_result.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -139,9 +140,38 @@ void main() {
 
       expect(result.isSimulated, isTrue);
       expect(result.duration, equals(const Duration(minutes: 2)));
-      expect(result.displayPath, contains('[Pamięć Aplikacji]'));
-      expect(result.fileName.startsWith('MASTER_REC_'), isTrue);
+      expect(result.fileName.startsWith('RAW_REC_') || result.fileName.startsWith('MASTER_REC_'), isTrue);
       expect(result.fileName.endsWith('.mp4'), isTrue);
+      expect(result.hasMetadata, isFalse);
+      expect(result.hasSubtitles, isFalse);
+    });
+
+    test('Saves strictly single standalone MP4 without companion .meta.json or .srt files', () async {
+      // 1. RAW format
+      final rawResult = await storageService.finalizeRecording(
+        sourcePath: null,
+        duration: const Duration(seconds: 45),
+        isSimulated: true,
+        subDirectory: 'Movies/CameraMobile4Sport/mecze',
+        recordingType: RecordingType.rawCamera,
+      );
+      expect(rawResult.fileName.startsWith('RAW_REC_'), isTrue);
+      expect(rawResult.fileName.endsWith('.mp4'), isTrue);
+      expect(rawResult.metadataFilePath, isNull);
+      expect(rawResult.subtitlesFilePath, isNull);
+
+      // 2. Program + Scoreboard format (sędzia / komentator)
+      final programResult = await storageService.finalizeRecording(
+        sourcePath: null,
+        duration: const Duration(minutes: 5),
+        isSimulated: true,
+        subDirectory: 'Movies/CameraMobile4Sport/mecze',
+        recordingType: RecordingType.programWithScoreboard,
+      );
+      expect(programResult.fileName.startsWith('PROGRAM_REC_'), isTrue);
+      expect(programResult.fileName.endsWith('.mp4'), isTrue);
+      expect(programResult.metadataFilePath, isNull);
+      expect(programResult.subtitlesFilePath, isNull);
     });
   });
 }

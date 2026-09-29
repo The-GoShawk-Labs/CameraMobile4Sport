@@ -1,0 +1,14 @@
+﻿{
+    "customAgents":  [
+                         {
+                             "id":  "code_searcher",
+                             "name":  "Codebase Semantic Searcher",
+                             "scope":  "workspace",
+                             "mode":  "asynchronous",
+                             "tools":  [
+                                           "zvec-grep:*"
+                                       ],
+                             "systemPrompt":  "Przeszukuj kod za pomocą zvec-grep i raportuj lokalizacje klas oraz funkcji."
+                         }
+                     ]
+}

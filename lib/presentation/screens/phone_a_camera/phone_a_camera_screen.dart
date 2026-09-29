@@ -15,11 +15,12 @@ import 'package:volleylive/presentation/providers/match_provider.dart';
 import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
 import 'package:volleylive/presentation/providers/streamer_provider.dart';
 import 'package:volleylive/presentation/screens/settings/scoreboard_customizer_modal.dart';
-import 'package:volleylive/presentation/screens/settings/storage_folder_picker_modal.dart';
 import 'package:volleylive/presentation/screens/settings/stream_settings_modal.dart';
 import 'package:volleylive/presentation/screens/settings/video_settings_modal.dart';
+import 'package:volleylive/presentation/services/scoreboard_widget_burner.dart';
 import 'package:volleylive/presentation/widgets/camera_controls_overlay.dart';
 import 'package:volleylive/presentation/widgets/recovery_banner.dart';
+import 'package:volleylive/presentation/widgets/recording_summary_dialog.dart';
 import 'package:volleylive/presentation/widgets/scoreboard_overlay.dart';
 
 class PhoneACameraScreen extends StatefulWidget {
@@ -30,6 +31,8 @@ class PhoneACameraScreen extends StatefulWidget {
 }
 
 class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
+  final GlobalKey _scoreboardBurnerKey = GlobalKey();
+  late final ScoreboardWidgetBurner _scoreboardBurner;
   double _baseZoom = 1.0;
   Offset? _focusTapPosition;
   bool _isFocusIndicatorVisible = false;
@@ -38,14 +41,31 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
   @override
   void initState() {
     super.initState();
+    _scoreboardBurner = ScoreboardWidgetBurner(boundaryKey: _scoreboardBurnerKey);
     // Phone A (tryb statywu "ustaw i zostaw"): zapobieganie wygaszaniu ekranu
     WakelockService.enable();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final camera = context.read<CameraProvider>();
+      final match = context.read<MatchProvider>();
+      final streamer = context.read<StreamerProvider>();
+      camera.attachMatchProvider(
+        match.scoreEventsStream,
+        currentSession: match.session,
+        sessionStream: match.sessionStream,
+      );
+      streamer.attachMatchProvider(
+        match.scoreEventsStream,
+        currentSession: match.session,
+        sessionStream: match.sessionStream,
+      );
       if (!camera.isCameraInitialized && !camera.isSimulationMode) {
         camera.initializeCamera();
       }
+      ScoreboardWidgetBurner.ensureOverlayImageOnDisk(
+        session: match.session,
+        style: streamer.scoreboardStyle,
+      );
     });
   }
 
@@ -121,11 +141,22 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
   Future<void> _onToggleRecording(BuildContext context, CameraProvider camera) async {
     final wasRecording = camera.recordingState == RecordingState.recording;
     final p2p = context.read<P2PConnectionProvider>();
+    final match = context.read<MatchProvider>();
+    final streamer = context.read<StreamerProvider>();
     // Pobierz aktualną orientację urządzenia, aby plik MP4 zachował spójność z widokiem kamery
     final currentOrientation = MediaQuery.of(context).orientation == Orientation.landscape
         ? DeviceOrientation.landscapeLeft
         : DeviceOrientation.portraitUp;
-    await camera.toggleMasterRecording(p2pProvider: p2p, deviceOrientation: currentOrientation);
+    final recordingType = p2p.currentRole == DeviceRole.singlePhoneAllInOne
+        ? camera.recordingType
+        : RecordingType.rawCamera;
+    await camera.toggleMasterRecording(
+      p2pProvider: p2p,
+      deviceOrientation: currentOrientation,
+      matchSession: match.session,
+      recordingType: recordingType,
+      scoreboardStyle: streamer.scoreboardStyle,
+    );
     if (!context.mounted) return;
 
     if (wasRecording) {
@@ -289,400 +320,18 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
   }
 
   void _showRecordingSummaryDialog(BuildContext context, MasterRecordingResult initialResult) {
-    MasterRecordingResult currentResult = initialResult;
-    bool isMoving = false;
-
     showDialog(
       context: context,
-      builder: (ctx) {
-        final screenWidth = MediaQuery.of(ctx).size.width;
-        final screenHeight = MediaQuery.of(ctx).size.height;
-        final isLandscape = screenWidth > screenHeight;
-
-        return StatefulBuilder(
-          builder: (dialogCtx, setDialogState) {
-            Future<void> pickAndMoveFolder() async {
-              final camera = context.read<CameraProvider>();
-              final currentFolder = camera.settings.storageFolder;
-              final chosenFolder = await showModalBottomSheet<String>(
-                context: context,
-                backgroundColor: Colors.transparent,
-                isScrollControlled: true,
-                builder: (_) => StorageFolderPickerModal(
-                  initialFolder: currentFolder,
-                ),
-              );
-
-              if (chosenFolder != null && dialogCtx.mounted) {
-                setDialogState(() => isMoving = true);
-                try {
-                  final updatedResult = await camera.moveLastRecording(chosenFolder);
-                  if (dialogCtx.mounted) {
-                    setDialogState(() {
-                      if (updatedResult != null) {
-                        currentResult = updatedResult;
-                      }
-                      isMoving = false;
-                    });
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        backgroundColor: const Color(0xFF1B2A3D),
-                        behavior: SnackBarBehavior.floating,
-                        content: Row(
-                          children: [
-                            const Icon(Icons.check_circle, color: AppTheme.greenLive, size: 18),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'Przeniesiono plik nagrania do folderu: $chosenFolder',
-                                style: const TextStyle(fontSize: 12, color: Colors.white),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }
-                } catch (e) {
-                  if (dialogCtx.mounted) {
-                    setDialogState(() => isMoving = false);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        backgroundColor: Colors.red.shade900,
-                        content: Text('Błąd podczas przenoszenia nagrania: $e'),
-                      ),
-                    );
-                  }
-                }
-              }
-            }
-
-            return AlertDialog(
-              backgroundColor: const Color(0xFF131C2D),
-              insetPadding: EdgeInsets.symmetric(
-                horizontal: isLandscape ? 32 : 24,
-                vertical: isLandscape ? 16 : 24,
-              ),
-              contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-              actionsPadding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: const BorderSide(color: AppTheme.cyanAccent, width: 1.2),
-              ),
-              title: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: AppTheme.greenLive.withValues(alpha: 0.15),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.check_circle, color: AppTheme.greenLive, size: 20),
-                  ),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Master REC Zapisany',
-                          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                        ),
-                        Text(
-                          'Plik MP4 został bezpiecznie zarchiwizowany na urządzeniu',
-                          style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              content: SizedBox(
-                width: isLandscape ? 620 : double.maxFinite,
-                child: Scrollbar(
-                  thumbVisibility: true,
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Siatka / Kafelki metadanych
-                        if (isLandscape)
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(
-                                flex: 3,
-                                child: Container(
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.surfaceCard,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: Colors.white10),
-                                  ),
-                                  child: _buildSummaryRow(Icons.movie_outlined, 'Plik', currentResult.fileName),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 2,
-                                child: Container(
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.surfaceCard,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: Colors.white10),
-                                  ),
-                                  child: _buildSummaryRow(Icons.timer_outlined, 'Czas nagrania', currentResult.formattedDuration),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 2,
-                                child: Container(
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.surfaceCard,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: Colors.white10),
-                                  ),
-                                  child: _buildSummaryRow(Icons.data_usage, 'Rozmiar', currentResult.formattedSize),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 2,
-                                child: Container(
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.surfaceCard,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: Colors.white10),
-                                  ),
-                                  child: _buildSummaryRow(
-                                    currentResult.recordedOrientation == RecordedVideoOrientation.landscape
-                                        ? Icons.stay_current_landscape
-                                        : Icons.stay_current_portrait,
-                                    'Format i Proporcje',
-                                    '${currentResult.aspectRatioString} (${currentResult.recordedOrientation.label})',
-                                  ),
-                                ),
-                              ),
-                            ],
-                          )
-                        else
-                          Column(
-                            children: [
-                              _buildSummaryRow(Icons.movie_outlined, 'Plik', currentResult.fileName),
-                              const SizedBox(height: 8),
-                              _buildSummaryRow(Icons.timer_outlined, 'Czas nagrania', currentResult.formattedDuration),
-                              const SizedBox(height: 8),
-                              _buildSummaryRow(Icons.data_usage, 'Rozmiar', currentResult.formattedSize),
-                              const SizedBox(height: 8),
-                              _buildSummaryRow(
-                                currentResult.recordedOrientation == RecordedVideoOrientation.landscape
-                                    ? Icons.stay_current_landscape
-                                    : Icons.stay_current_portrait,
-                                'Format i Proporcje',
-                                '${currentResult.aspectRatioString} (${currentResult.recordedOrientation.label})',
-                              ),
-                            ],
-                          ),
-
-                        const SizedBox(height: 10),
-
-                        // INFORMACJA O DOPASOWANIU DO STREAMINGU
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: currentResult.isStreamingOptimized
-                                ? AppTheme.cyanAccent.withValues(alpha: 0.12)
-                                : Colors.deepPurple.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: currentResult.isStreamingOptimized
-                                  ? AppTheme.cyanAccent.withValues(alpha: 0.3)
-                                  : Colors.deepPurpleAccent.withValues(alpha: 0.3),
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                currentResult.isStreamingOptimized ? Icons.live_tv : Icons.smartphone,
-                                size: 16,
-                                color: currentResult.isStreamingOptimized ? AppTheme.cyanAccent : Colors.purpleAccent,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  currentResult.isStreamingOptimized
-                                      ? 'Format 16:9 – optymalny do strumieniowania na platformy wideo (YouTube, Twitch, OBS).'
-                                      : 'Format 9:16 – zoptymalizowany pod odtwarzanie pionowe (Shorts, Reels, TikTok).',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: currentResult.isStreamingOptimized ? Colors.white : Colors.white70,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-
-                        // Ścieżka zapisu + przycisk Zmień
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF0C1320),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.2)),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: _buildSummaryRow(
-                                  Icons.folder_outlined,
-                                  'Ścieżka zapisu',
-                                  currentResult.displayPath,
-                                  isSmall: true,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              TextButton.icon(
-                                onPressed: isMoving ? null : pickAndMoveFolder,
-                                style: TextButton.styleFrom(
-                                  foregroundColor: AppTheme.cyanAccent,
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                  backgroundColor: AppTheme.cyanAccent.withValues(alpha: 0.1),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                                ),
-                                icon: isMoving
-                                    ? const SizedBox(
-                                        width: 12,
-                                        height: 12,
-                                        child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.cyanAccent),
-                                      )
-                                    : const Icon(Icons.drive_file_move_outlined, size: 14),
-                                label: const Text(
-                                  'ZMIEŃ',
-                                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              actions: [
-                Wrap(
-                  alignment: WrapAlignment.end,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    OutlinedButton.icon(
-                      onPressed: isMoving ? null : pickAndMoveFolder,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppTheme.cyanAccent,
-                        side: const BorderSide(color: AppTheme.cyanAccent, width: 1),
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                      icon: const Icon(Icons.folder_open, size: 14),
-                      label: const Text(
-                        'ZMIEŃ FOLDER',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(text: currentResult.filePath));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Skopiowano pełną ścieżkę do schowka'),
-                            duration: Duration(seconds: 2),
-                            behavior: SnackBarBehavior.floating,
-                          ),
-                        );
-                      },
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppTheme.cyanAccent,
-                        side: const BorderSide(color: AppTheme.cyanAccent, width: 1),
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                      icon: const Icon(Icons.copy, size: 14),
-                      label: const Text(
-                        'KOPIUJ ŚCIEŻKĘ',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        // Reset stanu i natychmiastowe rozpoczęcie kolejnego nagrania w tej samej sesji
-                        _onToggleRecording(context, context.read<CameraProvider>());
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppTheme.redLive,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                      icon: const Icon(Icons.fiber_manual_record, size: 14, color: Colors.white),
-                      label: const Text(
-                        'NAGRAJ KOLEJNE',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11),
-                      ),
-                    ),
-                    ElevatedButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppTheme.cyanAccent,
-                        foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                      child: const Text('ZAMKNIJ', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                    ),
-                  ],
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildSummaryRow(IconData icon, String label, String value, {bool isSmall = false}) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, color: AppTheme.cyanAccent, size: 16),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: isSmall ? 10 : 12,
-                  color: Colors.white,
-                  fontWeight: isSmall ? FontWeight.normal : FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
+      builder: (ctx) => RecordingSummaryDialog(
+        initialResult: initialResult,
+        onMoveFolder: (newFolder) async {
+          final camera = context.read<CameraProvider>();
+          return await camera.moveLastRecording(newFolder);
+        },
+        onRecordNext: () {
+          _onToggleRecording(context, context.read<CameraProvider>());
+        },
+      ),
     );
   }
 
@@ -787,6 +436,8 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
           s.setsB != match.session.setsB) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           match.syncFromScorePayload(s);
+          streamer.updateMatchSession(match.session);
+          _scoreboardBurner.captureAndPush(force: true);
         });
       }
     }
@@ -800,6 +451,11 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final isLandscape = constraints.maxWidth > constraints.maxHeight;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              _scoreboardBurner.captureAndPush();
+            }
+          });
 
           return Scaffold(
             backgroundColor: Colors.black,
@@ -856,7 +512,38 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                   ),
                 ),
 
-              // 5. TABLICA WYNIKOWA OVERLAY NA ŻYWO (SCOREBOARD OVERLAY)
+              // DEDYKOWANY WIDGET WYPALANIA DO STRUMIENIA WIDEO (NATIVE STREAM BURNER)
+              // Zapewnia stałe proporcje transmisyjne 16:9 (szerokość 720 logical px) oraz pełne renderowanie
+              // niezależnie od tego, czy operator kamery wyłączył widoczność HUD na swoim ekranie (czysty kadr).
+              Positioned(
+                left: 0,
+                top: 0,
+                child: Opacity(
+                  opacity: 0.001,
+                  child: IgnorePointer(
+                    child: RepaintBoundary(
+                      key: _scoreboardBurnerKey,
+                      child: SizedBox(
+                        width: 720,
+                        child: Center(
+                          child: ScoreboardOverlay(
+                            session: match.session,
+                            style: streamer.scoreboardStyle,
+                            isTimeoutActive: match.isTimeoutActive,
+                            timeoutSeconds: match.timeoutSecondsRemaining,
+                            timeoutTeam: match.timeoutCallingTeam,
+                            showServeIndicator: streamer.showServeIndicator,
+                            activeSpecialEvent: match.activeSpecialEvent,
+                            animate: false,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // 5. TABLICA WYNIKOWA OVERLAY NA ŻYWO NA EKRANIE OPERATORA
               if (camera.settings.isHudVisible)
                 Positioned(
                   top: isLandscape ? 52 : 88,

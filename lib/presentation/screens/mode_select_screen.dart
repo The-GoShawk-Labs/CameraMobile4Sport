@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:volleylive/core/router/app_router.dart';
 import 'package:volleylive/core/theme/app_theme.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
+import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/providers/match_provider.dart';
 import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
@@ -36,14 +37,20 @@ class ModeSelectScreen extends StatelessWidget {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const SportBadge(
-                      label: 'PWA OFFLINE READY',
-                      color: AppTheme.greenLive,
-                      icon: Icons.offline_bolt_outlined,
+                    const Flexible(
+                      child: SportBadge(
+                        label: 'PWA OFFLINE READY',
+                        color: AppTheme.greenLive,
+                        icon: Icons.offline_bolt_outlined,
+                      ),
                     ),
+                    const SizedBox(width: 8),
                     Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         IconButton(
+                          padding: const EdgeInsets.all(4),
+                          constraints: const BoxConstraints(),
                           icon: const Icon(Icons.style_outlined, color: AppTheme.cyanAccent, size: 20),
                           tooltip: 'Scoreboard Studio',
                           onPressed: () => showModalBottomSheet(
@@ -53,7 +60,10 @@ class ModeSelectScreen extends StatelessWidget {
                             builder: (_) => const ScoreboardCustomizerModal(),
                           ),
                         ),
+                        const SizedBox(width: 4),
                         IconButton(
+                          padding: const EdgeInsets.all(4),
+                          constraints: const BoxConstraints(),
                           icon: const Icon(Icons.stream, color: AppTheme.amberAccent, size: 20),
                           tooltip: 'Ustawienia Transmisji RTMP',
                           onPressed: () => showModalBottomSheet(
@@ -123,48 +133,60 @@ class ModeSelectScreen extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Row(
-                              children: [
-                                PulseDot(color: AppTheme.amberAccent, size: 8),
-                                SizedBox(width: 8),
-                                Text(
-                                  'MECZ W TOKU (WZNOWIENIE)',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w900,
-                                    letterSpacing: 0.8,
-                                    color: AppTheme.amberAccent,
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  PulseDot(color: AppTheme.amberAccent, size: 8),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'MECZ W TOKU (WZNOWIENIE)',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w900,
+                                      letterSpacing: 0.8,
+                                      color: AppTheme.amberAccent,
+                                    ),
                                   ),
-                                ),
-                              ],
-                            ),
-                            Text(
-                              'PIN: ${match.session.pairingCode}',
-                              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white60),
-                            ),
-                          ],
+                                ],
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                'PIN: ${match.session.pairingCode}',
+                                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white60),
+                              ),
+                            ],
+                          ),
                         ),
                         const SizedBox(height: 10),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  '${match.session.teamA} vs ${match.session.teamB}',
-                                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.white),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'Set ${match.session.currentSetNumber} • Wynik: ${match.session.currentSetPointsA}:${match.session.currentSetPointsB} (Sety: ${match.session.setsA}-${match.session.setsB})',
-                                  style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
-                                ),
-                              ],
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '${match.session.teamA} vs ${match.session.teamB}',
+                                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.white),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Set ${match.session.currentSetNumber} • Wynik: ${match.session.currentSetPointsA}:${match.session.currentSetPointsB} (Sety: ${match.session.setsA}-${match.session.setsB})',
+                                    style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
                             ),
+                            const SizedBox(width: 8),
                             ElevatedButton(
                               onPressed: () {
                                 p2p.selectRole(DeviceRole.scorerPhoneB);
@@ -193,29 +215,34 @@ class ModeSelectScreen extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Row(
-                              children: [
-                                PulseDot(color: AppTheme.redLive, size: 8),
-                                SizedBox(width: 8),
-                                Text(
-                                  'KAMERA NAGRYWA W TLE (MASTER REC)',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w900,
-                                    letterSpacing: 0.8,
-                                    color: AppTheme.redLive,
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  PulseDot(color: AppTheme.redLive, size: 8),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'KAMERA NAGRYWA W TLE (MASTER REC)',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w900,
+                                      letterSpacing: 0.8,
+                                      color: AppTheme.redLive,
+                                    ),
                                   ),
-                                ),
-                              ],
-                            ),
-                            Text(
-                              _formatDuration(camera.masterRecDuration),
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-                            ),
-                          ],
+                                ],
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                _formatDuration(camera.masterRecDuration),
+                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                              ),
+                            ],
+                          ),
                         ),
                         const SizedBox(height: 10),
                         Row(
@@ -331,6 +358,161 @@ class ModeSelectScreen extends StatelessWidget {
                         'Uruchom kamerę na statywie, wyjdź z widoku bez przerywania nagrywania i sędziuj lub wprowadzaj statystyki na tym samym telefonie!',
                         style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, height: 1.3),
                       ),
+                      const SizedBox(height: 12),
+
+                      // SELEKTOR FORMATU NAGRYWANIA (PROGRAM / RAW / DUAL)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.black26,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Colors.white12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Row(
+                              children: [
+                                Icon(Icons.videocam_outlined, size: 14, color: AppTheme.cyanAccent),
+                                SizedBox(width: 6),
+                                Text(
+                                  'TRYB NAGRYWANIA LOKALNEGO:',
+                                  style: TextStyle(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: 0.8,
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: InkWell(
+                                    onTap: () => camera.setRecordingType(RecordingType.programWithScoreboard),
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(vertical: 6),
+                                      decoration: BoxDecoration(
+                                        color: camera.recordingType == RecordingType.programWithScoreboard
+                                            ? AppTheme.cyanAccent.withValues(alpha: 0.3)
+                                            : Colors.white10,
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(
+                                          color: camera.recordingType == RecordingType.programWithScoreboard
+                                              ? AppTheme.cyanAccent
+                                              : Colors.transparent,
+                                        ),
+                                      ),
+                                      child: Column(
+                                        children: [
+                                          Text(
+                                            'PROGRAM',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w900,
+                                              color: camera.recordingType == RecordingType.programWithScoreboard
+                                                  ? AppTheme.cyanAccent
+                                                  : Colors.white60,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          const Text(
+                                            '+ Tablica (MP4)',
+                                            style: TextStyle(fontSize: 8, color: Colors.white38),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: InkWell(
+                                    onTap: () => camera.setRecordingType(RecordingType.rawCamera),
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(vertical: 6),
+                                      decoration: BoxDecoration(
+                                        color: camera.recordingType == RecordingType.rawCamera
+                                            ? AppTheme.cyanAccent.withValues(alpha: 0.3)
+                                            : Colors.white10,
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(
+                                          color: camera.recordingType == RecordingType.rawCamera
+                                              ? AppTheme.cyanAccent
+                                              : Colors.transparent,
+                                        ),
+                                      ),
+                                      child: Column(
+                                        children: [
+                                          Text(
+                                            'RAW CZYSTA',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w900,
+                                              color: camera.recordingType == RecordingType.rawCamera
+                                                  ? AppTheme.cyanAccent
+                                                  : Colors.white60,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          const Text(
+                                            'Bez nakładek',
+                                            style: TextStyle(fontSize: 8, color: Colors.white38),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: InkWell(
+                                    onTap: () => camera.setRecordingType(RecordingType.dual),
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(vertical: 6),
+                                      decoration: BoxDecoration(
+                                        color: camera.recordingType == RecordingType.dual
+                                            ? AppTheme.cyanAccent.withValues(alpha: 0.3)
+                                            : Colors.white10,
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(
+                                          color: camera.recordingType == RecordingType.dual
+                                              ? AppTheme.cyanAccent
+                                              : Colors.transparent,
+                                        ),
+                                      ),
+                                      child: Column(
+                                        children: [
+                                          Text(
+                                            'DUAL',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w900,
+                                              color: camera.recordingType == RecordingType.dual
+                                                  ? AppTheme.cyanAccent
+                                                  : Colors.white60,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          const Text(
+                                            'Oba formaty',
+                                            style: TextStyle(fontSize: 8, color: Colors.white38),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
                       const SizedBox(height: 14),
                       // SZYBKA SEKWENCJA KROKÓW 1-2-3
                       Row(
@@ -425,6 +607,8 @@ class ModeSelectScreen extends StatelessWidget {
                           color: AppTheme.textSecondary,
                           letterSpacing: 0.5,
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                     Expanded(child: Divider(color: Colors.white24)),
@@ -485,13 +669,29 @@ class ModeSelectScreen extends StatelessWidget {
 
                 // DIAGNOSTYKA SYSTEMU
                 GlassCard(
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
-                      _buildDiagnosticItem(Icons.wifi_tethering, 'P2P WebRTC', 'Local Wi-Fi', AppTheme.greenLive),
-                      _buildDiagnosticItem(Icons.videocam_outlined, 'Format', '1080p 60fps', AppTheme.cyanAccent),
-                      _buildDiagnosticItem(Icons.save_outlined, 'Master REC', 'Offline Safe', AppTheme.amberAccent),
+                      Expanded(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: _buildDiagnosticItem(Icons.wifi_tethering, 'P2P WebRTC', 'Local Wi-Fi', AppTheme.greenLive),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: _buildDiagnosticItem(Icons.videocam_outlined, 'Format', '1080p 60fps', AppTheme.cyanAccent),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: _buildDiagnosticItem(Icons.save_outlined, 'Master REC', 'Offline Safe', AppTheme.amberAccent),
+                        ),
+                      ),
                     ],
                   ),
                 ),
