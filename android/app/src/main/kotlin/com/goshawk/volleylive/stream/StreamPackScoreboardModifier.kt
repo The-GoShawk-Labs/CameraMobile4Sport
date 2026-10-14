@@ -22,6 +22,20 @@ class StreamPackScoreboardModifier(
 ) {
     private var program = 0
     private var textureId = -1
+    private var posHandle = -1
+    private var texHandle = -1
+    private var samplerHandle = -1
+    private var allocatedTexWidth = 0
+    private var allocatedTexHeight = 0
+    private var scissorX = 0
+    private var scissorY = 0
+    private var scissorW = 0
+    private var scissorH = 0
+
+    // Telemetria wydajnościowa klatki
+    private var frameCount = 0L
+    private var totalFrameTimeNs = 0L
+    private var lastFpsLogTimeNs = System.nanoTime()
 
     @Volatile
     private var customBitmap: Bitmap? = null
@@ -73,6 +87,10 @@ class StreamPackScoreboardModifier(
 
     fun initGL() {
         program = createProgram(vertexShaderCode, fragmentShaderCode)
+        posHandle = GLES20.glGetAttribLocation(program, "aPosition")
+        texHandle = GLES20.glGetAttribLocation(program, "aTexCoord")
+        samplerHandle = GLES20.glGetUniformLocation(program, "uTexture")
+
         val textures = IntArray(1)
         GLES20.glGenTextures(1, textures, 0)
         textureId = textures[0]
@@ -85,6 +103,8 @@ class StreamPackScoreboardModifier(
 
         renderer.renderIfDirty()
         GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, renderer.bitmap, 0)
+        allocatedTexWidth = renderer.bitmap.width
+        allocatedTexHeight = renderer.bitmap.height
         updateQuadGeometry(renderer.overlayWidth.toFloat() / renderer.overlayHeight.toFloat(), halfW = 0.58f, top = 0.94f)
     }
 
@@ -92,7 +112,9 @@ class StreamPackScoreboardModifier(
      * Resets any cached custom bitmap so that native Canvas rendering takes over immediately.
      */
     fun invalidateCustomBitmap() {
+        val old = customBitmap
         customBitmap = null
+        old?.recycle()
         isCustomBitmapDirty.set(false)
     }
 
@@ -103,7 +125,9 @@ class StreamPackScoreboardModifier(
         try {
             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             if (bmp != null) {
+                val old = customBitmap
                 customBitmap = bmp
+                old?.recycle()
                 isCustomBitmapDirty.set(true)
             }
         } catch (e: Exception) {
@@ -115,6 +139,11 @@ class StreamPackScoreboardModifier(
         val frameAspect = frameWidth.toFloat() / frameHeight.toFloat()
         val ndcHeight = (halfW * 2.0f) * (1.0f / frameAspect) / aspectRatio
         val bottom = top - ndcHeight
+
+        scissorX = (((-halfW + 1.0f) / 2.0f) * frameWidth).toInt().coerceAtLeast(0)
+        scissorW = ((halfW * 2.0f / 2.0f) * frameWidth).toInt().coerceAtMost(frameWidth)
+        scissorY = (((bottom + 1.0f) / 2.0f) * frameHeight).toInt().coerceAtLeast(0)
+        scissorH = (((top - bottom) / 2.0f) * frameHeight).toInt().coerceAtMost(frameHeight)
 
         quadVertices[0] = -halfW; quadVertices[1] = bottom
         quadVertices[3] =  halfW; quadVertices[4] = bottom
@@ -131,16 +160,29 @@ class StreamPackScoreboardModifier(
      */
     fun onDrawFrame() {
         if (textureId == -1) return
+        val startNs = System.nanoTime()
 
         // 1. If custom Flutter ScoreboardOverlay arrived, upload to GPU and scale quad
         if (isCustomBitmapDirty.compareAndSet(true, false) && customBitmap != null) {
             val bmp = customBitmap!!
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
-            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0)
+            if (bmp.width == allocatedTexWidth && bmp.height == allocatedTexHeight) {
+                GLUtils.texSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, bmp)
+            } else {
+                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0)
+                allocatedTexWidth = bmp.width
+                allocatedTexHeight = bmp.height
+            }
             updateQuadGeometry(bmp.width.toFloat() / bmp.height.toFloat(), halfW = 0.55f, top = 0.94f)
         } else if (renderer.renderIfDirty()) {
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
-            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, renderer.bitmap, 0)
+            if (renderer.bitmap.width == allocatedTexWidth && renderer.bitmap.height == allocatedTexHeight) {
+                GLUtils.texSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, renderer.bitmap)
+            } else {
+                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, renderer.bitmap, 0)
+                allocatedTexWidth = renderer.bitmap.width
+                allocatedTexHeight = renderer.bitmap.height
+            }
             updateQuadGeometry(renderer.overlayWidth.toFloat() / renderer.overlayHeight.toFloat(), halfW = 0.58f, top = 0.94f)
         }
 
@@ -148,11 +190,12 @@ class StreamPackScoreboardModifier(
         GLES20.glEnable(GLES20.GL_BLEND)
         GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
 
+        // Ograniczenie rasteryzacji wyłącznie do prostokąta tablicy (ROI)
+        GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
+        GLES20.glScissor(scissorX, scissorY, scissorW, scissorH)
+
         // 3. Render Quad
         GLES20.glUseProgram(program)
-        val posHandle = GLES20.glGetAttribLocation(program, "aPosition")
-        val texHandle = GLES20.glGetAttribLocation(program, "aTexCoord")
-        val samplerHandle = GLES20.glGetUniformLocation(program, "uTexture")
 
         GLES20.glEnableVertexAttribArray(posHandle)
         GLES20.glVertexAttribPointer(posHandle, 3, GLES20.GL_FLOAT, false, 0, vertexBuffer)
@@ -168,7 +211,22 @@ class StreamPackScoreboardModifier(
 
         GLES20.glDisableVertexAttribArray(posHandle)
         GLES20.glDisableVertexAttribArray(texHandle)
+        GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
         GLES20.glDisable(GLES20.GL_BLEND)
+
+        // Telemetria co 60 klatek
+        val durationNs = System.nanoTime() - startNs
+        totalFrameTimeNs += durationNs
+        frameCount++
+        if (frameCount % 60 == 0L) {
+            val now = System.nanoTime()
+            val elapsedSec = (now - lastFpsLogTimeNs) / 1_000_000_000.0
+            val realFps = if (elapsedSec > 0) 60.0 / elapsedSec else 0.0
+            val avgProcessMs = (totalFrameTimeNs / 60.0) / 1_000_000.0
+            android.util.Log.i("ScoreboardModifier", "ROI Perf: avgFrameProcessTimeMs=%.2f ms, inputFps=%.1f".format(avgProcessMs, realFps))
+            totalFrameTimeNs = 0L
+            lastFpsLogTimeNs = now
+        }
     }
 
     fun release() {
@@ -180,6 +238,8 @@ class StreamPackScoreboardModifier(
             GLES20.glDeleteProgram(program)
             program = 0
         }
+        allocatedTexWidth = 0
+        allocatedTexHeight = 0
         customBitmap?.recycle()
         customBitmap = null
     }

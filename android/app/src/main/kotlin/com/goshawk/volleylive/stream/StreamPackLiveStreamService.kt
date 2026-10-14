@@ -6,6 +6,10 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
+import android.util.Range
 import android.os.Bundle
 import android.util.Log
 import android.util.Size
@@ -113,8 +117,9 @@ class StreamPackLiveStreamService(private val context: Context) {
             streamer?.release()
         } catch (_: Exception) {}
 
-        streamer = CameraRtmpLiveStreamer(context = context).apply {
+        streamer = CameraRtmpLiveStreamer(context = context, enableAudio = true).apply {
             configure(audioConfig, videoConfig)
+            settings.audio.isMuted = false
 
             // Setup connection event callbacks
             onConnectionListener = object : OnConnectionListener {
@@ -122,6 +127,7 @@ class StreamPackLiveStreamService(private val context: Context) {
                     Log.i(TAG, "RTMP/RTMPS handshake & publish SUCCESS")
                     retryCount = 0
                     isStreamingActive = true
+                    enforceCameraFixedFps()
                     startTelemetryLoop()
                     onStatusEvent?.invoke(
                         "CONNECTED",
@@ -289,6 +295,31 @@ class StreamPackLiveStreamService(private val context: Context) {
             val endpoint = if (cleanUrl.endsWith("/")) "$cleanUrl$streamKey" else "$cleanUrl/$streamKey"
             Log.i(TAG, "Starting RTMP/RTMPS stream to endpoint: $cleanUrl")
             streamer?.startStream(endpoint)
+            enforceCameraFixedFps()
+        }
+    }
+
+    private fun enforceCameraFixedFps(fps: Int = currentFps) {
+        try {
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+            val cameraId = streamer?.camera ?: "0"
+            val chars = cameraManager?.getCameraCharacteristics(cameraId)
+            val availableRanges = chars?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            val targetRange = availableRanges?.firstOrNull { it.lower == fps && it.upper == fps }
+                ?: availableRanges?.firstOrNull { it.lower == fps * 1000 && it.upper == fps * 1000 }
+                ?: availableRanges?.filter { it.upper == fps || it.upper == fps * 1000 }?.maxByOrNull { it.lower }
+                ?: Range(fps, fps)
+
+            val cameraSettings = streamer?.settings?.camera
+            if (cameraSettings != null) {
+                val field = cameraSettings.javaClass.getDeclaredField("cameraController").apply { isAccessible = true }
+                val controller = field.get(cameraSettings)
+                val method = controller.javaClass.getMethod("setRepeatingSetting", CaptureRequest.Key::class.java, Any::class.java)
+                method.invoke(controller, CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, targetRange)
+                Log.i(TAG, "Enforced Camera2 fixed AE target FPS range: $targetRange")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not enforce AE target FPS range: ${e.message}")
         }
     }
 

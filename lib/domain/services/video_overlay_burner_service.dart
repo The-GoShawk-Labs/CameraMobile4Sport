@@ -633,12 +633,13 @@ class VideoOverlayBurnerService {
       final scaleFilter =
           'scale=$width:$height:force_original_aspect_ratio=decrease,pad=$width:$height:(ow-iw)/2:(oh-ih)/2,setsar=1';
       final command =
-          '-re -i "$inputSource" -i "$overlayPath" '
-          '-filter_complex "[0:v]$scaleFilter[scaledv];[scaledv][1:v] overlay=(W-w)/2:40 [outv]" '
+          '-fflags +genpts+nobuffer -thread_queue_size 1024 -re -i "$inputSource" -thread_queue_size 1024 -i "$overlayPath" '
+          '-filter_complex "[0:v]$scaleFilter,setpts=PTS-STARTPTS[scaledv];[scaledv][1:v] overlay=(W-w)/2:40 [outv]" '
           '-map "[outv]" -map 0:a? '
           '-c:v libx264 -preset ultrafast -tune zerolatency '
           '-b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${(bitrateKbps ~/ 2)}k -pix_fmt yuv420p '
-          '-g ${fps * 2} -c:a aac -b:a 128k -f flv "$fullRtmpEndpoint"';
+          '-g ${fps * 2} -c:a aac -b:a 128k -af "aresample=async=1000:min_hard_comp=0.1:first_pts=0" '
+          '-max_interleave_delta 100000 -avoid_negative_ts make_zero -flvflags no_duration_filesize -f flv "$fullRtmpEndpoint"';
 
       _isStreamingActive = true;
       _activeStreamSession = await FFmpegKit.executeAsync(command, (
@@ -729,14 +730,16 @@ class VideoOverlayBurnerService {
   }) {
     final scaleFilter =
         'scale=$width:$height:force_original_aspect_ratio=decrease,pad=$width:$height:(ow-iw)/2:(oh-ih)/2,setsar=1';
-    return '-f image2pipe -vcodec png -framerate $fps -i "$inputUrl" '
-        '-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=$audioSampleRate '
-        '-vf "$scaleFilter" '
-        '-map 0:v -map 1:a '
+    return '-fflags +genpts+nobuffer '
+        '-thread_queue_size 1024 -use_wallclock_as_timestamps 1 -f image2pipe -vcodec png -framerate $fps -i "$inputUrl" '
+        '-thread_queue_size 1024 -f lavfi -re -i anullsrc=channel_layout=stereo:sample_rate=$audioSampleRate '
+        '-filter_complex "[0:v]$scaleFilter,setpts=PTS-STARTPTS[outv];[1:a]asetpts=PTS-STARTPTS,aresample=async=1000:min_hard_comp=0.1:first_pts=0[outa]" '
+        '-map "[outv]" -map "[outa]" '
         '-c:v libx264 -preset veryfast -tune zerolatency '
         '-c:a aac -b:a 128k '
         '-b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${(bitrateKbps ~/ 2)}k '
-        '-pix_fmt yuv420p -g ${fps * 2} -f flv "$endpoint"';
+        '-pix_fmt yuv420p -g ${fps * 2} '
+        '-max_interleave_delta 100000 -avoid_negative_ts make_zero -flvflags no_duration_filesize -f flv "$endpoint"';
   }
 
   /// Zatrzymuje aktywną transmisję RTMP w tle

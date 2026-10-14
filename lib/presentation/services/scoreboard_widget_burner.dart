@@ -60,14 +60,13 @@ class ScoreboardWidgetBurner {
         byteData.lengthInBytes,
       );
 
-      latestCapturedPngBytes = bytes;
-      _persistLatestImageToDisk(bytes);
-
       // Skip redundant transfers if pixels are identical, unless force is requested
       if (!force && _lastBytes != null && _areByteArraysEqual(_lastBytes!, bytes)) {
         return false;
       }
       _lastBytes = bytes;
+      latestCapturedPngBytes = bytes;
+      _persistLatestImageToDiskAsync(bytes);
 
       await bridge.updateScoreboardOverlayBitmap(
         bytes: bytes,
@@ -84,12 +83,12 @@ class ScoreboardWidgetBurner {
     }
   }
 
-  static void _persistLatestImageToDisk(Uint8List bytes) {
+  static void _persistLatestImageToDiskAsync(Uint8List bytes) {
     try {
       final tempDir = Directory.systemTemp;
       final file = File('${tempDir.path}/scoreboard_overlay_latest.png');
-      file.writeAsBytesSync(bytes, flush: true);
       latestOverlayImagePath = file.path;
+      file.writeAsBytes(bytes).catchError((_) => file);
     } catch (_) {}
   }
 
