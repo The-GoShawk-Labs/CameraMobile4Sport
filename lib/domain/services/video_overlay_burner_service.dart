@@ -638,7 +638,7 @@ class VideoOverlayBurnerService {
           '-map "[outv]" -map 0:a? '
           '-c:v libx264 -preset ultrafast -tune zerolatency '
           '-b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${(bitrateKbps ~/ 2)}k -pix_fmt yuv420p '
-          '-g ${fps * 2} -c:a aac -b:a 128k -af "aresample=async=1000:min_hard_comp=0.1:first_pts=0" '
+          '-g ${fps * 2} -c:a aac -b:a 128k '
           '-max_interleave_delta 100000 -avoid_negative_ts make_zero -flvflags no_duration_filesize -f flv "$fullRtmpEndpoint"';
 
       _isStreamingActive = true;
@@ -679,7 +679,7 @@ class VideoOverlayBurnerService {
     int height = 1080,
     int bitrateKbps = 4500,
     int fps = 30,
-    int audioSampleRate = 44100,
+    int audioSampleRate = 48000,
   }) async {
     try {
       await stopLiveBroadcast();
@@ -726,15 +726,15 @@ class VideoOverlayBurnerService {
     int height = 1080,
     int bitrateKbps = 4500,
     int fps = 30,
-    int audioSampleRate = 44100,
+    int audioSampleRate = 48000,
   }) {
     final scaleFilter =
-        'scale=$width:$height:force_original_aspect_ratio=decrease,pad=$width:$height:(ow-iw)/2:(oh-ih)/2,setsar=1';
+        'scale=$width:$height:force_original_aspect_ratio=decrease,pad=$width:$height:(ow-iw)/2:(oh-ih)/2,format=yuv420p';
     return '-fflags +genpts+nobuffer '
-        '-thread_queue_size 1024 -use_wallclock_as_timestamps 1 -f image2pipe -vcodec png -framerate $fps -i "$inputUrl" '
+        '-thread_queue_size 1024 -f image2pipe -vcodec png -framerate $fps -i "$inputUrl" '
         '-thread_queue_size 1024 -f lavfi -re -i anullsrc=channel_layout=stereo:sample_rate=$audioSampleRate '
-        '-filter_complex "[0:v]$scaleFilter,setpts=PTS-STARTPTS[outv];[1:a]asetpts=PTS-STARTPTS,aresample=async=1000:min_hard_comp=0.1:first_pts=0[outa]" '
-        '-map "[outv]" -map "[outa]" '
+        '-filter_complex "[0:v]format=rgba,$scaleFilter,setpts=N/($fps*TB)[v];[1:a]asetpts=N/($audioSampleRate*TB)[a]" '
+        '-map [v] -map [a] '
         '-c:v libx264 -preset veryfast -tune zerolatency '
         '-c:a aac -b:a 128k '
         '-b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${(bitrateKbps ~/ 2)}k '

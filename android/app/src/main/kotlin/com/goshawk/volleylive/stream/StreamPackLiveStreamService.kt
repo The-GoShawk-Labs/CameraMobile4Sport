@@ -301,24 +301,30 @@ class StreamPackLiveStreamService(private val context: Context) {
 
     private fun enforceCameraFixedFps(fps: Int = currentFps) {
         try {
-            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager ?: return
             val cameraId = streamer?.camera ?: "0"
-            val chars = cameraManager?.getCameraCharacteristics(cameraId)
-            val availableRanges = chars?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-            val targetRange = availableRanges?.firstOrNull { it.lower == fps && it.upper == fps }
-                ?: availableRanges?.firstOrNull { it.lower == fps * 1000 && it.upper == fps * 1000 }
-                ?: availableRanges?.filter { it.upper == fps || it.upper == fps * 1000 }?.maxByOrNull { it.lower }
-                ?: Range(fps, fps)
+            val chars = cameraManager.getCameraCharacteristics(cameraId)
+            val availableRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            if (availableRanges.isNullOrEmpty()) return
 
-            val cameraSettings = streamer?.settings?.camera
-            if (cameraSettings != null) {
-                val field = cameraSettings.javaClass.getDeclaredField("cameraController").apply { isAccessible = true }
-                val controller = field.get(cameraSettings)
-                val method = controller.javaClass.getMethod("setRepeatingSetting", CaptureRequest.Key::class.java, Any::class.java)
-                method.invoke(controller, CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, targetRange)
-                Log.i(TAG, "Enforced Camera2 fixed AE target FPS range: $targetRange")
+            // Wybierz wyłącznie zakres faktycznie obecny w availableRanges, aby uniknąć IllegalArgumentException
+            val targetRange = availableRanges.firstOrNull { it.lower == fps && it.upper == fps }
+                ?: availableRanges.firstOrNull { it.lower == fps * 1000 && it.upper == fps * 1000 }
+                ?: availableRanges.filter { it.upper == fps || it.upper == fps * 1000 }.maxByOrNull { it.lower }
+                ?: availableRanges.filter { it.upper >= fps }.minByOrNull { it.upper }
+
+            if (targetRange == null || !availableRanges.contains(targetRange)) {
+                Log.w(TAG, "No supported AE target FPS range found for $fps fps in available ranges")
+                return
             }
-        } catch (e: Exception) {
+
+            val cameraSettings = streamer?.settings?.camera ?: return
+            val field = cameraSettings.javaClass.getDeclaredField("cameraController").apply { isAccessible = true }
+            val controller = field.get(cameraSettings) ?: return
+            val method = controller.javaClass.getMethod("setRepeatingSetting", CaptureRequest.Key::class.java, Any::class.java)
+            method.invoke(controller, CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, targetRange)
+            Log.i(TAG, "Enforced Camera2 AE target FPS range: $targetRange")
+        } catch (e: Throwable) {
             Log.w(TAG, "Could not enforce AE target FPS range: ${e.message}")
         }
     }
