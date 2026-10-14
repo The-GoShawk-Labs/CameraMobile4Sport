@@ -38,6 +38,8 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
   bool _isFocusIndicatorVisible = false;
   Timer? _focusIndicatorTimer;
 
+  VoidCallback? _p2pListener;
+
   @override
   void initState() {
     super.initState();
@@ -45,10 +47,13 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
     // Phone A (tryb statywu "ustaw i zostaw"): zapobieganie wygaszaniu ekranu
     WakelockService.enable();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
       final camera = context.read<CameraProvider>();
       final match = context.read<MatchProvider>();
       final streamer = context.read<StreamerProvider>();
+      final p2p = context.read<P2PConnectionProvider>();
+
       camera.attachMatchProvider(
         match.scoreEventsStream,
         currentSession: match.session,
@@ -60,12 +65,34 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
         sessionStream: match.sessionStream,
       );
       if (!camera.isCameraInitialized && !camera.isSimulationMode) {
-        camera.initializeCamera();
+        await camera.initializeCamera();
       }
       ScoreboardWidgetBurner.ensureOverlayImageOnDisk(
         session: match.session,
         style: streamer.scoreboardStyle,
       );
+
+      // Automatyczny start transmisji live po sparowaniu urządzenia Phone A
+      if (p2p.currentRole == DeviceRole.cameraPhoneA || !p2p.isSinglePhoneMode) {
+        if (!camera.isLiveTransmitting) {
+          debugPrint('[PhoneACameraScreen] Auto-starting live transmission for paired scorer...');
+          await camera.startLiveTransmission(p2pProvider: p2p);
+        }
+      }
+
+      // Reaktywny nasłuch na wypadek późniejszego nawiązania połączenia przez P2P
+      _p2pListener = () {
+        if (!mounted) return;
+        final currentP2p = context.read<P2PConnectionProvider>();
+        final currentCamera = context.read<CameraProvider>();
+        if (currentP2p.connectionState == CameraConnectionState.connected &&
+            (currentP2p.currentRole == DeviceRole.cameraPhoneA || !currentP2p.isSinglePhoneMode) &&
+            !currentCamera.isLiveTransmitting) {
+          debugPrint('[PhoneACameraScreen] Dynamic P2P connection detected. Auto-starting live transmission...');
+          currentCamera.startLiveTransmission(p2pProvider: currentP2p);
+        }
+      };
+      p2p.addListener(_p2pListener!);
     });
   }
 
@@ -73,6 +100,11 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
   void dispose() {
     WakelockService.disable();
     _focusIndicatorTimer?.cancel();
+    if (_p2pListener != null) {
+      try {
+        context.read<P2PConnectionProvider>().removeListener(_p2pListener!);
+      } catch (_) {}
+    }
     super.dispose();
   }
 
@@ -108,6 +140,16 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
 
   Future<void> _onToggleLiveTransmission(BuildContext context, CameraProvider camera) async {
     final p2p = context.read<P2PConnectionProvider>();
+    if (p2p.isSinglePhoneMode) {
+      showModalBottomSheet(
+        context: context,
+        backgroundColor: Colors.transparent,
+        isScrollControlled: true,
+        useRootNavigator: true,
+        builder: (_) => const StreamSettingsModal(),
+      );
+      return;
+    }
     await camera.toggleLiveTransmission(p2pProvider: p2p);
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -1509,6 +1551,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                     context: context,
                     backgroundColor: Colors.transparent,
                     isScrollControlled: true,
+                    useRootNavigator: true,
                     builder: (_) => const StreamSettingsModal(),
                   ),
                 ),
@@ -1666,6 +1709,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
               context: context,
               backgroundColor: Colors.transparent,
               isScrollControlled: true,
+              useRootNavigator: true,
               builder: (_) => const StreamSettingsModal(),
             ),
           ),

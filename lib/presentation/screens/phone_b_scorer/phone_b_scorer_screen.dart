@@ -15,6 +15,7 @@ import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/providers/match_provider.dart';
 import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
 import 'package:volleylive/presentation/providers/streamer_provider.dart';
+import 'package:volleylive/domain/services/video_overlay_burner_service.dart';
 import 'package:volleylive/presentation/services/program_widget_capture.dart';
 import 'package:volleylive/presentation/screens/settings/camera_connection_modal.dart';
 import 'package:volleylive/presentation/screens/settings/scoreboard_customizer_modal.dart';
@@ -39,20 +40,72 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
   AnimationController? _unlockHoldController;
   bool _showLocalCameraPreview = true;
   bool _isControlsHidden = false;
+  Timer? _streamTimeoutTimer;
+  StreamerProvider? _streamerRef;
+  StreamingState _previousStreamingState = StreamingState.idle;
   late final ProgramWidgetCapture _programCapture = ProgramWidgetCapture(
     boundaryKey: GlobalKey(),
     isSourceAvailable: _isProgramVideoSourceAvailable,
   );
 
+  void _onStreamerStateChanged() {
+    if (!mounted || _streamerRef == null) return;
+    final current = _streamerRef!.streamingState;
+    if (_previousStreamingState != current) {
+      if (current == StreamingState.failed &&
+          _previousStreamingState != StreamingState.failed) {
+        if (_streamerRef!.programRecState != RecordingState.recording) {
+          _programCapture.stop();
+        }
+        final errorMsg = _streamerRef!.streamingErrorMessage ??
+            'Transmisja na żywo została przerwana. Sprawdź połączenie z serwerem RTMP i sieć Wi-Fi.';
+        _showRecordingErrorNotice(context, errorMsg);
+      }
+      _previousStreamingState = current;
+    }
+  }
+
+  void _evaluateStreamTimeout(P2PConnectionProvider p2p) {
+    final shouldMonitor = !p2p.isSinglePhoneMode &&
+        p2p.connectionState == CameraConnectionState.connected &&
+        p2p.currentVideoFrame == null;
+
+    if (!shouldMonitor) {
+      if (_streamTimeoutTimer != null) {
+        _streamTimeoutTimer?.cancel();
+        _streamTimeoutTimer = null;
+      }
+      if (p2p.hasStreamTimeout) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            context.read<P2PConnectionProvider>().clearStreamTimeout();
+          }
+        });
+      }
+      return;
+    }
+
+    if (_streamTimeoutTimer == null && !p2p.hasStreamTimeout) {
+      _streamTimeoutTimer = Timer(const Duration(seconds: 12), () {
+        if (!mounted) return;
+        final currentP2p = context.read<P2PConnectionProvider>();
+        if (currentP2p.connectionState == CameraConnectionState.connected &&
+            currentP2p.currentVideoFrame == null) {
+          currentP2p.setStreamTimeout(true);
+        }
+      });
+    }
+  }
+
   bool _isProgramVideoSourceAvailable() {
     if (!mounted) return false;
     final p2p = context.read<P2PConnectionProvider>();
     if (p2p.currentRole == DeviceRole.singlePhoneAllInOne) {
-      final camera = context.read<CameraProvider>();
-      return camera.isCameraInitialized && !camera.isSimulationMode;
+      return true;
     }
-    return p2p.connectionState == CameraConnectionState.connected &&
-        p2p.hasFreshVideoFrame;
+    return (p2p.connectionState == CameraConnectionState.connected &&
+            p2p.hasFreshVideoFrame) ||
+        context.read<CameraProvider>().isCameraInitialized;
   }
 
   Future<Uint8List?> _ensureProgramCapture({
@@ -88,21 +141,46 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
 
     final p2p = context.read<P2PConnectionProvider>();
     final camera = context.read<CameraProvider>();
-    final hasVideo = p2p.currentRole == DeviceRole.singlePhoneAllInOne
-        ? camera.isCameraInitialized && !camera.isSimulationMode
-        : p2p.hasFreshVideoFrame &&
-              p2p.connectionState == CameraConnectionState.connected;
-    if (!hasVideo) {
-      _showRecordingErrorNotice(
-        context,
-        'Brak aktywnego obrazu z kamery. Połącz lub uruchom kamerę przed rozpoczęciem LIVE.',
-      );
+
+    // JEŚLI TRANSMISJA NIE JEST SKONFIGUROWANA, NATYCHMIAST OTWÓRZ OKNO KONFIGURACJI RTMP
+    final config = streamer.config;
+    final streamKey = await config.resolveEffectiveStreamKey();
+    if (config.serverUrl.trim().isEmpty || (config.requiresStreamKey && streamKey.isEmpty)) {
+      if (context.mounted) {
+        _openStreamSettings(context);
+      }
       return;
     }
+
+    if (!context.mounted) return;
+
+    final hasVideo = p2p.currentRole == DeviceRole.singlePhoneAllInOne
+        ? (camera.isCameraInitialized || camera.isSimulationMode)
+        : (p2p.hasFreshVideoFrame &&
+              p2p.connectionState == CameraConnectionState.connected) ||
+              camera.isCameraInitialized;
+    if (!hasVideo) {
+      if (p2p.currentRole == DeviceRole.singlePhoneAllInOne) {
+        await camera.initializeCamera();
+      }
+      final retryHasVideo = p2p.currentRole == DeviceRole.singlePhoneAllInOne
+          ? (camera.isCameraInitialized || camera.isSimulationMode)
+          : (p2p.hasFreshVideoFrame &&
+                p2p.connectionState == CameraConnectionState.connected) ||
+                camera.isCameraInitialized;
+      if (!retryHasVideo) {
+        if (!context.mounted) return;
+        _showRecordingErrorNotice(
+          context,
+          'Brak aktywnego obrazu z kamery. Połącz lub uruchom kamerę przed rozpoczęciem LIVE.',
+        );
+        return;
+      }
+    }
     final initialFrame = await _ensureProgramCapture(
-      framesPerSecond: camera.settings.fps.fps,
-      targetWidth: camera.settings.resolution.width,
-      targetHeight: camera.settings.resolution.height,
+      framesPerSecond: streamer.config.fps > 0 ? streamer.config.fps : 30,
+      targetWidth: streamer.config.width,
+      targetHeight: streamer.config.height,
     );
     if (initialFrame == null) {
       if (!context.mounted) return;
@@ -118,10 +196,18 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
       initialProgramFrame: initialFrame,
     );
     if (!started && context.mounted) {
+      final errorMsg = streamer.streamingErrorMessage ??
+          'Nie udało się rozpocząć strumieniowania skomponowanego obrazu. Sprawdź ustawienia RTMP i klucz transmisji.';
       _showRecordingErrorNotice(
         context,
-        'Nie udało się rozpocząć strumieniowania skomponowanego obrazu. Sprawdź ustawienia RTMP i klucz transmisji.',
+        errorMsg,
       );
+      if (errorMsg.toLowerCase().contains('klucz') ||
+          errorMsg.toLowerCase().contains('rtmp') ||
+          errorMsg.toLowerCase().contains('ustawieniach') ||
+          errorMsg.toLowerCase().contains('brak adresu')) {
+        _openStreamSettings(context);
+      }
       if (streamer.programRecState != RecordingState.recording) {
         _programCapture.stop();
       }
@@ -165,31 +251,53 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
     );
   }
 
-  void _showRecordingErrorNotice(BuildContext context, String error) {
-    if (error.toLowerCase().contains('przestrzeni') ||
-        error.toLowerCase().contains('folderu') ||
-        error.toLowerCase().contains('uprawnień')) {
-      _showStorageIssueDialog(context, error);
+  void _showRecordingErrorNotice(BuildContext context, String rawError) {
+    if (rawError.toLowerCase().contains('przestrzeni') ||
+        rawError.toLowerCase().contains('folderu') ||
+        rawError.toLowerCase().contains('uprawnień')) {
+      _showStorageIssueDialog(context, rawError);
       return;
     }
+
+    final isStreamIssue = rawError.toLowerCase().contains('klucz') ||
+        rawError.toLowerCase().contains('rtmp') ||
+        rawError.toLowerCase().contains('transmisj') ||
+        rawError.toLowerCase().contains('połączeni') ||
+        rawError.toLowerCase().contains('odrzucono') ||
+        rawError.toLowerCase().contains('serwer');
+
+    // Oczyszczamy nagłówki kompilatora FFmpeg jeśli trafiły do błędu
+    final displayError = VideoOverlayBurnerService.extractCleanFfmpegError(rawError);
 
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: const Color(0xFFE53935),
         behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 4),
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        duration: const Duration(seconds: 6),
+        action: isStreamIssue
+            ? SnackBarAction(
+                label: 'USTAWIENIA',
+                textColor: Colors.white,
+                onPressed: () => _openStreamSettings(context),
+              )
+            : null,
         content: Row(
           children: [
             const Icon(Icons.error_outline, color: Colors.white, size: 20),
-            const SizedBox(width: 8),
+            const SizedBox(width: 10),
             Expanded(
               child: Text(
-                error,
+                displayError,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   fontSize: 12,
                   color: Colors.white,
                   fontWeight: FontWeight.bold,
+                  height: 1.25,
                 ),
               ),
             ),
@@ -454,7 +562,23 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final streamer = context.read<StreamerProvider>();
+    if (_streamerRef != streamer) {
+      _streamerRef?.removeListener(_onStreamerStateChanged);
+      _streamerRef = streamer;
+      _previousStreamingState = streamer.streamingState;
+      _streamerRef?.addListener(_onStreamerStateChanged);
+    }
+  }
+
+  @override
   void dispose() {
+    _streamerRef?.removeListener(_onStreamerStateChanged);
+    _streamerRef = null;
+    _streamTimeoutTimer?.cancel();
+    _streamTimeoutTimer = null;
     WakelockService.disable();
     _unlockHoldController?.dispose();
     unawaited(_programCapture.dispose());
@@ -467,6 +591,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
     final streamer = context.watch<StreamerProvider>();
     final camera = context.watch<CameraProvider>();
     final p2p = context.watch<P2PConnectionProvider>();
+    _evaluateStreamTimeout(p2p);
     final isOutdoor = match.isOutdoorModeEnabled;
     final isPortrait =
         MediaQuery.of(context).orientation == Orientation.portrait;
@@ -829,6 +954,22 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
 
                 const Spacer(),
 
+                // PRZYCISK USTAWIENIA TRANSMISJI RTMP / YOUTUBE
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 26,
+                    minHeight: 28,
+                  ),
+                  icon: const Icon(
+                    Icons.stream,
+                    size: 16,
+                    color: AppTheme.amberAccent,
+                  ),
+                  tooltip: 'Ustawienia Transmisji RTMP / YouTube Live',
+                  onPressed: () => _openStreamSettings(context),
+                ),
+
                 // PRZYCISK PARAMETRY WIDEO
                 IconButton(
                   padding: EdgeInsets.zero,
@@ -922,6 +1063,10 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                             streamer,
                             context.read<MatchProvider>(),
                           );
+                        },
+                        onLongPress: () {
+                          HapticFeedback.mediumImpact();
+                          _openStreamSettings(context);
                         },
                         borderRadius: BorderRadius.circular(8),
                         child: Container(
@@ -1304,6 +1449,10 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                           context.read<MatchProvider>(),
                         );
                       },
+                      onLongPress: () {
+                        HapticFeedback.mediumImpact();
+                        _openStreamSettings(context);
+                      },
                       borderRadius: BorderRadius.circular(6),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
@@ -1565,6 +1714,22 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                     ),
 
                     const SizedBox(width: 6),
+
+                    // PRZYCISK USTAWIENIA TRANSMISJI RTMP / YOUTUBE
+                    IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 28,
+                        minHeight: 28,
+                      ),
+                      icon: const Icon(
+                        Icons.stream,
+                        size: 16,
+                        color: AppTheme.amberAccent,
+                      ),
+                      tooltip: 'Ustawienia Transmisji RTMP / YouTube Live',
+                      onPressed: () => _openStreamSettings(context),
+                    ),
 
                     // PRZYCISK PARAMETRY WIDEO
                     IconButton(
@@ -1915,85 +2080,218 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
             isHighContrast: isOutdoor,
           ),
         ),
-        Center(
-          child: Container(
-            width: 140,
-            height: 90,
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.white10, width: 1),
-              borderRadius: BorderRadius.circular(8),
+        if (p2p.hasStreamTimeout)
+          Center(
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 20),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xF0141A26),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: AppTheme.amberAccent,
+                  width: 1.5,
+                ),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black87,
+                    blurRadius: 16,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.warning_amber_rounded,
+                        color: AppTheme.amberAccent,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          'TIMEOUT STRUMIENIA (${p2p.remoteDeviceName.toUpperCase()})',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w900,
+                            color: AppTheme.amberAccent,
+                            letterSpacing: 0.5,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Kamera ${p2p.remoteDeviceName} jest połączona, lecz nie przesyła obrazu (>12s).\n'
+                    'Sprawdź, czy na telefonie kamery jest włączony podgląd meczu.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Colors.white70,
+                      height: 1.3,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: () {
+                          HapticFeedback.selectionClick();
+                          _streamTimeoutTimer?.cancel();
+                          _streamTimeoutTimer = null;
+                          p2p.clearStreamTimeout();
+                          p2p.sendSyncState();
+                        },
+                        icon: const Icon(Icons.refresh, size: 14),
+                        label: const Text('PONÓW'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.amberAccent,
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 6,
+                          ),
+                          textStyle: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        onPressed: () => _openCameraConnectionModal(context),
+                        icon: const Icon(
+                          Icons.settings_remote,
+                          size: 14,
+                          color: AppTheme.cyanAccent,
+                        ),
+                        label: const Text(
+                          'PAROWANIE',
+                          style: TextStyle(
+                            color: AppTheme.cyanAccent,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: AppTheme.cyanAccent),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-            child: Stack(
-              children: [
-                Align(
-                  alignment: Alignment.topLeft,
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      border: Border(
-                        top: BorderSide(color: AppTheme.cyanAccent, width: 2),
-                        left: BorderSide(color: AppTheme.cyanAccent, width: 2),
-                      ),
-                    ),
-                  ),
-                ),
-                Align(
-                  alignment: Alignment.topRight,
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      border: Border(
-                        top: BorderSide(color: AppTheme.cyanAccent, width: 2),
-                        right: BorderSide(color: AppTheme.cyanAccent, width: 2),
-                      ),
-                    ),
-                  ),
-                ),
-                Align(
-                  alignment: Alignment.bottomLeft,
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      border: Border(
-                        bottom: BorderSide(
-                          color: AppTheme.cyanAccent,
-                          width: 2,
+          )
+        else
+          Center(
+            child: Container(
+              width: 140,
+              height: 90,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white10, width: 1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Stack(
+                children: [
+                  Align(
+                    alignment: Alignment.topLeft,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        border: Border(
+                          top: BorderSide(color: AppTheme.cyanAccent, width: 2),
+                          left: BorderSide(color: AppTheme.cyanAccent, width: 2),
                         ),
-                        left: BorderSide(color: AppTheme.cyanAccent, width: 2),
                       ),
                     ),
                   ),
-                ),
-                Align(
-                  alignment: Alignment.bottomRight,
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      border: Border(
-                        bottom: BorderSide(
-                          color: AppTheme.cyanAccent,
-                          width: 2,
+                  Align(
+                    alignment: Alignment.topRight,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        border: Border(
+                          top: BorderSide(color: AppTheme.cyanAccent, width: 2),
+                          right: BorderSide(color: AppTheme.cyanAccent, width: 2),
                         ),
-                        right: BorderSide(color: AppTheme.cyanAccent, width: 2),
                       ),
                     ),
                   ),
-                ),
-                Center(
-                  child: Icon(
-                    match.session.sport.icon,
-                    size: 28,
-                    color: Colors.white.withValues(alpha: 0.15),
+                  Align(
+                    alignment: Alignment.bottomLeft,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(
+                            color: AppTheme.cyanAccent,
+                            width: 2,
+                          ),
+                          left: BorderSide(color: AppTheme.cyanAccent, width: 2),
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-              ],
+                  Align(
+                    alignment: Alignment.bottomRight,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(
+                            color: AppTheme.cyanAccent,
+                            width: 2,
+                          ),
+                          right: BorderSide(color: AppTheme.cyanAccent, width: 2),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          match.session.sport.icon,
+                          size: 24,
+                          color: Colors.white.withValues(alpha: 0.15),
+                        ),
+                        if (p2p.connectionState ==
+                                CameraConnectionState.connected &&
+                            !p2p.isSinglePhoneMode) ...[
+                          const SizedBox(height: 4),
+                          const SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              color: AppTheme.cyanAccent,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
       ],
     );
   }
@@ -2020,7 +2318,13 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
             children: [
               // PODPIS STATUSU STRUMIENIA WIDEO I PARAMETRÓW KODERA
               InkWell(
-                onTap: () => _openVideoSettings(context),
+                onTap: () {
+                  if (p2p.hasStreamTimeout) {
+                    _openCameraConnectionModal(context);
+                  } else {
+                    _openVideoSettings(context);
+                  }
+                },
                 borderRadius: BorderRadius.circular(6),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
@@ -2036,7 +2340,15 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                         decoration: BoxDecoration(
                           color: camera.isRecording
                               ? AppTheme.redLive
-                              : AppTheme.greenLive,
+                              : (p2p.hasStreamTimeout
+                                    ? AppTheme.amberAccent
+                                    : (p2p.currentVideoFrame != null
+                                          ? AppTheme.greenLive
+                                          : (p2p.connectionState ==
+                                                    CameraConnectionState
+                                                        .connected
+                                                ? AppTheme.cyanAccent
+                                                : Colors.white30))),
                           shape: BoxShape.circle,
                         ),
                       ),
@@ -2044,27 +2356,41 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                       Text(
                         isPortrait
                             ? (p2p.currentVideoFrame != null
-                                  ? 'LIVE FEED • REALME (${p2p.healthMetrics.latencyMs}ms • P2P)'
-                                  : (camera.isCameraInitialized
-                                        ? 'LOKALNA KAMERA (${camera.settings.resolution.label} ${camera.settings.fps.label})'
-                                        : 'OCZEKIWANIE NA KAMERĘ REALME...'))
+                                  ? 'LIVE FEED • ${p2p.remoteDeviceName.toUpperCase()} (${p2p.healthMetrics.latencyMs}ms • P2P)'
+                                  : (p2p.hasStreamTimeout
+                                        ? 'TIMEOUT STRUMIENIA (${p2p.remoteDeviceName.toUpperCase()})'
+                                        : (camera.isCameraInitialized
+                                              ? 'LOKALNA KAMERA (${camera.settings.resolution.label} ${camera.settings.fps.label})'
+                                              : (p2p.connectionState ==
+                                                        CameraConnectionState
+                                                            .connected
+                                                    ? 'OCZEKIWANIE NA STRUMIEŃ ${p2p.remoteDeviceName.toUpperCase()}...'
+                                                    : 'OCZEKIWANIE NA KAMERĘ ${p2p.remoteDeviceName.toUpperCase()}...'))))
                             : (p2p.currentVideoFrame != null
                                   ? 'P2P ${p2p.healthMetrics.latencyMs}ms'
-                                  : (camera.isCameraInitialized
-                                        ? 'KAMERA ${camera.settings.fps.label}'
-                                        : 'BRAK ŹRÓDŁA')),
-                        style: const TextStyle(
+                                  : (p2p.hasStreamTimeout
+                                        ? 'TIMEOUT'
+                                        : (camera.isCameraInitialized
+                                              ? 'KAMERA ${camera.settings.fps.label}'
+                                              : 'BRAK ŹRÓDŁA'))),
+                        style: TextStyle(
                           fontSize: 9,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 0.5,
-                          color: Colors.white70,
+                          color: p2p.hasStreamTimeout
+                              ? AppTheme.amberAccent
+                              : Colors.white70,
                         ),
                       ),
                       const SizedBox(width: 4),
-                      const Icon(
-                        Icons.settings,
+                      Icon(
+                        p2p.hasStreamTimeout
+                            ? Icons.warning_amber_rounded
+                            : Icons.settings,
                         size: 10,
-                        color: AppTheme.cyanAccent,
+                        color: p2p.hasStreamTimeout
+                            ? AppTheme.amberAccent
+                            : AppTheme.cyanAccent,
                       ),
                     ],
                   ),
@@ -2947,6 +3273,8 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      useRootNavigator: true,
       builder: (_) => const StreamSettingsModal(),
     );
   }

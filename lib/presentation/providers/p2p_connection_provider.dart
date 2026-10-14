@@ -21,6 +21,13 @@ class P2PConnectionProvider extends ChangeNotifier {
 
   Uint8List? _currentVideoFrame;
   DateTime? _lastVideoFrameAt;
+  bool _isCameraConnected = false;
+  bool _isCameraStreaming = false;
+  String _remoteDeviceName = 'Realme';
+  DateTime? _streamStartedAt;
+  String? _streamStatusError;
+  bool _hasStreamTimeout = false;
+
   ScoreUpdatePayload? _lastReceivedScore;
   CameraControlPayload? _lastReceivedCameraControl;
   bool? _lastReceivedRecorderTrigger;
@@ -50,6 +57,12 @@ class P2PConnectionProvider extends ChangeNotifier {
   bool get isHost => _isHost;
   int get clientCount => _clientCount;
   Uint8List? get currentVideoFrame => _currentVideoFrame;
+  bool get isCameraConnected => _isCameraConnected;
+  bool get isCameraStreaming => _isCameraStreaming;
+  String get remoteDeviceName => _remoteDeviceName;
+  DateTime? get streamStartedAt => _streamStartedAt;
+  String? get streamStatusError => _streamStatusError;
+  bool get hasStreamTimeout => _hasStreamTimeout;
   bool get hasFreshVideoFrame =>
       _currentVideoFrame != null &&
       _lastVideoFrameAt != null &&
@@ -70,12 +83,19 @@ class P2PConnectionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setRemoteDeviceName(String name) {
+    _remoteDeviceName = name;
+    notifyListeners();
+  }
+
   void _initListeners() {
     _stateSub = _repository.connectionStateStream.listen((state) {
       _connectionState = state;
       if (state != CameraConnectionState.connected) {
         _currentVideoFrame = null;
         _lastVideoFrameAt = null;
+        _isCameraConnected = false;
+        _isCameraStreaming = false;
       }
       notifyListeners();
     });
@@ -92,6 +112,10 @@ class P2PConnectionProvider extends ChangeNotifier {
     _videoSub = _repository.incomingVideoFrames.listen((frame) {
       _currentVideoFrame = frame;
       _lastVideoFrameAt = DateTime.now();
+      _isCameraConnected = true;
+      _isCameraStreaming = true;
+      _hasStreamTimeout = false;
+      _streamStatusError = null;
       notifyListeners();
     });
 
@@ -103,6 +127,40 @@ class P2PConnectionProvider extends ChangeNotifier {
 
   void _handleIncomingMessage(P2PMessage msg) {
     switch (msg.type) {
+      case P2PMessageType.syncState:
+        final status = msg.payload['status'] as String? ?? '';
+        if (status == 'connected' || status == 'ready' || status == 'streaming') {
+          _isCameraConnected = true;
+          if (status == 'streaming') _isCameraStreaming = true;
+          final dev = msg.payload['deviceName'] as String?;
+          if (dev != null && dev.isNotEmpty) _remoteDeviceName = dev;
+          debugPrint('[P2P Handshake] syncState acknowledged from ${msg.senderRole} (device: $_remoteDeviceName, status: $status)');
+          notifyListeners();
+        }
+        break;
+      case P2PMessageType.cameraConnected:
+        _isCameraConnected = true;
+        final dev = msg.payload['deviceName'] as String?;
+        if (dev != null && dev.isNotEmpty) _remoteDeviceName = dev;
+        debugPrint('[P2P Handshake] cameraConnected received from ${msg.senderRole} (device: $_remoteDeviceName)');
+        notifyListeners();
+        break;
+      case P2PMessageType.streamStarted:
+        _isCameraConnected = true;
+        _isCameraStreaming = true;
+        _streamStartedAt = DateTime.now();
+        _hasStreamTimeout = false;
+        _streamStatusError = null;
+        final dev = msg.payload['deviceName'] as String?;
+        if (dev != null && dev.isNotEmpty) _remoteDeviceName = dev;
+        debugPrint('[P2P Handshake] streamStarted acknowledged from $_remoteDeviceName (${msg.payload['width']}x${msg.payload['height']} @ ${msg.payload['fps']}fps)');
+        notifyListeners();
+        break;
+      case P2PMessageType.streamStopped:
+        _isCameraStreaming = false;
+        debugPrint('[P2P Handshake] streamStopped from $_remoteDeviceName: ${msg.payload['reason']}');
+        notifyListeners();
+        break;
       case P2PMessageType.scoreUpdate:
         _lastReceivedScore = ScoreUpdatePayload.fromMap(msg.payload);
         notifyListeners();
@@ -203,11 +261,95 @@ class P2PConnectionProvider extends ChangeNotifier {
     );
   }
 
+  /// Wysłanie żądania synchronizacji stanu sesji (lub odświeżenia połączenia)
+  Future<void> sendSyncState([Map<String, dynamic>? statePayload]) async {
+    final msg = P2PMessage.syncState(
+      senderRole: _currentRole.idName,
+      state: statePayload ?? {'timestamp': DateTime.now().millisecondsSinceEpoch},
+    );
+    await _repository.sendCustomCommand(msg);
+  }
+
+  /// Wysłanie powiadomienia o połączeniu kamery (handshake z Phone A do Phone B)
+  Future<void> notifyCameraConnected({
+    required String deviceName,
+    Map<String, dynamic>? metadata,
+  }) async {
+    _isCameraConnected = true;
+    _remoteDeviceName = deviceName;
+    final msg = P2PMessage.cameraConnected(
+      senderRole: _currentRole.idName,
+      deviceName: deviceName,
+      metadata: metadata,
+    );
+    await _repository.sendCustomCommand(msg);
+    notifyListeners();
+  }
+
+  /// Wysłanie powiadomienia o rozpoczęciu publikowania strumienia wideo (Phone A -> Phone B)
+  Future<void> notifyStreamStarted({
+    required String deviceName,
+    int? width,
+    int? height,
+    int? fps,
+  }) async {
+    _isCameraConnected = true;
+    _isCameraStreaming = true;
+    _streamStartedAt = DateTime.now();
+    _remoteDeviceName = deviceName;
+    _hasStreamTimeout = false;
+    _streamStatusError = null;
+    final msg = P2PMessage.streamStarted(
+      senderRole: _currentRole.idName,
+      deviceName: deviceName,
+      width: width,
+      height: height,
+      fps: fps,
+    );
+    await _repository.sendCustomCommand(msg);
+    notifyListeners();
+  }
+
+  /// Wysłanie powiadomienia o zatrzymaniu strumienia
+  Future<void> notifyStreamStopped({String? reason}) async {
+    _isCameraStreaming = false;
+    final msg = P2PMessage.streamStopped(
+      senderRole: _currentRole.idName,
+      reason: reason,
+    );
+    await _repository.sendCustomCommand(msg);
+    notifyListeners();
+  }
+
+  /// Oznacza timeout oczekiwania na strumień z kamery
+  void setStreamTimeout(bool timedOut, [String? errorMessage]) {
+    _hasStreamTimeout = timedOut;
+    _streamStatusError = errorMessage;
+    notifyListeners();
+  }
+
+  /// Resetuje flagę timeoutu
+  void clearStreamTimeout() {
+    _hasStreamTimeout = false;
+    _streamStatusError = null;
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  void setConnectionStateForTesting(CameraConnectionState state) {
+    _connectionState = state;
+    notifyListeners();
+  }
+
   Future<void> disconnect() async {
     await _repository.disconnect();
     _isHost = false;
     _currentVideoFrame = null;
     _lastVideoFrameAt = null;
+    _isCameraConnected = false;
+    _isCameraStreaming = false;
+    _hasStreamTimeout = false;
+    _streamStatusError = null;
     _clientCount = 0;
     _connectionState = CameraConnectionState.disconnected;
     notifyListeners();

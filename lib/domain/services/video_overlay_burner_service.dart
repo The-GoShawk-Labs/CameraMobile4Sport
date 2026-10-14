@@ -20,6 +20,86 @@ class VideoOverlayBurnerService {
 
   bool get isStreamingActive => _isStreamingActive;
   String? get lastErrorMessage => _lastErrorMessage;
+  void Function(String errorMessage)? onStreamError;
+
+  /// Bezpiecznie buduje punkt końcowy RTMP, zapobiegając dodawaniu ukośników na końcu
+  /// jeśli klucz transmisji jest pusty (np. dla własnego serwera RTMP lub ffplay).
+  static String buildRtmpEndpoint(String rtmpUrl, String streamKey) {
+    final cleanUrl = rtmpUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final cleanKey = streamKey.trim();
+    if (cleanKey.isEmpty) {
+      return cleanUrl;
+    }
+    return '$cleanUrl/$cleanKey';
+  }
+
+  /// Ekstraktuje czytelny, zwięzły komunikat błędu z surowych logów konsolowych FFmpeg,
+  /// eliminując nagłówki kompilatora (clang, ndk, opcje builda), które zaciemniają błąd w UI.
+  static String extractCleanFfmpegError(String? rawLogs) {
+    if (rawLogs == null || rawLogs.trim().isEmpty) {
+      return 'Błąd uruchomienia strumienia RTMP.';
+    }
+
+    final lower = rawLogs.toLowerCase();
+    if (lower.contains('connection refused') || lower.contains('econnrefused')) {
+      return 'Odrzucono połączenie (Connection refused). Upewnij się, że odbiornik (ffplay) jest włączony na komputerze i nasłuchuje na porcie 1935.';
+    }
+    if (lower.contains('connection timed out') || lower.contains('etimedout')) {
+      return 'Przekroczono limit czasu połączenia (Timeout). Sprawdź adres IP w ustawieniach i zezwól na port 1935 w Zaporze Windows.';
+    }
+    if (lower.contains('no route to host') || lower.contains('enetunreach')) {
+      return 'Brak połączenia z adresem serwera. Upewnij się, że telefon i komputer są w tej samej sieci Wi-Fi.';
+    }
+    if (lower.contains('broken pipe') || lower.contains('connection reset')) {
+      return 'Połączenie ze strumieniem zostało przerwane przez serwer docelowy (Reset / Broken pipe).';
+    }
+    if (lower.contains('403') || lower.contains('authentication failed') || lower.contains('unauthorized')) {
+      return 'Błąd autoryzacji serwera RTMP (Błąd 403). Sprawdź poprawność klucza transmisji.';
+    }
+    if (lower.contains('404') || lower.contains('not found')) {
+      return 'Serwer RTMP odrzucił ścieżkę aplikacji (Błąd 404). Sprawdź punkt końcowy.';
+    }
+
+    final lines = rawLogs.split('\n').map((l) => l.trim()).toList();
+    for (int i = lines.length - 1; i >= 0; i--) {
+      final line = lines[i];
+      if (line.isEmpty) continue;
+      if (line.startsWith('ffmpeg version') ||
+          line.startsWith('built with') ||
+          line.startsWith('configuration:') ||
+          line.startsWith('libav') ||
+          line.startsWith('Metadata:') ||
+          line.startsWith('Duration:') ||
+          line.startsWith('Stream #') ||
+          line.startsWith('Press [q]')) {
+        continue;
+      }
+      final lLower = line.toLowerCase();
+      if (lLower.contains('error') ||
+          lLower.contains('failed') ||
+          lLower.contains('cannot') ||
+          lLower.contains('unable') ||
+          lLower.contains('invalid') ||
+          lLower.contains('refused')) {
+        final cleaned = line.replaceAll(RegExp(r'^\[[^\]]+\]\s*'), '');
+        return cleaned.length > 150 ? '${cleaned.substring(0, 147)}...' : cleaned;
+      }
+    }
+
+    for (int i = lines.length - 1; i >= 0; i--) {
+      final line = lines[i];
+      if (line.isEmpty) continue;
+      if (!line.startsWith('ffmpeg version') &&
+          !line.startsWith('built with') &&
+          !line.startsWith('configuration:') &&
+          !line.startsWith('libav')) {
+        final cleaned = line.replaceAll(RegExp(r'^\[[^\]]+\]\s*'), '');
+        return cleaned.length > 150 ? '${cleaned.substring(0, 147)}...' : cleaned;
+      }
+    }
+
+    return 'Błąd transmisji RTMP. Sprawdź adres punktu końcowego i łączność z odbiornikiem.';
+  }
 
   /// Bezpiecznie escapuje tekst dla filtra drawtext w FFmpeg:
   /// ':' -> '\:'
@@ -532,15 +612,15 @@ class VideoOverlayBurnerService {
     required List<ScoreTimelineEntry> timeline,
     required MatchSession matchSession,
     ScoreboardThemeStyle style = ScoreboardThemeStyle.tvProBroadcast,
+    int width = 1920,
+    int height = 1080,
     int bitrateKbps = 4500,
     int fps = 30,
   }) async {
     try {
       await stopLiveBroadcast();
 
-      final fullRtmpEndpoint = rtmpUrl.endsWith('/')
-          ? '$rtmpUrl$streamKey'
-          : '$rtmpUrl/$streamKey';
+      final fullRtmpEndpoint = buildRtmpEndpoint(rtmpUrl, streamKey);
 
       final overlayPath = await ScoreboardWidgetBurner.ensureOverlayImageOnDisk(
         session: matchSession,
@@ -550,9 +630,11 @@ class VideoOverlayBurnerService {
         style: style,
       );
 
+      final scaleFilter =
+          'scale=$width:$height:force_original_aspect_ratio=decrease,pad=$width:$height:(ow-iw)/2:(oh-ih)/2,setsar=1';
       final command =
           '-re -i "$inputSource" -i "$overlayPath" '
-          '-filter_complex "[0:v][1:v] overlay=(W-w)/2:40 [outv]" '
+          '-filter_complex "[0:v]$scaleFilter[scaledv];[scaledv][1:v] overlay=(W-w)/2:40 [outv]" '
           '-map "[outv]" -map 0:a? '
           '-c:v libx264 -preset ultrafast -tune zerolatency '
           '-b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${(bitrateKbps ~/ 2)}k -pix_fmt yuv420p '
@@ -562,37 +644,54 @@ class VideoOverlayBurnerService {
       _activeStreamSession = await FFmpegKit.executeAsync(command, (
         session,
       ) async {
+        final rc = await session.getReturnCode();
         _isStreamingActive = false;
         _activeStreamSession = null;
+        if (!ReturnCode.isSuccess(rc)) {
+          final logs = await session.getAllLogsAsString();
+          debugPrint('VideoOverlayBurner: Live overlay stream failed with code $rc:\n$logs');
+          final cleanError = extractCleanFfmpegError(logs);
+          _lastErrorMessage = cleanError;
+          onStreamError?.call(cleanError);
+        }
       });
 
       return true;
     } catch (e) {
       debugPrint('VideoOverlayBurner: Live stream launch failed: $e');
+      final cleanError = extractCleanFfmpegError(e.toString());
+      _lastErrorMessage = cleanError;
       _isStreamingActive = false;
+      onStreamError?.call(cleanError);
       return false;
     }
   }
 
   /// Streams PNG frames captured from the isolated, already composed program
-  /// surface. No drawtext/drawbox filters are added: pixels match the preview.
+  /// surface. Scales dynamically to specified [width]x[height] (defaults to 1920x1080)
+  /// maintaining aspect ratio. No drawtext/drawbox filters are added: pixels match the preview.
   Future<bool> startLiveBroadcastFromProgramFrames({
     required String inputUrl,
     required String rtmpUrl,
     required String streamKey,
+    int width = 1920,
+    int height = 1080,
     int bitrateKbps = 4500,
-    int fps = 10,
+    int fps = 30,
+    int audioSampleRate = 44100,
   }) async {
     try {
       await stopLiveBroadcast();
-      final endpoint = rtmpUrl.endsWith('/')
-          ? '$rtmpUrl$streamKey'
-          : '$rtmpUrl/$streamKey';
-      final command =
-          '-f image2pipe -vcodec png -framerate $fps -i "$inputUrl" '
-          '-an -c:v libx264 -preset veryfast -tune zerolatency '
-          '-b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${(bitrateKbps ~/ 2)}k '
-          '-pix_fmt yuv420p -g ${fps * 2} -f flv "$endpoint"';
+      final endpoint = buildRtmpEndpoint(rtmpUrl, streamKey);
+      final command = buildProgramFramesBroadcastCommand(
+        inputUrl: inputUrl,
+        endpoint: endpoint,
+        width: width,
+        height: height,
+        bitrateKbps: bitrateKbps,
+        fps: fps,
+        audioSampleRate: audioSampleRate,
+      );
       _isStreamingActive = true;
       _activeStreamSession = await FFmpegKit.executeAsync(command, (
         session,
@@ -601,15 +700,43 @@ class VideoOverlayBurnerService {
         _isStreamingActive = false;
         _activeStreamSession = null;
         if (!ReturnCode.isSuccess(rc)) {
-          _lastErrorMessage = await session.getAllLogsAsString();
+          final logs = await session.getAllLogsAsString();
+          debugPrint('VideoOverlayBurner: Live program stream failed with code $rc:\n$logs');
+          final cleanError = extractCleanFfmpegError(logs);
+          _lastErrorMessage = cleanError;
+          onStreamError?.call(cleanError);
         }
       });
       return true;
     } catch (e) {
-      _lastErrorMessage = e.toString();
+      final cleanError = extractCleanFfmpegError(e.toString());
+      _lastErrorMessage = cleanError;
       _isStreamingActive = false;
+      onStreamError?.call(cleanError);
       return false;
     }
+  }
+
+  /// Builds the complete FFmpeg command for streaming program frames over RTMP/RTMPS
+  static String buildProgramFramesBroadcastCommand({
+    required String inputUrl,
+    required String endpoint,
+    int width = 1920,
+    int height = 1080,
+    int bitrateKbps = 4500,
+    int fps = 30,
+    int audioSampleRate = 44100,
+  }) {
+    final scaleFilter =
+        'scale=$width:$height:force_original_aspect_ratio=decrease,pad=$width:$height:(ow-iw)/2:(oh-ih)/2,setsar=1';
+    return '-f image2pipe -vcodec png -framerate $fps -i "$inputUrl" '
+        '-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=$audioSampleRate '
+        '-vf "$scaleFilter" '
+        '-map 0:v -map 1:a '
+        '-c:v libx264 -preset veryfast -tune zerolatency '
+        '-c:a aac -b:a 128k '
+        '-b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${(bitrateKbps ~/ 2)}k '
+        '-pix_fmt yuv420p -g ${fps * 2} -f flv "$endpoint"';
   }
 
   /// Zatrzymuje aktywną transmisję RTMP w tle

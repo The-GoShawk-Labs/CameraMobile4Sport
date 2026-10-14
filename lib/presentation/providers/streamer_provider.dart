@@ -7,6 +7,7 @@ import 'package:volleylive/domain/models/match_session.dart';
 import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/domain/models/score_event.dart';
 import 'package:volleylive/domain/models/streaming_config.dart';
+import 'package:volleylive/domain/services/native_stream_burner_bridge.dart';
 import 'package:volleylive/domain/services/recording_service.dart';
 import 'package:volleylive/domain/services/program_frame_server.dart';
 import 'package:volleylive/domain/services/streaming_service.dart';
@@ -19,19 +20,28 @@ class StreamerProvider extends ChangeNotifier {
 
   CameraConnectionState _cameraLinkState = CameraConnectionState.disconnected;
   StreamingState _streamingState = StreamingState.idle;
+  String? _streamingOverrideError;
   RecordingState _programRecState = RecordingState.idle;
   Duration _programRecDuration = Duration.zero;
   StreamHealthMetrics _healthMetrics = const StreamHealthMetrics();
 
+  StreamConfig _config = const StreamConfig();
   StreamingDestination _destination = const StreamingDestination();
   ScoreboardThemeStyle _scoreboardStyle = ScoreboardThemeStyle.tvProBroadcast;
   bool _showServeIndicator = true;
   bool _showTimeoutCountdown = true;
   String _maskedStreamKey = 'Brak klucza';
 
+  StreamTelemetry _telemetry = StreamTelemetry(timestamp: DateTime.now());
+  StreamTelemetry get telemetry => _telemetry;
+  int get currentBitrateKbps => _telemetry.bitrateKbps;
+  int get currentFps => _telemetry.fps;
+  int get droppedFrames => _telemetry.droppedFrames;
+  double get jitterMs => _telemetry.jitterMs;
+
   StreamerProvider() {
     _initListeners();
-    _loadSavedCredentials();
+    _loadSavedConfiguration();
   }
 
   CameraConnectionState get cameraLinkState => _cameraLinkState;
@@ -42,8 +52,11 @@ class StreamerProvider extends ChangeNotifier {
       _recordingService.lastRecordingResult;
   String? get programRecordingErrorMessage =>
       _programRecordingOverrideError ?? _recordingService.lastErrorMessage;
+  String? get streamingErrorMessage =>
+      _streamingOverrideError ?? _streamingService.lastErrorMessage;
   RecordingService get recordingService => _recordingService;
   StreamHealthMetrics get healthMetrics => _healthMetrics;
+  StreamConfig get config => _config;
   StreamingDestination get destination => _destination;
   ScoreboardThemeStyle get scoreboardStyle => _scoreboardStyle;
   bool get showServeIndicator => _showServeIndicator;
@@ -66,6 +79,11 @@ class StreamerProvider extends ChangeNotifier {
       notifyListeners();
     });
 
+    _streamingService.telemetryStream.listen((telemetry) {
+      _telemetry = telemetry;
+      notifyListeners();
+    });
+
     _recordingService.recordingStateStream.listen((state) {
       _programRecState = state;
       notifyListeners();
@@ -77,18 +95,24 @@ class StreamerProvider extends ChangeNotifier {
     });
   }
 
-  Future<void> _loadSavedCredentials() async {
-    if (_destination.credentialReference.isNotEmpty) {
-      _maskedStreamKey = SecureStorageService.maskCredential(
-        _destination.credentialReference,
-      );
+  Future<void> _loadSavedConfiguration() async {
+    try {
+      final loaded = await StreamConfig.loadFromPreferences();
+      _config = loaded;
+      _destination = loaded.toStreamingDestination();
+      if (_config.credentialReference.isNotEmpty) {
+        _maskedStreamKey = SecureStorageService.maskCredential(
+          _config.credentialReference,
+        );
+      }
       notifyListeners();
+    } catch (e) {
+      debugPrint('[StreamerProvider] Error loading saved config: $e');
     }
   }
 
   Future<void> startHostPairing(String pairingCode) async {
     await _transportService.startHostSignaling(pairingCode);
-    // Symulacja połączenia po uścisku dłoni
     await _transportService.connectToHost(pairingCode);
   }
 
@@ -97,14 +121,44 @@ class StreamerProvider extends ChangeNotifier {
     final ref = await SecureStorageService.storeCredential(
       credentialValue: rawStreamKey.trim(),
     );
+    _config = _config.copyWith(
+      credentialReference: ref,
+      streamKey: rawStreamKey.trim(),
+    );
     _destination = _destination.copyWith(credentialReference: ref);
     _maskedStreamKey = SecureStorageService.maskCredential(ref);
+    await _config.saveToPreferences();
+    notifyListeners();
+  }
+
+  void updateStreamConfig(StreamConfig config) {
+    _config = config;
+    _destination = config.toStreamingDestination();
+    unawaited(config.saveToPreferences());
+    notifyListeners();
+  }
+
+  void selectPreset(YouTubeLivePreset preset) {
+    _config = StreamConfig.fromPreset(
+      preset,
+      serverUrl: _config.serverUrl,
+      credentialReference: _config.credentialReference,
+      isLocalProgramRecordingEnabled: _config.isLocalProgramRecordingEnabled,
+    );
+    _destination = _config.toStreamingDestination();
+    unawaited(_config.saveToPreferences());
     notifyListeners();
   }
 
   void updateDestination(StreamingDestination destination) {
     _destination = destination;
+    _config = destination.toStreamConfig();
+    unawaited(_config.saveToPreferences());
     notifyListeners();
+  }
+
+  Future<Map<String, dynamic>> validateHardwareCapabilities() async {
+    return await _streamingService.nativeBridge.validateEncoderCapabilities();
   }
 
   void setScoreboardStyle(ScoreboardThemeStyle style) {
@@ -183,38 +237,53 @@ class StreamerProvider extends ChangeNotifier {
     Stream<Uint8List>? composedFrameStream,
     Uint8List? initialProgramFrame,
   }) async {
+    _streamingOverrideError = null;
     if (matchSession != null) {
       _currentSession = matchSession;
     }
     if (_streamingState == StreamingState.live ||
-        _streamingState == StreamingState.connecting) {
+        _streamingState == StreamingState.connecting ||
+        _streamingState == StreamingState.reconnecting) {
       await _streamingService.stopLiveStream();
       await _liveFrameServer?.stop();
       _liveFrameServer = null;
+      notifyListeners();
       return false;
     } else {
       if (composedFrameStream == null || initialProgramFrame == null) {
+        _streamingOverrideError =
+            'Brak przechwyconych klatek programu (obrazu z tablicą) do transmisji.';
         notifyListeners();
         return false;
       }
       final frameServer = ProgramFrameServer();
       _liveFrameServer = frameServer;
-      final frameUrl = await frameServer.start(
-        composedFrameStream,
-        initialProgramFrame,
-      );
-      final started = await _streamingService.startLiveStream(
-        _destination,
-        inputSource: frameUrl,
-        inputIsComposedProgramFrames: true,
-        timeline: _recordingService.sessionTimeline,
-        matchSession: matchSession ?? _currentSession,
-      );
-      if (!started) {
+      try {
+        final frameUrl = await frameServer.start(
+          composedFrameStream,
+          initialProgramFrame,
+        );
+        final started = await _streamingService.startLiveStreamWithConfig(
+          _config,
+          inputSource: frameUrl,
+          inputIsComposedProgramFrames: true,
+          timeline: _recordingService.sessionTimeline,
+          matchSession: matchSession ?? _currentSession,
+        );
+        if (!started) {
+          await frameServer.stop();
+          _liveFrameServer = null;
+        }
+        notifyListeners();
+        return started;
+      } catch (e) {
+        _streamingOverrideError =
+            'Błąd inicjalizacji lokalnego serwera klatek: $e';
         await frameServer.stop();
         _liveFrameServer = null;
+        notifyListeners();
+        return false;
       }
-      return started;
     }
   }
 
@@ -243,7 +312,6 @@ class StreamerProvider extends ChangeNotifier {
       _programRecState = _recordingService.currentState;
       notifyListeners();
     } else {
-      // Weryfikacja dostępności źródła wideo: w trybie Phone B wymagany jest aktywny strumień klatek z Phone A
       if (!isSimulation &&
           (!isConnected || (frameStream == null && initialFrame == null))) {
         _programRecordingOverrideError =

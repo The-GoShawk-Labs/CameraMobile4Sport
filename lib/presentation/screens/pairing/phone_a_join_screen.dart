@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:volleylive/core/router/app_router.dart';
 import 'package:volleylive/core/theme/app_theme.dart';
 import 'package:volleylive/core/utils/pairing_scheme_helper.dart';
+import 'package:volleylive/domain/models/connection_state.dart';
 import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
 import 'package:volleylive/presentation/widgets/sports_ui_components.dart';
@@ -98,9 +99,13 @@ class _PhoneAJoinScreenState extends State<PhoneAJoinScreen> with SingleTickerPr
 
     try {
       await cameraProvider.connectToScorer(data.code);
-      await p2pProvider.joinWithPairingData(data);
-    } catch (_) {
-      // Łączenie lokalne fallback
+      await p2pProvider.joinWithPairingData(
+        data,
+        role: DeviceRole.cameraPhoneA,
+      );
+      await p2pProvider.notifyCameraConnected(deviceName: 'Realme 12 Pro+');
+    } catch (e) {
+      debugPrint('[PhoneAJoinScreen] Auto-connect fallback notice: $e');
     }
 
     if (mounted) {
@@ -128,10 +133,12 @@ class _PhoneAJoinScreenState extends State<PhoneAJoinScreen> with SingleTickerPr
       await p2pProvider.joinSession(
         hostAddress: host,
         pairingCode: actualCode,
+        role: DeviceRole.cameraPhoneA,
         port: port,
       );
-    } catch (_) {
-      // Łączenie lokalne fallback
+      await p2pProvider.notifyCameraConnected(deviceName: 'Realme 12 Pro+');
+    } catch (e) {
+      debugPrint('[PhoneAJoinScreen] Manual connect fallback notice: $e');
     }
 
     if (mounted) {

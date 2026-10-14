@@ -5,6 +5,7 @@ import 'package:volleylive/domain/models/camera_config.dart';
 import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/screens/settings/storage_folder_picker_modal.dart';
+import 'package:volleylive/presentation/screens/settings/stream_settings_modal.dart';
 
 class VideoSettingsModal extends StatelessWidget {
   const VideoSettingsModal({super.key});
@@ -73,7 +74,66 @@ class VideoSettingsModal extends StatelessWidget {
                 'Dostosuj rodzaj nagrywania, jakość kodowania oraz przepustowość transmisji na żywo.',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 14),
+
+              // SZYBKI DOSTĘP: KONFIGURACJA TRANSMISJI RTMP / YOUTUBE
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppTheme.amberAccent.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppTheme.amberAccent.withValues(alpha: 0.35)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: AppTheme.amberAccent.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.stream, color: AppTheme.amberAccent, size: 20),
+                    ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Transmisja RTMP / YouTube Live',
+                            style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'Klucze platform, adresy URL i parametry enkodera',
+                            style: TextStyle(fontSize: 10, color: AppTheme.textSecondary),
+                          ),
+                        ],
+                      ),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        showModalBottomSheet(
+                          context: context,
+                          isScrollControlled: true,
+                          useRootNavigator: true,
+                          backgroundColor: Colors.transparent,
+                          builder: (_) => const StreamSettingsModal(),
+                        );
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.amberAccent,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        minimumSize: const Size(60, 34),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: const Text('USTAW', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900)),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
 
               // SEKCJA 0: WYBÓR RODZAJU NAGRYWANIA (RAW vs PROGRAM+SCOREBOARD)
               Column(

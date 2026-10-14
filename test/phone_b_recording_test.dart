@@ -438,6 +438,52 @@ void main() {
         camera.dispose();
       },
     );
+
+    testWidgets(
+      'Shows stream timeout UI overlay and retry button when camera stream times out',
+      (tester) async {
+        tester.view.physicalSize = const Size(1280, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+        });
+
+        final p2p = P2PConnectionProvider();
+        p2p.selectRole(DeviceRole.scorerPhoneB);
+        p2p.setConnectionStateForTesting(CameraConnectionState.connected);
+        p2p.setStreamTimeout(true);
+
+        final streamer = StreamerProvider();
+        final match = MatchProvider();
+        final camera = CameraProvider(enableAudioSim: false);
+
+        await tester.pumpWidget(
+          buildScorerApp(
+            p2p: p2p,
+            streamer: streamer,
+            match: match,
+            camera: camera,
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 100));
+
+        // Powinno pojawić się ostrzeżenie o timeoucie oraz przyciski PONÓW i PAROWANIE
+        expect(find.textContaining('TIMEOUT STRUMIENIA'), findsWidgets);
+        expect(find.text('PONÓW'), findsOneWidget);
+        expect(find.text('PAROWANIE'), findsOneWidget);
+
+        // Naciśnięcie 'PONÓW' powinno wyczyścić flagę hasStreamTimeout
+        await tester.tap(find.text('PONÓW'));
+        await tester.pump();
+        expect(p2p.hasStreamTimeout, isFalse);
+
+        p2p.dispose();
+        streamer.dispose();
+        match.dispose();
+        camera.dispose();
+      },
+    );
   });
 }
 

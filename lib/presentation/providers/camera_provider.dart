@@ -49,6 +49,7 @@ class CameraProvider extends ChangeNotifier {
   bool _isStreamingFrames = false;
   int _lastFrameTimestamp = 0;
   bool _isConvertingFrame = false;
+  P2PConnectionProvider? _activeP2pProvider;
   bool _isProgramPreviewCaptureEnabled = false;
   Uint8List? _programPreviewFrame;
   Completer<Uint8List?>? _firstProgramFrameCompleter;
@@ -199,14 +200,26 @@ class CameraProvider extends ChangeNotifier {
       );
       _currentCameraDesc = cameraDesc;
 
-      final controller = CameraController(
-        cameraDesc,
-        _resolutionPresetFor(_settings.resolution),
-        enableAudio: _settings.isMicrophoneEnabled,
-        imageFormatGroup: ImageFormatGroup.nv21,
-      );
+      CameraController controller;
+      try {
+        controller = CameraController(
+          cameraDesc,
+          _resolutionPresetFor(_settings.resolution),
+          enableAudio: _settings.isMicrophoneEnabled,
+          imageFormatGroup: ImageFormatGroup.nv21,
+        );
+        await controller.initialize();
+      } catch (e) {
+        debugPrint('[CameraProvider] NV21 init failed ($e), falling back to yuv420...');
+        controller = CameraController(
+          cameraDesc,
+          _resolutionPresetFor(_settings.resolution),
+          enableAudio: _settings.isMicrophoneEnabled,
+          imageFormatGroup: ImageFormatGroup.yuv420,
+        );
+        await controller.initialize();
+      }
 
-      await controller.initialize();
       _cameraController = controller;
       _isCameraInitialized = true;
       _isSimulationMode = false;
@@ -239,6 +252,10 @@ class CameraProvider extends ChangeNotifier {
         maxExposureOffset: maxExp,
         exposureStep: expStep,
       );
+
+      if (_isLiveTransmitting || _isProgramPreviewCaptureEnabled) {
+        _startImageStreamLoop(_activeP2pProvider);
+      }
 
       notifyListeners();
     } catch (e) {
@@ -352,16 +369,40 @@ class CameraProvider extends ChangeNotifier {
   Future<void> startLiveTransmission({
     required P2PConnectionProvider p2pProvider,
   }) async {
+    _activeP2pProvider = p2pProvider;
     _isLiveTransmitting = true;
     notifyListeners();
 
-    // Uruchom jako host dla sesji P2P, aby sędzia mógł się podłączyć
+    debugPrint(
+      '[CameraProvider] startLiveTransmission: role=${p2pProvider.currentRole.idName}, '
+      'isHost=${p2pProvider.isHost}, connectionState=${p2pProvider.connectionState}',
+    );
+
+    if (_cameraController == null || !_isCameraInitialized) {
+      debugPrint('[CameraProvider] Camera not initialized yet, initializing before stream...');
+      await initializeCamera();
+    }
+
+    // Uruchom jako host dla sesji P2P TYLKO wtedy, gdy urządzenie nie łączy się ani nie jest już połączone jako klient
     if (!p2pProvider.isHost &&
+        p2pProvider.currentRole != DeviceRole.cameraPhoneA &&
         p2pProvider.connectionState != CameraConnectionState.connected) {
       await p2pProvider.hostSession(
         pairingCode: _pairedHostCode.isNotEmpty ? _pairedHostCode : 'VL-8492',
         role: DeviceRole.cameraPhoneA,
       );
+    }
+
+    // Wyemituj handshake potwierdzający start strumienia kamery do operatora Phone B
+    try {
+      await p2pProvider.notifyStreamStarted(
+        deviceName: 'Realme 12 Pro+',
+        width: _settings.resolution.width,
+        height: _settings.resolution.height,
+        fps: _settings.fps.fps,
+      );
+    } catch (e) {
+      debugPrint('[CameraProvider] notifyStreamStarted error: $e');
     }
 
     _startImageStreamLoop(p2pProvider);
@@ -405,18 +446,33 @@ class CameraProvider extends ChangeNotifier {
   }
 
   void _startImageStreamLoop([P2PConnectionProvider? p2pProvider]) {
-    if (_cameraController != null &&
-        _cameraController!.value.isInitialized &&
+    final effectiveP2p = p2pProvider ?? _activeP2pProvider;
+    if (p2pProvider != null) {
+      _activeP2pProvider = p2pProvider;
+    }
+
+    final controller = _cameraController;
+    if (controller != null &&
+        controller.value.isInitialized &&
         !_isStreamingFrames &&
         !isRecording &&
         (_isLiveTransmitting || _isProgramPreviewCaptureEnabled)) {
       try {
+        if (controller.value.isStreamingImages) {
+          controller.stopImageStream().catchError((_) {});
+        }
         _isStreamingFrames = true;
-        _cameraController!.startImageStream((CameraImage image) async {
+        int frameCounter = 0;
+        debugPrint(
+          '[CameraProvider] Image stream loop started (fps=${_settings.fps.fps}, '
+          'quality=${_isLiveTransmitting ? 65 : 85})',
+        );
+        controller.startImageStream((CameraImage image) async {
           if (!_isLiveTransmitting && !_isProgramPreviewCaptureEnabled) return;
 
           final now = DateTime.now().millisecondsSinceEpoch;
-          final minFrameIntervalMs = (1000 / _settings.fps.fps).floor();
+          // Płynny interwał klatek ~20-22 FPS (min. 45 ms), chroniący kanał komunikacji przed zatkaniem bufora
+          const minFrameIntervalMs = 45;
           if (now - _lastFrameTimestamp < minFrameIntervalMs) return;
           if (_isConvertingFrame) return;
 
@@ -426,10 +482,20 @@ class CameraProvider extends ChangeNotifier {
           try {
             final jpeg = await CameraFrameConverter.convertYuvToJpeg(
               image,
-              quality: _isLiveTransmitting ? 88 : 96,
+              quality: _isLiveTransmitting ? 65 : 85,
             );
             if (jpeg != null) {
-              if (_isLiveTransmitting) p2pProvider?.broadcastVideoFrame(jpeg);
+              frameCounter++;
+              if (_isLiveTransmitting) {
+                final targetP2p = _activeP2pProvider ?? p2pProvider ?? effectiveP2p;
+                targetP2p?.broadcastVideoFrame(jpeg);
+                if (frameCounter % 50 == 1) {
+                  debugPrint(
+                    '[CameraProvider] Live frame #$frameCounter transmitted '
+                    '(${jpeg.lengthInBytes} bytes, planes=${image.planes.length})',
+                  );
+                }
+              }
               if (_isProgramPreviewCaptureEnabled) {
                 _programPreviewFrame = jpeg;
                 if (!_programPreviewFrameController.isClosed) {
@@ -441,8 +507,14 @@ class CameraProvider extends ChangeNotifier {
                 }
                 notifyListeners();
               }
+            } else if (frameCounter == 0) {
+              debugPrint(
+                '[CameraProvider] Warning: Frame conversion returned null '
+                '(planes=${image.planes.length}, format=${image.format.group})',
+              );
             }
-          } catch (_) {
+          } catch (e) {
+            debugPrint('[CameraProvider] Frame conversion warning: $e');
           } finally {
             _isConvertingFrame = false;
           }
@@ -458,6 +530,9 @@ class CameraProvider extends ChangeNotifier {
     required P2PConnectionProvider p2pProvider,
   }) async {
     _isLiveTransmitting = false;
+    try {
+      await p2pProvider.notifyStreamStopped(reason: 'User stopped transmission');
+    } catch (_) {}
     if (_isStreamingFrames &&
         !_isProgramPreviewCaptureEnabled &&
         _cameraController != null) {
@@ -609,6 +684,9 @@ class CameraProvider extends ChangeNotifier {
       _isCameraInitialized = true;
       _isSimulationMode = false;
       _isTorchOn = false;
+      if (_isLiveTransmitting || _isProgramPreviewCaptureEnabled) {
+        _startImageStreamLoop(_activeP2pProvider);
+      }
       notifyListeners();
     } catch (e) {
       _cameraErrorMessage = 'Błąd przełączania kamery: $e';

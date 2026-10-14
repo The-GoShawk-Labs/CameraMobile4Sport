@@ -123,6 +123,45 @@ void main() {
       expect(parsedIce.payload['sdpMid'], equals('video'));
       expect(parsedIce.payload['sdpMLineIndex'], equals(0));
     });
+
+    test('P2PMessage cameraConnected, streamStarted, streamStopped, syncState serialization', () {
+      final camConnected = P2PMessage.cameraConnected(
+        senderRole: 'phone_a_camera',
+        deviceName: 'Realme 12 Pro+',
+      );
+      final camConnectedParsed = P2PMessage.fromJson(camConnected.toJson());
+      expect(camConnectedParsed.type, equals(P2PMessageType.cameraConnected));
+      expect(camConnectedParsed.payload['deviceName'], equals('Realme 12 Pro+'));
+
+      final streamStart = P2PMessage.streamStarted(
+        senderRole: 'phone_a_camera',
+        deviceName: 'Realme 12 Pro+',
+        width: 1920,
+        height: 1080,
+        fps: 30,
+      );
+      final streamStartParsed = P2PMessage.fromJson(streamStart.toJson());
+      expect(streamStartParsed.type, equals(P2PMessageType.streamStarted));
+      expect(streamStartParsed.payload['deviceName'], equals('Realme 12 Pro+'));
+      expect(streamStartParsed.payload['width'], equals(1920));
+      expect(streamStartParsed.payload['fps'], equals(30));
+
+      final streamStop = P2PMessage.streamStopped(
+        senderRole: 'phone_a_camera',
+        reason: 'User paused transmission',
+      );
+      final streamStopParsed = P2PMessage.fromJson(streamStop.toJson());
+      expect(streamStopParsed.type, equals(P2PMessageType.streamStopped));
+      expect(streamStopParsed.payload['reason'], equals('User paused transmission'));
+
+      final syncMsg = P2PMessage.syncState(
+        senderRole: 'phone_b_controller',
+        state: {'status': 'awaiting_camera'},
+      );
+      final syncParsed = P2PMessage.fromJson(syncMsg.toJson());
+      expect(syncParsed.type, equals(P2PMessageType.syncState));
+      expect(syncParsed.payload['status'], equals('awaiting_camera'));
+    });
   });
 
   group('Signaling & Transport Unit Tests', () {
@@ -326,7 +365,32 @@ void main() {
       expect(clientProvider.lastReceivedScore?.pointsA, equals(15));
       expect(clientProvider.lastReceivedScore?.pointsB, equals(12));
 
-      // 5. Rozłączenie
+      // 5. Handshake potwierdzenia kamery i strumienia
+      await clientProvider.notifyCameraConnected(deviceName: 'Realme 12 Pro+');
+      await Future.delayed(const Duration(milliseconds: 150));
+      expect(hostProvider.isCameraConnected, isTrue);
+      expect(hostProvider.remoteDeviceName, equals('Realme 12 Pro+'));
+
+      await clientProvider.notifyStreamStarted(
+        deviceName: 'Realme 12 Pro+',
+        fps: 30,
+        width: 1920,
+        height: 1080,
+      );
+      await Future.delayed(const Duration(milliseconds: 150));
+      expect(hostProvider.isCameraStreaming, isTrue);
+
+      // Weryfikacja flagi timeoutu i jej resetowania
+      hostProvider.setStreamTimeout(true);
+      expect(hostProvider.hasStreamTimeout, isTrue);
+      hostProvider.clearStreamTimeout();
+      expect(hostProvider.hasStreamTimeout, isFalse);
+
+      await clientProvider.notifyStreamStopped(reason: 'Test complete');
+      await Future.delayed(const Duration(milliseconds: 150));
+      expect(hostProvider.isCameraStreaming, isFalse);
+
+      // 6. Rozłączenie
       await clientProvider.disconnect();
       await hostProvider.disconnect();
       clientProvider.dispose();

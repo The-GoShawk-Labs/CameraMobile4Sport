@@ -13,7 +13,7 @@ class ProgramWidgetCapture {
     required this.boundaryKey,
     this.framesPerSecond = 10,
     this.isSourceAvailable,
-  }) : assert(framesPerSecond > 0 && framesPerSecond <= 15);
+  }) : assert(framesPerSecond > 0 && framesPerSecond <= 60);
 
   final GlobalKey boundaryKey;
   final int framesPerSecond;
@@ -68,15 +68,13 @@ class ProgramWidgetCapture {
     stop();
     final renderObject = boundaryKey.currentContext?.findRenderObject();
     if (renderObject is RenderRepaintBoundary && renderObject.hasSize) {
-      _capturePixelRatio = math
-          .max(
-            targetWidth / renderObject.size.width,
-            targetHeight / renderObject.size.height,
-          )
-          // A full-resolution 4K PNG readback every frame stalls the Flutter UI
-          // and starves the capture stream. Two-times logical pixels retain a
-          // crisp program layer while keeping image readback practical.
-          .clamp(1.0, 1.5);
+      final desiredRatio = math.max(
+        targetWidth / renderObject.size.width,
+        targetHeight / renderObject.size.height,
+      );
+      // Balanced pixel ratio: ensures crisp program resolution (up to Full HD)
+      // while keeping async PNG readback smooth without stalling the UI thread.
+      _capturePixelRatio = desiredRatio.clamp(1.0, 2.75);
     }
     final initialFrame = await captureFrame();
     if (initialFrame == null) return null;

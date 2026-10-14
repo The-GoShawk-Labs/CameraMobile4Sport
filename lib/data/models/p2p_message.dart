@@ -8,6 +8,9 @@ enum P2PMessageType {
   heartbeat,
   heartbeatAck,
   syncState,
+  cameraConnected,
+  streamStarted,
+  streamStopped,
   sdpOffer,
   sdpAnswer,
   iceCandidate,
@@ -27,7 +30,8 @@ enum P2PMessageType {
 class P2PMessage {
   final String id;
   final P2PMessageType type;
-  final String senderRole; // 'phone_a_camera' | 'phone_b_controller' | 'statistician'
+  final String
+  senderRole; // 'phone_a_camera' | 'phone_b_controller' | 'statistician'
   final int timestamp;
   final Map<String, dynamic> payload;
 
@@ -54,7 +58,8 @@ class P2PMessage {
       id: map['id'] as String? ?? '',
       type: P2PMessageType.fromJson(map['type'] as String? ?? ''),
       senderRole: map['senderRole'] as String? ?? 'unknown',
-      timestamp: map['timestamp'] as int? ?? DateTime.now().millisecondsSinceEpoch,
+      timestamp:
+          map['timestamp'] as int? ?? DateTime.now().millisecondsSinceEpoch,
       payload: Map<String, dynamic>.from(map['payload'] as Map? ?? {}),
     );
   }
@@ -102,10 +107,7 @@ class P2PMessage {
       type: P2PMessageType.recorderControl,
       senderRole: senderRole,
       timestamp: DateTime.now().millisecondsSinceEpoch,
-      payload: {
-        'isRecording': isRecording,
-        'matchId': matchId,
-      },
+      payload: {'isRecording': isRecording, 'matchId': matchId},
     );
   }
 
@@ -124,6 +126,72 @@ class P2PMessage {
         'batteryLevel': batteryLevel,
         'thermalState': thermalState,
       },
+    );
+  }
+
+  factory P2PMessage.syncState({
+    required String senderRole,
+    required Map<String, dynamic> state,
+  }) {
+    return P2PMessage(
+      id: 'sync_${DateTime.now().millisecondsSinceEpoch}',
+      type: P2PMessageType.syncState,
+      senderRole: senderRole,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      payload: state,
+    );
+  }
+
+  factory P2PMessage.cameraConnected({
+    required String senderRole,
+    required String deviceName,
+    Map<String, dynamic>? metadata,
+  }) {
+    return P2PMessage(
+      id: 'cam_conn_${DateTime.now().millisecondsSinceEpoch}',
+      type: P2PMessageType.cameraConnected,
+      senderRole: senderRole,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      payload: {
+        'deviceName': deviceName,
+        'status': 'connected',
+        if (metadata != null) ...metadata,
+      },
+    );
+  }
+
+  factory P2PMessage.streamStarted({
+    required String senderRole,
+    required String deviceName,
+    int? width,
+    int? height,
+    int? fps,
+  }) {
+    return P2PMessage(
+      id: 'stream_start_${DateTime.now().millisecondsSinceEpoch}',
+      type: P2PMessageType.streamStarted,
+      senderRole: senderRole,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      payload: {
+        'deviceName': deviceName,
+        'status': 'streaming',
+        'width': ?width,
+        'height': ?height,
+        'fps': ?fps,
+      },
+    );
+  }
+
+  factory P2PMessage.streamStopped({
+    required String senderRole,
+    String? reason,
+  }) {
+    return P2PMessage(
+      id: 'stream_stop_${DateTime.now().millisecondsSinceEpoch}',
+      type: P2PMessageType.streamStopped,
+      senderRole: senderRole,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      payload: {'status': 'stopped', 'reason': ?reason},
     );
   }
 
@@ -257,7 +325,8 @@ class CameraControlPayload {
       if (zoomLevel != null) 'zoomLevel': zoomLevel,
       if (flashOn != null) 'flashOn': flashOn,
       if (lockAeAf != null) 'lockAeAf': lockAeAf,
-      if (exposureCompensation != null) 'exposureCompensation': exposureCompensation,
+      if (exposureCompensation != null)
+        'exposureCompensation': exposureCompensation,
       if (resolution != null) 'resolution': resolution,
       if (fps != null) 'fps': fps,
     };

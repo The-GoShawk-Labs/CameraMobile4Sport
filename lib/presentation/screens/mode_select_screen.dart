@@ -70,6 +70,7 @@ class ModeSelectScreen extends StatelessWidget {
                             context: context,
                             backgroundColor: Colors.transparent,
                             isScrollControlled: true,
+                            useRootNavigator: true,
                             builder: (_) => const StreamSettingsModal(),
                           ),
                         ),
@@ -586,6 +587,41 @@ class ModeSelectScreen extends StatelessWidget {
                             ),
                           ),
                         ],
+                      ),
+                      const SizedBox(height: 10),
+                      InkWell(
+                        onTap: () => showModalBottomSheet(
+                          context: context,
+                          backgroundColor: Colors.transparent,
+                          isScrollControlled: true,
+                          useRootNavigator: true,
+                          builder: (_) => const StreamSettingsModal(),
+                        ),
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: AppTheme.amberAccent.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: AppTheme.amberAccent.withValues(alpha: 0.35)),
+                          ),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.stream, color: AppTheme.amberAccent, size: 16),
+                              SizedBox(width: 8),
+                              Text(
+                                'KONFIGURACJA TRANSMISJI RTMP / YOUTUBE',
+                                style: TextStyle(
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w900,
+                                  color: AppTheme.amberAccent,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ],
                   ),

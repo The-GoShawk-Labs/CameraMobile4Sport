@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:volleylive/data/models/p2p_message.dart';
 
 abstract class ISignalingService {
@@ -250,14 +250,18 @@ class LocalSignalingService implements ISignalingService {
 
   @override
   void sendVideoFrame(Uint8List frameBytes) {
-    if (_clientSocket != null && _clientSocket?.readyState == WebSocket.open) {
-      _clientSocket?.add(frameBytes);
-    }
-
-    for (final client in _serverClients) {
-      if (client.readyState == WebSocket.open) {
-        client.add(frameBytes);
+    try {
+      if (_clientSocket != null && _clientSocket?.readyState == WebSocket.open) {
+        _clientSocket?.add(frameBytes);
       }
+
+      for (final client in _serverClients) {
+        if (client.readyState == WebSocket.open) {
+          client.add(frameBytes);
+        }
+      }
+    } catch (e) {
+      debugPrint('[LocalSignalingService] sendVideoFrame error: $e');
     }
   }
 
