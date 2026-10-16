@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:volleylive/core/theme/app_theme.dart';
+import 'package:volleylive/domain/models/scoreboard_burn_in_state.dart';
 import 'package:volleylive/domain/models/streaming_config.dart';
 import 'package:volleylive/presentation/providers/match_provider.dart';
 import 'package:volleylive/presentation/providers/streamer_provider.dart';
@@ -28,9 +29,15 @@ class ScoreboardCustomizerModal extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
-                  'Scoreboard Studio',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                const Row(
+                  children: [
+                    Icon(Icons.tune, color: AppTheme.cyanAccent, size: 20),
+                    SizedBox(width: 8),
+                    Text(
+                      'Scoreboard Studio',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                  ],
                 ),
                 IconButton(
                   icon: const Icon(Icons.close, color: Colors.white),
@@ -40,51 +47,86 @@ class ScoreboardCustomizerModal extends StatelessWidget {
             ),
             const SizedBox(height: 12),
 
-            // PODGLĄD NA ŻYWO (LIVE PREVIEW)
+            // 1. PODGLĄD NA ŻYWO (16:9 LIVE PREVIEW Z NAKŁADKĄ I KOTWICĄ)
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
               decoration: BoxDecoration(
                 color: const Color(0xFF090D14),
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: Colors.white12),
-                image: const DecorationImage(
-                  image: AssetImage('assets/images/court_bg.png'),
-                  fit: BoxFit.cover,
-                  opacity: 0.15,
-                ),
               ),
-              child: Column(
-                children: [
-                  const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.remove_red_eye_outlined, size: 12, color: AppTheme.cyanAccent),
-                      SizedBox(width: 4),
-                      Text(
-                        'PODGLĄD NAKŁADKI NA ŻYWO',
-                        style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1,
-                          color: AppTheme.cyanAccent,
+              clipBehavior: Clip.antiAlias,
+              child: AspectRatio(
+                aspectRatio: 16 / 9,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // Tło boiska
+                    const Image(
+                      image: AssetImage('assets/images/court_bg.png'),
+                      fit: BoxFit.cover,
+                      opacity: AlwaysStoppedAnimation(0.2),
+                    ),
+
+                    // Etykieta podglądu
+                    Positioned(
+                      top: 8,
+                      right: 10,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.remove_red_eye_outlined, size: 10, color: AppTheme.cyanAccent),
+                            SizedBox(width: 4),
+                            Text(
+                              'PODGLĄD 16:9 WYSIWYG',
+                              style: TextStyle(
+                                fontSize: 8.5,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.8,
+                                color: AppTheme.cyanAccent,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  ScoreboardOverlay(
-                    session: match.session,
-                    style: streamer.scoreboardStyle,
-                    showServeIndicator: streamer.showServeIndicator,
-                  ),
-                ],
+                    ),
+
+                    // Tablica wyników pozycjonowana w 16:9
+                    ScoreboardOverlay(
+                      session: match.session,
+                      style: streamer.scoreboardStyle,
+                      anchorPosition: streamer.scoreboardAnchorPosition,
+                      showServeIndicator: streamer.showServeIndicator,
+                      matchDuration: match.matchDuration,
+                      activeSpecialEvent: match.activeSpecialEvent,
+                    ),
+                  ],
+                ),
               ),
             ),
 
-            const SizedBox(height: 18),
+            const SizedBox(height: 20),
 
-            // MOTYW SCOREBOARDU
-            const Text('Styl Motywu Telewizyjnego:', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+            // 2. WIZUALNY SELEKTOR 6 POZYCJI KOTWICZENIA (2 WIERSZE × 3 KOLUMNY)
+            const Text(
+              'Pozycja Tablicy w Kadrze (6 Stref Kotwiczenia):',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 10),
+            _buildVisualAnchorSelector(context, streamer.scoreboardAnchorPosition, streamer),
+
+            const SizedBox(height: 20),
+
+            // 3. MOTYW SCOREBOARDU
+            const Text(
+              'Styl Motywu Telewizyjnego:',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -109,8 +151,11 @@ class ScoreboardCustomizerModal extends StatelessWidget {
 
             const SizedBox(height: 18),
 
-            // KOLORY DRUŻYN
-            const Text('Kolorystyka Drużyn:', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+            // 4. KOLORYSTYKA DRUŻYN
+            const Text(
+              'Kolorystyka Drużyn:',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 8),
             Row(
               children: [
@@ -140,7 +185,7 @@ class ScoreboardCustomizerModal extends StatelessWidget {
 
             const SizedBox(height: 18),
 
-            // ELEMENTY WIDOCZNE
+            // 5. ELEMENTY WIDOCZNE
             SwitchListTile(
               title: const Text('Wskaźnik zagrywki (Piłka / Neon)', style: TextStyle(color: Colors.white, fontSize: 13)),
               value: streamer.showServeIndicator,
@@ -154,6 +199,128 @@ class ScoreboardCustomizerModal extends StatelessWidget {
               onChanged: streamer.toggleTimeoutCountdown,
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Wizualny selektor pozycji w kadrze meczowym 16:9
+  Widget _buildVisualAnchorSelector(
+    BuildContext context,
+    ScoreboardAnchorPosition current,
+    StreamerProvider streamer,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0C101A),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Column(
+        children: [
+          // Linia górna (Góra Lewa, Góra Środek, Góra Prawa)
+          Row(
+            children: [
+              _buildAnchorZoneTile(
+                label: 'Góra Lewa',
+                icon: Icons.north_west,
+                pos: ScoreboardAnchorPosition.topLeft,
+                selected: current == ScoreboardAnchorPosition.topLeft,
+                onTap: () => streamer.setScoreboardAnchorPosition(ScoreboardAnchorPosition.topLeft),
+              ),
+              const SizedBox(width: 6),
+              _buildAnchorZoneTile(
+                label: 'Góra Środek',
+                icon: Icons.north,
+                pos: ScoreboardAnchorPosition.topCenter,
+                selected: current == ScoreboardAnchorPosition.topCenter,
+                onTap: () => streamer.setScoreboardAnchorPosition(ScoreboardAnchorPosition.topCenter),
+              ),
+              const SizedBox(width: 6),
+              _buildAnchorZoneTile(
+                label: 'Góra Prawa',
+                icon: Icons.north_east,
+                pos: ScoreboardAnchorPosition.topRight,
+                selected: current == ScoreboardAnchorPosition.topRight,
+                onTap: () => streamer.setScoreboardAnchorPosition(ScoreboardAnchorPosition.topRight),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          // Linia dolna (Dół Lewa, Dół Środek, Dół Prawa)
+          Row(
+            children: [
+              _buildAnchorZoneTile(
+                label: 'Dół Lewa',
+                icon: Icons.south_west,
+                pos: ScoreboardAnchorPosition.bottomLeft,
+                selected: current == ScoreboardAnchorPosition.bottomLeft,
+                onTap: () => streamer.setScoreboardAnchorPosition(ScoreboardAnchorPosition.bottomLeft),
+              ),
+              const SizedBox(width: 6),
+              _buildAnchorZoneTile(
+                label: 'Dół Środek',
+                icon: Icons.south,
+                pos: ScoreboardAnchorPosition.bottomCenter,
+                selected: current == ScoreboardAnchorPosition.bottomCenter,
+                onTap: () => streamer.setScoreboardAnchorPosition(ScoreboardAnchorPosition.bottomCenter),
+              ),
+              const SizedBox(width: 6),
+              _buildAnchorZoneTile(
+                label: 'Dół Prawa',
+                icon: Icons.south_east,
+                pos: ScoreboardAnchorPosition.bottomRight,
+                selected: current == ScoreboardAnchorPosition.bottomRight,
+                onTap: () => streamer.setScoreboardAnchorPosition(ScoreboardAnchorPosition.bottomRight),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAnchorZoneTile({
+    required String label,
+    required IconData icon,
+    required ScoreboardAnchorPosition pos,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: selected ? AppTheme.cyanAccent.withValues(alpha: 0.18) : const Color(0xFF141A26),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: selected ? AppTheme.cyanAccent : Colors.white12,
+              width: selected ? 1.8 : 1.0,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 16,
+                color: selected ? AppTheme.cyanAccent : Colors.white70,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: selected ? FontWeight.bold : FontWeight.w500,
+                  color: selected ? AppTheme.cyanAccent : Colors.white,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

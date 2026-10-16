@@ -431,13 +431,17 @@ ffmpeg version n6.0
         expect(
           cmd1080p,
           contains(
-            'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1',
+            'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
           ),
         );
+        expect(cmd1080p, contains('-vcodec png'));
+        expect(cmd1080p, contains('-use_wallclock_as_timestamps 1'));
+        expect(cmd1080p, contains('setpts=PTS-STARTPTS'));
         expect(cmd1080p, contains('-framerate 30'));
         expect(cmd1080p, contains('-b:v 4500k'));
         expect(cmd1080p, contains('-maxrate 4500k'));
-        expect(cmd1080p, contains('-g 60'));
+        expect(cmd1080p, contains('-preset ultrafast'));
+        expect(cmd1080p, contains('-g 30 -keyint_min 30'));
         expect(cmd1080p, contains('sample_rate=48000'));
         expect(cmd1080p, contains('-f flv "rtmp://192.168.68.58:1935/live/sport"'));
 
@@ -454,7 +458,7 @@ ffmpeg version n6.0
         expect(
           cmd720p,
           contains(
-            'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1',
+            'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p',
           ),
         );
         expect(cmd720p, contains('-b:v 2500k'));

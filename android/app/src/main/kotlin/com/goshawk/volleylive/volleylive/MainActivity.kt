@@ -257,8 +257,12 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     }
                     "validateEncoderCapabilities" -> {
-                        val caps = streamService?.validateEncoderCapabilities() ?: emptyMap<String, Any>()
-                        result.success(caps)
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val caps = streamService?.validateEncoderCapabilities() ?: emptyMap<String, Any>()
+                            runOnUiThread {
+                                result.success(caps)
+                            }
+                        }
                     }
                     "startStream" -> {
                         val rtmpUrl = call.argument<String>("rtmpUrl") ?: ""
@@ -311,8 +315,9 @@ class MainActivity : FlutterActivity() {
                         val bytes = call.argument<ByteArray>("bitmapBytes")
                         val width = call.argument<Int>("width") ?: 0
                         val height = call.argument<Int>("height") ?: 0
+                        val anchor = call.argument<String>("anchorPosition") ?: "topLeft"
                         if (bytes != null && bytes.isNotEmpty()) {
-                            streamService?.updateScoreboardOverlayBitmap(bytes, width, height)
+                            streamService?.updateScoreboardOverlayBitmap(bytes, width, height, anchor)
                             result.success(true)
                         } else {
                             result.error("INVALID_ARGS", "Missing bitmap bytes", null)
@@ -339,7 +344,8 @@ class MainActivity : FlutterActivity() {
             setsB = (map["setsB"] as? Number)?.toInt() ?: 0,
             servingTeam = map["servingTeam"] as? String ?: "NONE",
             eventTag = map["eventTag"] as? String ?: "",
-            toastMessage = toast
+            toastMessage = toast,
+            anchorPosition = (map["anchorPosition"] as? String) ?: "topLeft"
         )
         streamService?.updateScoreboard(data)
     }

@@ -40,9 +40,11 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
   AnimationController? _unlockHoldController;
   bool _showLocalCameraPreview = true;
   bool _isControlsHidden = false;
+  bool _isLandscapeFullScreenPreview = false;
   Timer? _streamTimeoutTimer;
   StreamerProvider? _streamerRef;
   StreamingState _previousStreamingState = StreamingState.idle;
+  bool? _lastKeepAwakeState;
   late final ProgramWidgetCapture _programCapture = ProgramWidgetCapture(
     boundaryKey: GlobalKey(),
     isSourceAvailable: _isProgramVideoSourceAvailable,
@@ -178,7 +180,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
       }
     }
     final initialFrame = await _ensureProgramCapture(
-      framesPerSecond: streamer.config.fps > 0 ? streamer.config.fps : 30,
+      framesPerSecond: (streamer.config.fps > 0 ? streamer.config.fps : 24).clamp(15, 30),
       targetWidth: streamer.config.width,
       targetHeight: streamer.config.height,
     );
@@ -603,11 +605,14 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
         streamer.streamingState == StreamingState.live;
     final shouldKeepAwake =
         !match.session.isMatchOver || isStreamingOrRecording;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        WakelockService.setEnabled(shouldKeepAwake);
-      }
-    });
+    if (_lastKeepAwakeState != shouldKeepAwake) {
+      _lastKeepAwakeState = shouldKeepAwake;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          WakelockService.setEnabled(shouldKeepAwake);
+        }
+      });
+    }
 
     return PopScope(
       canPop: true,
@@ -715,74 +720,68 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                 // =============================================================
                 // UKŁAD POZIOMY (LANDSCAPE)
                 // =============================================================
-                Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    // 1. STRUMIEŃ WIDEO 16:9 WYŚRODKOWANY / DOPASOWANY DO SZEROKOŚCI Z NAŁOŻONYM SCOREBOARDEM
-                    Center(
-                      child: _buildBroadcastStreamView(
-                        context: context,
-                        match: match,
-                        camera: camera,
-                        streamer: streamer,
-                        p2p: p2p,
-                        isOutdoor: isOutdoor,
-                        isPortrait: false,
+                if (_isLandscapeFullScreenPreview)
+                  Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Center(
+                        child: _buildBroadcastStreamView(
+                          context: context,
+                          match: match,
+                          camera: camera,
+                          streamer: streamer,
+                          p2p: p2p,
+                          isOutdoor: isOutdoor,
+                          isPortrait: false,
+                        ),
                       ),
-                    ),
-
-                    // 2. GÓRNY PASEK STATUSU HUD W POZIOMIE
-                    Positioned(
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      child: _buildTopBroadcastHUD(
-                        context,
-                        streamer,
-                        match,
-                        camera,
-                        p2p,
-                        false,
-                      ),
-                    ),
-
-                    // 3. AWARYJNY BANER W POZIOMIE (TYLKO PODCZAS AKTYWNEGO WZNAWIANIA, PONIŻEJ TABLICY)
-                    if (p2p.currentRole != DeviceRole.singlePhoneAllInOne &&
-                        p2p.connectionState ==
-                            CameraConnectionState.reconnecting)
                       Positioned(
-                        top: 108,
-                        left: 40,
-                        right: 40,
-                        child: Center(
-                          child: RecoveryBanner(
-                            connectionState: p2p.connectionState,
-                            onManualReconnect: () async {
-                              await p2p.joinSession(
-                                hostAddress: p2p.hostAddress.isNotEmpty
-                                    ? p2p.hostAddress
-                                    : '192.168.68.51',
-                                pairingCode: 'VL-8492',
-                                role: DeviceRole.scorerPhoneB,
-                              );
-                            },
+                        top: 12,
+                        right: 12,
+                        child: InkWell(
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            setState(() {
+                              _isLandscapeFullScreenPreview = false;
+                            });
+                          },
+                          borderRadius: BorderRadius.circular(20),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.75),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: Colors.white30, width: 1),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.fullscreen_exit, size: 16, color: Colors.white),
+                                SizedBox(width: 6),
+                                Text(
+                                  'ZAMKNIJ PEŁNY EKRAN',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
-
-                    // 4. ERGONOMICZNY KOKPIT SĘDZIEGO W POZIOMIE (KCIUKOWY OVERLAY PO BOKACH)
-                    _buildLandscapeErgonomicCockpit(context, match, isOutdoor),
-
-                    // 5. PRZYCISK PRZYWRÓCENIA STEROWANIA W POZIOMIE GDY SCHOWANE
-                    if (_isControlsHidden)
-                      Positioned(
-                        bottom: 12,
-                        left: 0,
-                        right: 0,
-                        child: _buildFloatingRestoreControlsButton(),
-                      ),
-                  ],
-                ),
+                    ],
+                  )
+                else
+                  _buildLandscapeSplitView(
+                    context,
+                    match,
+                    streamer,
+                    camera,
+                    p2p,
+                    isOutdoor,
+                  ),
 
               // =============================================================
               // EKRAN ZWYCIĘSTWA W MECZU
@@ -850,196 +849,228 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // RZĄD 1: MENU, TRYB STRUMIENIA / KOKPIT, SZYBKIE PRZEŁĄCZNIKI
-            Row(
-              children: [
-                // PRZYCISK WYJŚCIA DO MENU GŁÓWNEGO - DUŻY, CZYTELNY
-                InkWell(
-                  onTap: () {
-                    if (context.canPop()) {
-                      context.pop();
-                    } else {
-                      context.go(AppRouter.initialRoute);
-                    }
-                  },
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white12,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.white24),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.arrow_back_ios_new,
-                          color: Colors.white,
-                          size: 12,
-                        ),
-                        SizedBox(width: 5),
-                        Text(
-                          'MENU',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w900,
-                            color: Colors.white,
-                            letterSpacing: 0.5,
+            // RZĄD 1: MENU, TRYB STRUMIENIA / KOKPIT, SZYBKIE PRZEŁĄCZNIKI (ZABEZPIECZONE PRZED OVERFLOW)
+            LayoutBuilder(
+              builder: (context, constraints) => SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // PRZYCISK WYJŚCIA DO MENU GŁÓWNEGO - DUŻY, CZYTELNY
+                          InkWell(
+                            onTap: () {
+                              if (context.canPop()) {
+                                context.pop();
+                              } else {
+                                context.go(AppRouter.initialRoute);
+                              }
+                            },
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white12,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.white24),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.arrow_back_ios_new,
+                                    color: Colors.white,
+                                    size: 11,
+                                  ),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    'MENU',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w900,
+                                      color: Colors.white,
+                                      letterSpacing: 0.5,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
 
-                const SizedBox(width: 8),
+                          const SizedBox(width: 6),
 
-                // PRZYCISK SZYBKIEGO UKRYWANIA / POKAZYWANIA STEROWANIA
-                InkWell(
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    setState(() {
-                      _isControlsHidden = !_isControlsHidden;
-                    });
-                  },
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _isControlsHidden
-                          ? AppTheme.amberAccent
-                          : Colors.white12,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: _isControlsHidden
-                            ? AppTheme.amberAccent
-                            : Colors.white24,
+                          // PRZYCISK SZYBKIEGO UKRYWANIA / POKAZYWANIA STEROWANIA
+                          InkWell(
+                            onTap: () {
+                              HapticFeedback.selectionClick();
+                              setState(() {
+                                _isControlsHidden = !_isControlsHidden;
+                              });
+                            },
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: _isControlsHidden
+                                    ? AppTheme.amberAccent
+                                    : Colors.white12,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: _isControlsHidden
+                                      ? AppTheme.amberAccent
+                                      : Colors.white24,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    _isControlsHidden
+                                        ? Icons.sports_volleyball
+                                        : Icons.visibility_outlined,
+                                    size: 13,
+                                    color: _isControlsHidden
+                                        ? Colors.black
+                                        : Colors.white,
+                                  ),
+                                  const SizedBox(width: 3),
+                                  Text(
+                                    _isControlsHidden ? 'KOKPIT' : 'PODGLĄD',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w900,
+                                      color: _isControlsHidden
+                                          ? Colors.black
+                                          : Colors.white,
+                                      letterSpacing: 0.3,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          _isControlsHidden
-                              ? Icons.sports_volleyball
-                              : Icons.visibility_outlined,
-                          size: 14,
-                          color: _isControlsHidden
-                              ? Colors.black
-                              : Colors.white,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          _isControlsHidden ? 'KOKPIT' : 'PODGLĄD',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w900,
-                            color: _isControlsHidden
-                                ? Colors.black
-                                : Colors.white,
-                            letterSpacing: 0.3,
+
+                      const SizedBox(width: 8),
+
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // PRZYCISK USTAWIENIA TRANSMISJI RTMP / YOUTUBE
+                          IconButton(
+                            padding: EdgeInsets.zero,
+                            style: IconButton.styleFrom(
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            constraints: const BoxConstraints(
+                              minWidth: 26,
+                              minHeight: 28,
+                            ),
+                            icon: const Icon(
+                              Icons.stream,
+                              size: 16,
+                              color: AppTheme.amberAccent,
+                            ),
+                            tooltip: 'Ustawienia Transmisji RTMP / YouTube Live',
+                            onPressed: () => _openStreamSettings(context),
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
 
-                const Spacer(),
+                          // PRZYCISK PARAMETRY WIDEO
+                          IconButton(
+                            padding: EdgeInsets.zero,
+                            style: IconButton.styleFrom(
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            constraints: const BoxConstraints(
+                              minWidth: 26,
+                              minHeight: 28,
+                            ),
+                            icon: const Icon(
+                              Icons.tune,
+                              size: 16,
+                              color: AppTheme.cyanAccent,
+                            ),
+                            tooltip: 'Parametry Zapisu Wideo i Kodera',
+                            onPressed: () => _openVideoSettings(context),
+                          ),
 
-                // PRZYCISK USTAWIENIA TRANSMISJI RTMP / YOUTUBE
-                IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(
-                    minWidth: 26,
-                    minHeight: 28,
-                  ),
-                  icon: const Icon(
-                    Icons.stream,
-                    size: 16,
-                    color: AppTheme.amberAccent,
-                  ),
-                  tooltip: 'Ustawienia Transmisji RTMP / YouTube Live',
-                  onPressed: () => _openStreamSettings(context),
-                ),
+                          // TOGGLE OUTDOOR HIGH CONTRAST
+                          IconButton(
+                            padding: EdgeInsets.zero,
+                            style: IconButton.styleFrom(
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            constraints: const BoxConstraints(
+                              minWidth: 26,
+                              minHeight: 28,
+                            ),
+                            icon: Icon(
+                              isOutdoor ? Icons.wb_sunny : Icons.wb_sunny_outlined,
+                              size: 16,
+                              color: isOutdoor ? AppTheme.amberAccent : Colors.white54,
+                            ),
+                            tooltip: 'Tryb Pełne Słońce (High Contrast)',
+                            onPressed: () {
+                              HapticFeedback.selectionClick();
+                              match.toggleOutdoorMode();
+                            },
+                          ),
 
-                // PRZYCISK PARAMETRY WIDEO
-                IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(
-                    minWidth: 26,
-                    minHeight: 28,
-                  ),
-                  icon: const Icon(
-                    Icons.tune,
-                    size: 16,
-                    color: AppTheme.cyanAccent,
-                  ),
-                  tooltip: 'Parametry Zapisu Wideo i Kodera',
-                  onPressed: () => _openVideoSettings(context),
-                ),
+                          // TOGGLE SCREEN LOCK (GHOST TOUCH PREVENTION)
+                          IconButton(
+                            padding: EdgeInsets.zero,
+                            style: IconButton.styleFrom(
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            constraints: const BoxConstraints(
+                              minWidth: 26,
+                              minHeight: 28,
+                            ),
+                            icon: const Icon(
+                              Icons.lock_outline,
+                              size: 16,
+                              color: Colors.white70,
+                            ),
+                            tooltip: 'Zablokuj Ekran Sędziego',
+                            onPressed: () {
+                              HapticFeedback.mediumImpact();
+                              match.toggleScreenLock();
+                            },
+                          ),
 
-                // TOGGLE OUTDOOR HIGH CONTRAST
-                IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(
-                    minWidth: 26,
-                    minHeight: 28,
-                  ),
-                  icon: Icon(
-                    isOutdoor ? Icons.wb_sunny : Icons.wb_sunny_outlined,
-                    size: 16,
-                    color: isOutdoor ? AppTheme.amberAccent : Colors.white54,
-                  ),
-                  tooltip: 'Tryb Pełne Słońce (High Contrast)',
-                  onPressed: () {
-                    HapticFeedback.selectionClick();
-                    match.toggleOutdoorMode();
-                  },
-                ),
-
-                // TOGGLE SCREEN LOCK (GHOST TOUCH PREVENTION)
-                IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(
-                    minWidth: 26,
-                    minHeight: 28,
-                  ),
-                  icon: const Icon(
-                    Icons.lock_outline,
-                    size: 16,
-                    color: Colors.white70,
-                  ),
-                  tooltip: 'Zablokuj Ekran Sędziego',
-                  onPressed: () {
-                    HapticFeedback.mediumImpact();
-                    match.toggleScreenLock();
-                  },
-                ),
-
-                const SizedBox(width: 4),
-                const Icon(
-                  Icons.battery_5_bar,
-                  size: 13,
-                  color: AppTheme.greenLive,
-                ),
-                const SizedBox(width: 2),
-                const Text(
-                  '88%',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white70,
+                          const SizedBox(width: 4),
+                          const Icon(
+                            Icons.battery_5_bar,
+                            size: 13,
+                            color: AppTheme.greenLive,
+                          ),
+                          const SizedBox(width: 2),
+                          const Text(
+                            '88%',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-              ],
+              ),
             ),
 
             const SizedBox(height: 6),
@@ -1815,6 +1846,27 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
   // ===========================================================================
   // WIDOK STRUMIENIA WIDEO (16:9) Z TABLICĄ WYNIKÓW OVERLAY I TELEMETRIĄ
   // ===========================================================================
+  double _resolveActiveStreamAspectRatio(
+    CameraProvider camera,
+    P2PConnectionProvider p2p,
+    bool isPortrait,
+  ) {
+    if (_showLocalCameraPreview &&
+        camera.isCameraInitialized &&
+        camera.cameraController != null &&
+        camera.cameraController!.value.isInitialized) {
+      final previewSize = camera.cameraController!.value.previewSize;
+      final double pWidth = previewSize?.width ?? 1920.0;
+      final double pHeight = previewSize?.height ?? 1080.0;
+      final double sensorLong = pWidth > pHeight ? pWidth : pHeight;
+      final double sensorShort = pWidth > pHeight ? pHeight : pWidth;
+      return isPortrait
+          ? (sensorShort / sensorLong)
+          : (sensorLong / sensorShort);
+    }
+    return 16.0 / 9.0;
+  }
+
   Widget _buildBroadcastStreamView({
     required BuildContext context,
     required MatchProvider match,
@@ -1824,6 +1876,11 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
     required bool isOutdoor,
     required bool isPortrait,
   }) {
+    final activeStreamAspectRatio = _resolveActiveStreamAspectRatio(
+      camera,
+      p2p,
+      isPortrait,
+    );
     return GestureDetector(
       onTap: () {
         if (_isControlsHidden) {
@@ -1854,20 +1911,18 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                       isOutdoor,
                       isPortrait,
                     ),
-                    Positioned(
-                      top: isPortrait ? 8 : 52,
-                      left: 8,
-                      right: 8,
-                      child: Center(
-                        child: ScoreboardOverlay(
-                          session: match.session,
-                          style: streamer.scoreboardStyle,
-                          isTimeoutActive: match.isTimeoutActive,
-                          timeoutSeconds: match.timeoutSecondsRemaining,
-                          timeoutTeam: match.timeoutCallingTeam,
-                          showServeIndicator: streamer.showServeIndicator,
-                          activeSpecialEvent: match.activeSpecialEvent,
-                        ),
+                    Positioned.fill(
+                      child: ScoreboardOverlay(
+                        session: match.session,
+                        style: streamer.scoreboardStyle,
+                        anchorPosition: streamer.scoreboardAnchorPosition,
+                        targetAspectRatio: activeStreamAspectRatio,
+                        isTimeoutActive: match.isTimeoutActive,
+                        timeoutSeconds: match.timeoutSecondsRemaining,
+                        timeoutTeam: match.timeoutCallingTeam,
+                        showServeIndicator: streamer.showServeIndicator,
+                        activeSpecialEvent: match.activeSpecialEvent,
+                        matchDuration: match.matchDuration,
                       ),
                     ),
                   ],
@@ -2055,14 +2110,28 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
     }
 
     // 2. BEZPRZEWODOWY OBRAZ Z KAMERY PHONE A (P2P REALME)
-    if (!p2p.isSinglePhoneMode && p2p.currentVideoFrame != null) {
-      return FittedBox(
-        fit: BoxFit.cover,
-        child: Image.memory(p2p.currentVideoFrame!, gaplessPlayback: true),
+    if (!p2p.isSinglePhoneMode) {
+      return ValueListenableBuilder<Uint8List?>(
+        valueListenable: p2p.videoFrameNotifier,
+        builder: (context, frame, _) {
+          if (frame != null) {
+            return FittedBox(
+              fit: BoxFit.cover,
+              child: Image.memory(frame, gaplessPlayback: true),
+            );
+          }
+          if (camera.programPreviewFrame != null && !camera.isCameraInitialized) {
+            return FittedBox(
+              fit: BoxFit.cover,
+              child: Image.memory(camera.programPreviewFrame!, gaplessPlayback: true),
+            );
+          }
+          return _buildCourtFallbackStack(match, p2p, isOutdoor);
+        },
       );
     }
 
-    // 3. AWARYJNY OBRAZ PROGRAM PREVIEW (TYLKO JEŚLI BRAK LOKALNEJ KAMERY I STRUMIENIA P2P)
+    // 3. AWARYJNY OBRAZ PROGRAM PREVIEW (TRYB ALL-IN-ONE GDY KAMERA NIE JEST JESZCZE GOTOWA)
     if (camera.programPreviewFrame != null && !camera.isCameraInitialized) {
       return FittedBox(
         fit: BoxFit.cover,
@@ -2070,7 +2139,15 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
       );
     }
 
-    // 3. MAKIETA BOISKA JEŚLI BRAK AKTYWNEGO OBRAZU Z KAMERY
+    // 4. MAKIETA BOISKA JEŚLI BRAK AKTYWNEGO OBRAZU Z KAMERY
+    return _buildCourtFallbackStack(match, p2p, isOutdoor);
+  }
+
+  Widget _buildCourtFallbackStack(
+    MatchProvider match,
+    P2PConnectionProvider p2p,
+    bool isOutdoor,
+  ) {
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -2082,8 +2159,10 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
         ),
         if (p2p.hasStreamTimeout)
           Center(
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 20),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 12),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
                 color: const Color(0xF0141A26),
@@ -2193,7 +2272,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                 ],
               ),
             ),
-          )
+          ))
         else
           Center(
             child: Container(
@@ -2634,251 +2713,218 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
   }
 
   // ===========================================================================
-  // ERGONOMICZNY KOKPIT SĘDZIEGO W POZIOMIE (LANDSCAPE HUD)
-  // Przeznaczony do obsługi kciukami bez zasłaniania środka boiska ani tablicy
+  // ERGONOMICZNY SPLIT-VIEW SĘDZIEGO W POZIOMIE (LANDSCAPE SPLIT-VIEW)
+  // Wzór komercyjnych systemów (SportCam): PiP 16:9, stoper, karty dotykowe, pasek transportowy
   // ===========================================================================
-  Widget _buildLandscapeErgonomicCockpit(
+  Widget _buildLandscapeSplitView(
     BuildContext context,
     MatchProvider match,
+    StreamerProvider streamer,
+    CameraProvider camera,
+    P2PConnectionProvider p2p,
     bool isOutdoor,
   ) {
-    final session = match.session;
-    final isServingA = session.currentServer == ServingTeam.teamA;
-    final isServingB = session.currentServer == ServingTeam.teamB;
-
-    return AnimatedSlide(
-      offset: _isControlsHidden ? const Offset(0, 1.25) : Offset.zero,
-      duration: const Duration(milliseconds: 250),
-      curve: Curves.easeInOutCubic,
-      child: Stack(
-        fit: StackFit.expand,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: Column(
         children: [
-          // LEWY PANEL: DRUŻYNA A (OBSŁUGA LEWYM KCIUKIEM)
-          Positioned(
-            left: 12,
-            bottom: 12,
-            child: _buildLandscapeTeamScoreCard(
-              teamName: session.teamA,
-              teamColor: session.teamAColor,
-              points: session.currentSetPointsA,
-              isServing: isServingA,
-              timeoutsUsed: session.timeoutsA,
-              subsUsed: session.substitutionsA,
-              onAddPoint: () {
-                match.addPointA(points: 1);
-                context.read<P2PConnectionProvider>().broadcastScore(
-                  match.toScorePayload,
-                );
-              },
-              onSubtractPoint: () {
-                match.subtractPointA();
-                context.read<P2PConnectionProvider>().broadcastScore(
-                  match.toScorePayload,
-                );
-              },
-              tag1Label: 'AS!',
-              tag1Color: AppTheme.amberAccent,
-              onTag1: () => match.triggerSpecialEvent('AS!'),
-              tag2Label: 'BLOK',
-              tag2Color: AppTheme.cyanAccent,
-              onTag2: () => match.triggerSpecialEvent('BLOK'),
-              isOutdoor: isOutdoor,
-            ),
+          // 1. GÓRNA SEKCJA: PiP 16:9 + < WRÓĆ, Status i Stoper (00:00)
+          _buildLandscapeTopSplitSection(context, match, streamer, camera, p2p, isOutdoor),
+
+          const SizedBox(height: 6),
+
+          // 2. ŚRODKOWA SEKCJA: DUŻE KARTY PUNKTOWE (TACTILE SCORE CARDS)
+          Expanded(
+            child: _buildLandscapeTactileScoreCards(context, match, isOutdoor),
           ),
 
-          // PRAWY PANEL: DRUŻYNA B (OBSŁUGA PRAWYM KCIUKIEM)
-          Positioned(
-            right: 12,
-            bottom: 12,
-            child: _buildLandscapeTeamScoreCard(
-              teamName: session.teamB,
-              teamColor: session.teamBColor,
-              points: session.currentSetPointsB,
-              isServing: isServingB,
-              timeoutsUsed: session.timeoutsB,
-              subsUsed: session.substitutionsB,
-              onAddPoint: () {
-                match.addPointB(points: 1);
-                context.read<P2PConnectionProvider>().broadcastScore(
-                  match.toScorePayload,
-                );
-              },
-              onSubtractPoint: () {
-                match.subtractPointB();
-                context.read<P2PConnectionProvider>().broadcastScore(
-                  match.toScorePayload,
-                );
-              },
-              tag1Label: 'ATAK',
-              tag1Color: AppTheme.amberAccent,
-              onTag1: () => match.triggerSpecialEvent('ATAK'),
-              tag2Label: 'CHALLENGE',
-              tag2Color: const Color(0xFFAB47BC),
-              onTag2: () => match.triggerSpecialEvent('CHALLENGE'),
-              isOutdoor: isOutdoor,
-            ),
-          ),
+          const SizedBox(height: 6),
 
-          // DOLNY PASEK NAWIGACJI I KONTROLI MECZU: ROTACJA, UNDO, TIMEOUT, ZWIŃ
-          Positioned(
-            bottom: 12,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: Container(
-                constraints: const BoxConstraints(maxWidth: 250),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                decoration: BoxDecoration(
-                  color: isOutdoor ? Colors.black : const Color(0xF20A0E17),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.white24),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Colors.black87,
-                      blurRadius: 10,
-                      offset: Offset(0, 2),
+          // 3. DOLNY PASEK TRANSPORTOWY: START/STOP, HIGHLIGHT, SET, BATERIA
+          _buildLandscapeBottomTransportBar(context, match, streamer, camera, p2p, isOutdoor),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLandscapeTopSplitSection(
+    BuildContext context,
+    MatchProvider match,
+    StreamerProvider streamer,
+    CameraProvider camera,
+    P2PConnectionProvider p2p,
+    bool isOutdoor,
+  ) {
+    return SizedBox(
+      height: 110,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Górna lewa sekcja: PiP Live Preview 16:9 z nałożoną tablicą i przyciskiem powiększenia
+          AspectRatio(
+            aspectRatio: 16 / 9,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white24, width: 1.2),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black54,
+                    blurRadius: 10,
+                    offset: Offset(0, 3),
+                  ),
+                ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  _buildBroadcastStreamView(
+                    context: context,
+                    match: match,
+                    camera: camera,
+                    streamer: streamer,
+                    p2p: p2p,
+                    isOutdoor: isOutdoor,
+                    isPortrait: false,
+                  ),
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: InkWell(
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        setState(() {
+                          _isLandscapeFullScreenPreview = true;
+                        });
+                      },
+                      borderRadius: BorderRadius.circular(16),
+                      child: Container(
+                        padding: const EdgeInsets.all(5),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.7),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white30, width: 1),
+                        ),
+                        child: const Icon(
+                          Icons.fullscreen,
+                          size: 16,
+                          color: Colors.white,
+                        ),
+                      ),
                     ),
-                  ],
-                ),
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(width: 10),
+
+          // Górna prawa sekcja: < WRÓĆ, przełącznik statusu połączenia oraz duży stoper
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: isOutdoor ? Colors.black : const Color(0xFF0F1420),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // Lewa część prawej sekcji: przycisk powrotu i status połączenia
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // ROTACJA
                       InkWell(
                         onTap: () {
-                          match.toggleRotation();
-                          context.read<P2PConnectionProvider>().broadcastScore(
-                            match.toScorePayload,
-                          );
+                          HapticFeedback.selectionClick();
+                          if (context.canPop()) {
+                            context.pop();
+                          } else {
+                            context.go(AppRouter.initialRoute);
+                          }
                         },
                         borderRadius: BorderRadius.circular(8),
                         child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 5,
-                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                           decoration: BoxDecoration(
-                            color: AppTheme.amberAccent.withValues(alpha: 0.15),
+                            color: const Color(0xFF1E2638),
                             borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: AppTheme.amberAccent.withValues(
-                                alpha: 0.6,
-                              ),
-                            ),
+                            border: Border.all(color: Colors.white24),
                           ),
                           child: const Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(
-                                Icons.sync_alt,
-                                size: 13,
-                                color: AppTheme.amberAccent,
-                              ),
-                              SizedBox(width: 4),
+                              Icon(Icons.arrow_back_ios_new, size: 12, color: Colors.white),
+                              SizedBox(width: 5),
                               Text(
-                                'ROTACJA',
+                                'WRÓĆ',
                                 style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w900,
-                                  color: AppTheme.amberAccent,
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.5,
                                 ),
                               ),
                             ],
                           ),
                         ),
                       ),
-                      const SizedBox(width: 6),
-
-                      // UNDO (COFNIJ)
                       InkWell(
-                        onTap: match.canUndo
-                            ? () {
-                                match.undo();
-                                context
-                                    .read<P2PConnectionProvider>()
-                                    .broadcastScore(match.toScorePayload);
-                              }
-                            : null,
-                        borderRadius: BorderRadius.circular(8),
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          showModalBottomSheet(
+                            context: context,
+                            isScrollControlled: true,
+                            backgroundColor: Colors.transparent,
+                            builder: (_) => const CameraConnectionModal(),
+                          );
+                        },
+                        borderRadius: BorderRadius.circular(6),
                         child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 5,
-                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
-                            color: match.canUndo
-                                ? Colors.white12
-                                : Colors.white10,
-                            borderRadius: BorderRadius.circular(8),
+                            color: p2p.connectionState == CameraConnectionState.connected
+                                ? AppTheme.greenLive.withValues(alpha: 0.15)
+                                : Colors.red.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(6),
                             border: Border.all(
-                              color: match.canUndo
-                                  ? Colors.white24
-                                  : Colors.white10,
+                              color: p2p.connectionState == CameraConnectionState.connected
+                                  ? AppTheme.greenLive
+                                  : Colors.redAccent,
+                              width: 1,
                             ),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(
-                                Icons.undo,
-                                size: 13,
-                                color: match.canUndo
-                                    ? Colors.white
-                                    : Colors.white30,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                'COFNIJ',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w900,
-                                  color: match.canUndo
-                                      ? Colors.white
-                                      : Colors.white30,
+                              Container(
+                                width: 7,
+                                height: 7,
+                                decoration: BoxDecoration(
+                                  color: p2p.connectionState == CameraConnectionState.connected
+                                      ? AppTheme.greenLive
+                                      : Colors.redAccent,
+                                  shape: BoxShape.circle,
                                 ),
                               ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-
-                      // PRZYCISK UKRYCIA KOKPITU
-                      InkWell(
-                        onTap: () {
-                          HapticFeedback.selectionClick();
-                          setState(() {
-                            _isControlsHidden = true;
-                          });
-                        },
-                        borderRadius: BorderRadius.circular(8),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white12,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.keyboard_arrow_down_rounded,
-                                size: 15,
-                                color: Colors.white70,
-                              ),
-                              SizedBox(width: 2),
+                              const SizedBox(width: 5),
                               Text(
-                                'UKRYJ',
+                                p2p.connectionState == CameraConnectionState.connected
+                                    ? (p2p.currentRole == DeviceRole.singlePhoneAllInOne
+                                        ? 'LOCAL CAM'
+                                        : 'PHONE A')
+                                    : 'ROZŁĄCZONO',
                                 style: TextStyle(
-                                  fontSize: 9,
+                                  fontSize: 10,
                                   fontWeight: FontWeight.bold,
-                                  color: Colors.white70,
+                                  color: p2p.connectionState == CameraConnectionState.connected
+                                      ? AppTheme.greenLive
+                                      : Colors.redAccent,
                                 ),
                               ),
                             ],
@@ -2887,7 +2933,76 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                       ),
                     ],
                   ),
-                ),
+
+                  // Prawa część: Stoper meczowy (00:00) z okrągłym przyciskiem Play/Pause
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF090D14),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'CZAS MECZU',
+                              style: TextStyle(
+                                fontSize: 8.5,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.8,
+                                color: AppTheme.textSecondary,
+                              ),
+                            ),
+                            Text(
+                              match.formattedMatchDuration,
+                              style: const TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.white,
+                                fontFeatures: [FontFeature.tabularFigures()],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(width: 10),
+                        InkWell(
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            match.toggleMatchTimer();
+                          },
+                          borderRadius: BorderRadius.circular(20),
+                          child: Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: match.isMatchTimerRunning
+                                  ? const Color(0xFFDC2626)
+                                  : const Color(0xFF10B981),
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: (match.isMatchTimerRunning ? Colors.red : Colors.green)
+                                      .withValues(alpha: 0.4),
+                                  blurRadius: 8,
+                                ),
+                              ],
+                            ),
+                            child: Icon(
+                              match.isMatchTimerRunning ? Icons.pause : Icons.play_arrow,
+                              size: 20,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -2896,28 +3011,90 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
     );
   }
 
-  Widget _buildLandscapeTeamScoreCard({
+  Widget _buildLandscapeTactileScoreCards(
+    BuildContext context,
+    MatchProvider match,
+    bool isOutdoor,
+  ) {
+    final session = match.session;
+    final isServingA = session.currentServer == ServingTeam.teamA;
+    final isServingB = session.currentServer == ServingTeam.teamB;
+    final p2p = context.read<P2PConnectionProvider>();
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Karta Drużyny A (Gospodarze)
+        Expanded(
+          child: _buildTactileScoreCard(
+            teamName: session.teamA,
+            teamColor: session.teamAColor,
+            points: session.currentSetPointsA,
+            setsWon: session.setsA,
+            isServing: isServingA,
+            onSubtractPoint: () {
+              match.subtractPointA();
+              p2p.broadcastScore(match.toScorePayload);
+            },
+            onAddPoint: () {
+              match.addPointA(points: 1);
+              p2p.broadcastScore(match.toScorePayload);
+            },
+            tag1Label: 'AS!',
+            onTag1: () => match.triggerSpecialEvent('AS!'),
+            tag2Label: 'BLOK',
+            onTag2: () => match.triggerSpecialEvent('BLOK'),
+            isOutdoor: isOutdoor,
+          ),
+        ),
+
+        const SizedBox(width: 10),
+
+        // Karta Drużyny B (Goście)
+        Expanded(
+          child: _buildTactileScoreCard(
+            teamName: session.teamB,
+            teamColor: session.teamBColor,
+            points: session.currentSetPointsB,
+            setsWon: session.setsB,
+            isServing: isServingB,
+            onSubtractPoint: () {
+              match.subtractPointB();
+              p2p.broadcastScore(match.toScorePayload);
+            },
+            onAddPoint: () {
+              match.addPointB(points: 1);
+              p2p.broadcastScore(match.toScorePayload);
+            },
+            tag1Label: 'ATAK',
+            onTag1: () => match.triggerSpecialEvent('ATAK'),
+            tag2Label: 'CHALLENGE',
+            onTag2: () => match.triggerSpecialEvent('CHALLENGE'),
+            isOutdoor: isOutdoor,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTactileScoreCard({
     required String teamName,
     required Color teamColor,
     required int points,
+    required int setsWon,
     required bool isServing,
-    required int timeoutsUsed,
-    required int subsUsed,
     required VoidCallback onAddPoint,
     required VoidCallback onSubtractPoint,
     required String tag1Label,
-    required Color tag1Color,
     required VoidCallback onTag1,
     required String tag2Label,
-    required Color tag2Color,
     required VoidCallback onTag2,
     required bool isOutdoor,
   }) {
     return Container(
-      width: 210,
-      padding: const EdgeInsets.all(8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: isOutdoor ? Colors.black : const Color(0xF20A0E17),
+        color: isOutdoor ? Colors.black : const Color(0xFF101522),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: isServing ? teamColor : teamColor.withValues(alpha: 0.35),
@@ -2926,130 +3103,283 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
         boxShadow: [
           if (isServing)
             BoxShadow(
-              color: teamColor.withValues(alpha: 0.25),
-              blurRadius: 12,
-              spreadRadius: 1,
+              color: teamColor.withValues(alpha: 0.2),
+              blurRadius: 10,
             ),
-          const BoxShadow(
-            color: Colors.black87,
-            blurRadius: 10,
-            offset: Offset(0, 3),
-          ),
         ],
       ),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // NAZWA DRUŻYNY I ZNACZNIK SERWISU
+          // Góra karty: nazwa drużyny, serwis i wynik setów
           Row(
             children: [
               Container(
-                width: 4,
+                width: 5,
                 height: 14,
                 decoration: BoxDecoration(
                   color: teamColor,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   teamName.toUpperCase(),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 11,
+                  style: const TextStyle(
+                    fontSize: 13,
                     fontWeight: FontWeight.w900,
-                    color: teamColor,
+                    color: Colors.white,
                     letterSpacing: 0.5,
                   ),
                 ),
               ),
-              if (isServing)
+              if (isServing) ...[
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 5,
-                    vertical: 1,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
                     color: teamColor.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(color: teamColor, width: 1),
                   ),
                   child: const Text(
-                    'SERW',
+                    'SERWIS',
                     style: TextStyle(
-                      fontSize: 8,
+                      fontSize: 8.5,
                       fontWeight: FontWeight.w900,
                       color: Colors.white,
                     ),
                   ),
                 ),
+                const SizedBox(width: 6),
+              ],
+              Text(
+                'SETY: $setsWon',
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.amberAccent,
+                ),
+              ),
             ],
           ),
 
-          const SizedBox(height: 6),
+          // Środek: Okrągły czarny przycisk (-) po lewej, wielka cyfra pośrodku, duży żółty przycisk (+) po prawej
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // Okrągły czarny przycisk (-)
+                InkWell(
+                  onTap: () {
+                    HapticFeedback.mediumImpact();
+                    onSubtractPoint();
+                  },
+                  borderRadius: BorderRadius.circular(26),
+                  child: Container(
+                    width: 50,
+                    height: 50,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1B202E),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white24, width: 1.5),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black45,
+                          blurRadius: 6,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.remove,
+                      size: 26,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
 
-          // DUŻY PRZYCISK PUNKTU (+1 TAP, SWIPE DO DOŁU -1)
-          GestureDetector(
-            onTap: () {
-              HapticFeedback.lightImpact();
-              onAddPoint();
-            },
-            onVerticalDragEnd: (details) {
-              if ((details.primaryVelocity ?? 0) > 100) {
-                HapticFeedback.mediumImpact();
-                onSubtractPoint();
-              }
-            },
-            child: Container(
-              height: 72,
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: isOutdoor
-                    ? const Color(0xFF101622)
-                    : const Color(0xFF141D2D),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: isServing
-                      ? teamColor.withValues(alpha: 0.5)
-                      : Colors.white12,
+                // Wielka cyfra wyniku w centrum
+                Expanded(
+                  child: Center(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        '$points',
+                        style: TextStyle(
+                          fontSize: 54,
+                          fontWeight: FontWeight.w900,
+                          color: teamColor,
+                          height: 1.0,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Duży żółty przycisk (+) (#FACC15)
+                InkWell(
+                  onTap: () {
+                    HapticFeedback.heavyImpact();
+                    onAddPoint();
+                  },
+                  borderRadius: BorderRadius.circular(28),
+                  child: Container(
+                    width: 54,
+                    height: 54,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFACC15),
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFFACC15).withValues(alpha: 0.45),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.add,
+                      size: 30,
+                      color: Color(0xFF111827),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Dół karty: Szybkie tagi zdarzeń
+          Row(
+            children: [
+              Expanded(
+                child: InkWell(
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    onTag1();
+                  },
+                  borderRadius: BorderRadius.circular(6),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      tag1Label,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.amberAccent,
+                      ),
+                    ),
+                  ),
                 ),
               ),
-              child: Stack(
-                alignment: Alignment.center,
+              const SizedBox(width: 8),
+              Expanded(
+                child: InkWell(
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    onTag2();
+                  },
+                  borderRadius: BorderRadius.circular(6),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      tag2Label,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.cyanAccent,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLandscapeBottomTransportBar(
+    BuildContext context,
+    MatchProvider match,
+    StreamerProvider streamer,
+    CameraProvider camera,
+    P2PConnectionProvider p2p,
+    bool isOutdoor,
+  ) {
+    final isSingleMode = p2p.currentRole == DeviceRole.singlePhoneAllInOne;
+    final isRecActive = isSingleMode
+        ? camera.isRecording
+        : streamer.programRecState == RecordingState.recording;
+    final recDuration = isSingleMode
+        ? camera.masterRecDuration
+        : streamer.programRecDuration;
+    final isLive = streamer.streamingState == StreamingState.live;
+
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: isOutdoor ? Colors.black : const Color(0xFF0C101A),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // 1. Przycisk Start/Stop strumienia/nagrywania z licznikiem czasu
+          InkWell(
+            onTap: () async {
+              HapticFeedback.heavyImpact();
+              await _handleToggleRecording(context);
+            },
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+              decoration: BoxDecoration(
+                color: isRecActive ? const Color(0xFFDC2626) : const Color(0xFF1E2638),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: isRecActive ? Colors.redAccent : Colors.white24,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Positioned(
-                    top: 4,
-                    left: 8,
-                    child: Text(
-                      'TAP: +1',
-                      style: TextStyle(
-                        fontSize: 8,
-                        color: Colors.white.withValues(alpha: 0.4),
-                        fontWeight: FontWeight.bold,
-                      ),
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: isRecActive ? Colors.white : Colors.red,
+                      shape: BoxShape.circle,
                     ),
                   ),
-                  Positioned(
-                    top: 4,
-                    right: 8,
-                    child: Text(
-                      'SWIPE: -1',
-                      style: TextStyle(
-                        fontSize: 8,
-                        color: Colors.white.withValues(alpha: 0.4),
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
+                  const SizedBox(width: 6),
                   Text(
-                    points.toString(),
-                    style: TextStyle(
-                      fontSize: 40,
-                      fontWeight: FontWeight.w900,
-                      color: teamColor,
-                      height: 1.0,
+                    isRecActive
+                        ? 'REC ${_formatDuration(recDuration)}'
+                        : (isLive ? 'LIVE' : 'START REC'),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
                     ),
                   ),
                 ],
@@ -3057,67 +3387,98 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
             ),
           ),
 
-          const SizedBox(height: 6),
-
-          // SZYBKIE TAGI ZDARZEŃ (AS, BLOK / ATAK, CHALLENGE)
-          Row(
-            children: [
-              Expanded(
-                child: InkWell(
-                  onTap: () {
-                    HapticFeedback.heavyImpact();
-                    onTag1();
-                  },
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    height: 26,
-                    decoration: BoxDecoration(
-                      color: tag1Color.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: tag1Color.withValues(alpha: 0.4),
-                      ),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      tag1Label,
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w900,
-                        color: tag1Color,
-                      ),
-                    ),
-                  ),
-                ),
+          // 2. Przycisk Zapisz Highlight
+          InkWell(
+            onTap: () {
+              HapticFeedback.mediumImpact();
+              match.triggerSpecialEvent('HIGHLIGHT');
+            },
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+              decoration: BoxDecoration(
+                color: const Color(0xFF282012),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppTheme.amberAccent, width: 1),
               ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: InkWell(
-                  onTap: () {
-                    HapticFeedback.heavyImpact();
-                    onTag2();
-                  },
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    height: 26,
-                    decoration: BoxDecoration(
-                      color: tag2Color.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: tag2Color.withValues(alpha: 0.4),
-                      ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.star_rounded, size: 14, color: AppTheme.amberAccent),
+                  SizedBox(width: 5),
+                  Text(
+                    'HIGHLIGHT',
+                    style: TextStyle(
+                      color: AppTheme.amberAccent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
                     ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      tag2Label,
-                      style: TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w900,
-                        color: tag2Color,
-                      ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // 3. Selektor seta (- 1 + SET)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A202E),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white24),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                InkWell(
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    match.decrementSetNumber();
+                    p2p.broadcastScore(match.toScorePayload);
+                  },
+                  borderRadius: BorderRadius.circular(10),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    child: Icon(Icons.remove, size: 13, color: Colors.white),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Text(
+                    'SET ${match.session.currentSetNumber}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
                     ),
                   ),
                 ),
+                InkWell(
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    match.incrementSetNumber();
+                    p2p.broadcastScore(match.toScorePayload);
+                  },
+                  borderRadius: BorderRadius.circular(10),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    child: Icon(Icons.add, size: 13, color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // 4. Wskaźnik baterii
+          const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.battery_5_bar, size: 14, color: AppTheme.greenLive),
+              SizedBox(width: 3),
+              Text(
+                '85%',
+                style: TextStyle(fontSize: 10, color: Colors.white70, fontWeight: FontWeight.bold),
               ),
             ],
           ),

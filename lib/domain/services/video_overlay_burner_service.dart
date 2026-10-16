@@ -6,6 +6,7 @@ import 'package:ffmpeg_kit_flutter_new/ffmpeg_session.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:volleylive/domain/models/match_recording_metadata.dart';
 import 'package:volleylive/domain/models/match_session.dart';
+import 'package:volleylive/domain/models/scoreboard_burn_in_state.dart';
 import 'package:volleylive/domain/models/streaming_config.dart';
 import 'package:volleylive/presentation/services/scoreboard_widget_burner.dart';
 
@@ -21,6 +22,33 @@ class VideoOverlayBurnerService {
   bool get isStreamingActive => _isStreamingActive;
   String? get lastErrorMessage => _lastErrorMessage;
   void Function(String errorMessage)? onStreamError;
+
+  /// Translates [ScoreboardAnchorPosition] to FFmpeg overlay filter coordinate expressions
+  /// with broadcast safe margins (marginX=0.025, marginY=0.035).
+  static String getFfmpegOverlayCoordinates(
+    ScoreboardAnchorPosition? anchor, {
+    bool isPortrait = false,
+    int? customY,
+  }) {
+    if (isPortrait) {
+      final y = customY ?? 70;
+      return '(W-w)/2:$y';
+    }
+    switch (anchor ?? ScoreboardAnchorPosition.topLeft) {
+      case ScoreboardAnchorPosition.topLeft:
+        return 'W*0.025:H*0.035';
+      case ScoreboardAnchorPosition.topCenter:
+        return '(W-w)/2:H*0.035';
+      case ScoreboardAnchorPosition.topRight:
+        return 'W-w-W*0.025:H*0.035';
+      case ScoreboardAnchorPosition.bottomLeft:
+        return 'W*0.025:H-h-H*0.035';
+      case ScoreboardAnchorPosition.bottomCenter:
+        return '(W-w)/2:H-h-H*0.035';
+      case ScoreboardAnchorPosition.bottomRight:
+        return 'W-w-W*0.025:H-h-H*0.035';
+    }
+  }
 
   /// Bezpiecznie buduje punkt końcowy RTMP, zapobiegając dodawaniu ukośników na końcu
   /// jeśli klucz transmisji jest pusty (np. dla własnego serwera RTMP lub ffplay).
@@ -324,6 +352,7 @@ class VideoOverlayBurnerService {
     required MatchSession matchSession,
     required Duration duration,
     ScoreboardThemeStyle style = ScoreboardThemeStyle.tvProBroadcast,
+    ScoreboardAnchorPosition anchorPosition = ScoreboardAnchorPosition.topLeft,
     bool isPortrait = false,
     String? overlayImagePath,
     Uint8List? overlayPngBytes,
@@ -349,6 +378,11 @@ class VideoOverlayBurnerService {
     try {
       _lastErrorMessage = null;
       final overlayY = isPortrait ? 70 : 40;
+      final overlayCoords = getFfmpegOverlayCoordinates(
+        anchorPosition,
+        isPortrait: isPortrait,
+        customY: overlayY,
+      );
 
       // 1. Sprawdź unikalne zdarzenia na osi czasu meczu
       final distinctTimeline = <ScoreTimelineEntry>[];
@@ -448,7 +482,7 @@ class VideoOverlayBurnerService {
                 : "enable='between(t\\,$startSec\\,$endSec)'";
 
             filterSegments.add(
-              '$prevStream[$inputIdx:v] overlay=(W-w)/2:$overlayY:$enableExpr $nextStream',
+              '$prevStream[$inputIdx:v] overlay=$overlayCoords:$enableExpr $nextStream',
             );
             prevStream = nextStream;
           }
@@ -484,6 +518,7 @@ class VideoOverlayBurnerService {
             overlayImagePath: overlayImagePath,
             overlayPngBytes: overlayPngBytes,
             overlayY: overlayY,
+            anchorPosition: anchorPosition,
           );
         }
       } else {
@@ -496,6 +531,7 @@ class VideoOverlayBurnerService {
           overlayImagePath: overlayImagePath,
           overlayPngBytes: overlayPngBytes,
           overlayY: overlayY,
+          anchorPosition: anchorPosition,
         );
       }
 
@@ -517,6 +553,7 @@ class VideoOverlayBurnerService {
           overlayImagePath: overlayImagePath,
           overlayPngBytes: overlayPngBytes,
           overlayY: overlayY,
+          anchorPosition: anchorPosition,
         );
         final fallbackSession = await FFmpegKit.executeWithArguments(singleArgs);
         if (ReturnCode.isSuccess(await fallbackSession.getReturnCode())) {
@@ -548,6 +585,7 @@ class VideoOverlayBurnerService {
     required ScoreboardThemeStyle style,
     required bool isPortrait,
     required int overlayY,
+    ScoreboardAnchorPosition anchorPosition = ScoreboardAnchorPosition.topLeft,
     String? overlayImagePath,
     Uint8List? overlayPngBytes,
   }) async {
@@ -577,13 +615,19 @@ class VideoOverlayBurnerService {
       );
     }
 
+    final overlayCoords = getFfmpegOverlayCoordinates(
+      anchorPosition,
+      isPortrait: isPortrait,
+      customY: overlayY,
+    );
+
     return [
       '-i',
       sourceVideoPath,
       '-i',
       effectivePath!,
       '-filter_complex',
-      '[0:v][1:v] overlay=(W-w)/2:$overlayY [outv]',
+      '[0:v][1:v] overlay=$overlayCoords [outv]',
       '-map',
       '[outv]',
       '-map',
@@ -612,6 +656,7 @@ class VideoOverlayBurnerService {
     required List<ScoreTimelineEntry> timeline,
     required MatchSession matchSession,
     ScoreboardThemeStyle style = ScoreboardThemeStyle.tvProBroadcast,
+    ScoreboardAnchorPosition anchorPosition = ScoreboardAnchorPosition.topLeft,
     int width = 1920,
     int height = 1080,
     int bitrateKbps = 4500,
@@ -630,11 +675,17 @@ class VideoOverlayBurnerService {
         style: style,
       );
 
+      final overlayCoords = getFfmpegOverlayCoordinates(
+        anchorPosition,
+        isPortrait: false,
+        customY: 40,
+      );
+
       final scaleFilter =
           'scale=$width:$height:force_original_aspect_ratio=decrease,pad=$width:$height:(ow-iw)/2:(oh-ih)/2,setsar=1';
       final command =
           '-fflags +genpts+nobuffer -thread_queue_size 1024 -re -i "$inputSource" -thread_queue_size 1024 -i "$overlayPath" '
-          '-filter_complex "[0:v]$scaleFilter,setpts=PTS-STARTPTS[scaledv];[scaledv][1:v] overlay=(W-w)/2:40 [outv]" '
+          '-filter_complex "[0:v]$scaleFilter,setpts=PTS-STARTPTS[scaledv];[scaledv][1:v] overlay=$overlayCoords [outv]" '
           '-map "[outv]" -map 0:a? '
           '-c:v libx264 -preset ultrafast -tune zerolatency '
           '-b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${(bitrateKbps ~/ 2)}k -pix_fmt yuv420p '
@@ -724,21 +775,22 @@ class VideoOverlayBurnerService {
     required String endpoint,
     int width = 1920,
     int height = 1080,
-    int bitrateKbps = 4500,
+    int bitrateKbps = 3500,
     int fps = 30,
     int audioSampleRate = 48000,
   }) {
     final scaleFilter =
         'scale=$width:$height:force_original_aspect_ratio=decrease,pad=$width:$height:(ow-iw)/2:(oh-ih)/2,format=yuv420p';
     return '-fflags +genpts+nobuffer '
+        '-use_wallclock_as_timestamps 1 '
         '-thread_queue_size 1024 -f image2pipe -vcodec png -framerate $fps -i "$inputUrl" '
         '-thread_queue_size 1024 -f lavfi -re -i anullsrc=channel_layout=stereo:sample_rate=$audioSampleRate '
-        '-filter_complex "[0:v]format=rgba,$scaleFilter,setpts=N/($fps*TB)[v];[1:a]asetpts=N/($audioSampleRate*TB)[a]" '
+        '-filter_complex "[0:v]format=rgba,$scaleFilter,setpts=PTS-STARTPTS[v];[1:a]asetpts=PTS-STARTPTS[a]" '
         '-map [v] -map [a] '
-        '-c:v libx264 -preset veryfast -tune zerolatency '
+        '-c:v libx264 -preset ultrafast -tune zerolatency '
         '-c:a aac -b:a 128k '
-        '-b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${(bitrateKbps ~/ 2)}k '
-        '-pix_fmt yuv420p -g ${fps * 2} '
+        '-b:v ${bitrateKbps}k -maxrate ${bitrateKbps}k -bufsize ${(bitrateKbps * 2)}k '
+        '-pix_fmt yuv420p -g 30 -keyint_min 30 '
         '-max_interleave_delta 100000 -avoid_negative_ts make_zero -flvflags no_duration_filesize -f flv "$endpoint"';
   }
 

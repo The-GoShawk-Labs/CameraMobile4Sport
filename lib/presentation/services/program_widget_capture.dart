@@ -29,6 +29,22 @@ class ProgramWidgetCapture {
   Stream<Uint8List> get frameStream => _frames.stream;
   bool get isCapturing => _timer != null;
 
+
+  /// Creates a Netpbm PAM (Portable Arbitrary Map) image from raw RGBA bytes.
+  /// PAM is supported natively by FFmpeg image2pipe without CPU compression overhead (<0.5ms).
+  static Uint8List createPamFrame(int width, int height, Uint8List rawRgba) {
+    final headerStr =
+        'P7\nWIDTH $width\nHEIGHT $height\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n';
+    final headerBytes = Uint8List.fromList(headerStr.codeUnits);
+    final totalLength = headerBytes.length + rawRgba.length;
+    final pam = Uint8List(totalLength);
+    pam.setRange(0, headerBytes.length, headerBytes);
+    pam.setRange(headerBytes.length, totalLength, rawRgba);
+    return pam;
+  }
+
+  Size? _lastCapturedSize;
+
   Future<Uint8List?> captureFrame({bool reuseLastIfBusy = false}) async {
     if (_disposed || (isSourceAvailable != null && !isSourceAvailable!())) {
       return null;
@@ -38,25 +54,78 @@ class ProgramWidgetCapture {
     if (renderObject is! RenderRepaintBoundary ||
         !renderObject.hasSize ||
         renderObject.size.isEmpty) {
-      return null;
+      return reuseLastIfBusy ? _lastFrame : null;
+    }
+    if (renderObject.debugNeedsPaint) {
+      return reuseLastIfBusy ? _lastFrame : null;
     }
     _capturing = true;
     ui.Image? image;
     try {
+      final currentSize = renderObject.size;
+      if (_lastCapturedSize == null ||
+          _lastCapturedSize!.width != currentSize.width ||
+          _lastCapturedSize!.height != currentSize.height ||
+          _capturePixelRatio <= 0 ||
+          _capturePixelRatio.isNaN) {
+        _lastCapturedSize = currentSize;
+        const maxIntermediateWidth = 854.0;
+        const maxIntermediateHeight = 480.0;
+        final desiredRatio = math.min(
+          maxIntermediateWidth / currentSize.width,
+          maxIntermediateHeight / currentSize.height,
+        );
+        _capturePixelRatio = calculateEvenPixelRatio(
+          currentSize,
+          desiredRatio.clamp(1.0, 4.5),
+        );
+      }
+
       image = await renderObject.toImage(pixelRatio: _capturePixelRatio);
       final data = await image.toByteData(format: ui.ImageByteFormat.png);
-      if (data == null) return null;
+      if (data == null) return _lastFrame;
       _lastFrame = data.buffer.asUint8List(
         data.offsetInBytes,
         data.lengthInBytes,
       );
       return _lastFrame;
     } catch (_) {
-      return null;
+      return _lastFrame;
     } finally {
       image?.dispose();
       _capturing = false;
     }
+  }
+
+  /// Calculates a pixel ratio near [desiredRatio] such that both width and
+  /// height rounded to integers are strictly even numbers (divisible by 2).
+  /// This eliminates odd dimensions (like 990x557) which cause YUV420p encoder errors.
+  static double calculateEvenPixelRatio(Size size, double desiredRatio) {
+    if (!size.width.isFinite ||
+        !size.height.isFinite ||
+        size.width <= 0 ||
+        size.height <= 0) {
+      return 1.0;
+    }
+    final safeDesired = desiredRatio.isFinite && desiredRatio > 0
+        ? desiredRatio
+        : 1.0;
+    double bestRatio = safeDesired;
+    double minDiff = double.infinity;
+    for (int i = -30; i <= 30; i++) {
+      final candidate = safeDesired + (i * 0.002);
+      if (candidate < 0.5) continue;
+      final w = (size.width * candidate).round();
+      final h = (size.height * candidate).round();
+      if (w % 2 == 0 && h % 2 == 0 && w > 0 && h > 0) {
+        final diff = (candidate - safeDesired).abs();
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestRatio = candidate;
+        }
+      }
+    }
+    return bestRatio;
   }
 
   Future<Uint8List?> start({
@@ -67,24 +136,47 @@ class ProgramWidgetCapture {
     if (_disposed) return null;
     stop();
     final renderObject = boundaryKey.currentContext?.findRenderObject();
-    if (renderObject is RenderRepaintBoundary && renderObject.hasSize) {
-      final desiredRatio = math.max(
-        targetWidth / renderObject.size.width,
-        targetHeight / renderObject.size.height,
+    if (renderObject is RenderRepaintBoundary &&
+        renderObject.hasSize &&
+        !renderObject.size.isEmpty) {
+      // Target ~854x480 (or 960x540 max) intermediate capture resolution:
+      // crisp vector scoreboard text via FittedBox, <40ms PNG encode time,
+      // and locked even dimensions across portrait/landscape/PiP transitions.
+      const maxIntermediateWidth = 854.0;
+      const maxIntermediateHeight = 480.0;
+      final desiredRatio = math.min(
+        maxIntermediateWidth / renderObject.size.width,
+        maxIntermediateHeight / renderObject.size.height,
       );
-      // Balanced pixel ratio: ensures crisp program resolution (up to Full HD)
-      // while keeping async PNG readback smooth without stalling the UI thread.
-      _capturePixelRatio = desiredRatio.clamp(1.0, 2.75);
+      _capturePixelRatio = calculateEvenPixelRatio(
+        renderObject.size,
+        desiredRatio.clamp(1.0, 4.5),
+      );
     }
-    final initialFrame = await captureFrame();
+    var initialFrame = await captureFrame(reuseLastIfBusy: true);
+    if (initialFrame == null) {
+      await Future<void>.delayed(const Duration(milliseconds: 32));
+      initialFrame = await captureFrame(reuseLastIfBusy: true);
+    }
     if (initialFrame == null) return null;
-    final captureFps = (framesPerSecond ?? this.framesPerSecond).clamp(1, 60);
-    _timer = Timer.periodic(Duration(milliseconds: 1000 ~/ captureFps), (
-      _,
-    ) async {
+
+    final captureFps = (framesPerSecond ?? this.framesPerSecond).clamp(15, 30);
+    final tickIntervalMs = 1000 ~/ captureFps;
+
+    _timer = Timer.periodic(Duration(milliseconds: tickIntervalMs), (_) {
+      if (_disposed || _timer == null) return;
       if (isSourceAvailable != null && !isSourceAvailable!()) return;
-      final frame = await captureFrame();
-      if (frame != null && !_frames.isClosed) _frames.add(frame);
+
+      if (!_capturing) {
+        unawaited(
+          captureFrame(reuseLastIfBusy: false).then((freshFrame) {
+            if (_disposed || _timer == null || _frames.isClosed) return;
+            if (freshFrame != null) {
+              _frames.add(freshFrame);
+            }
+          }),
+        );
+      }
     });
     return initialFrame;
   }
@@ -92,6 +184,7 @@ class ProgramWidgetCapture {
   void stop() {
     _timer?.cancel();
     _timer = null;
+    _lastCapturedSize = null;
   }
 
   Future<void> dispose() async {

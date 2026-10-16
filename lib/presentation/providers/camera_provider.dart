@@ -173,13 +173,35 @@ class CameraProvider extends ChangeNotifier {
     });
 
     if (enableAudioSim) {
-      // Symulacja wysterowania mikrofonu
+      // Symulacja wysterowania mikrofonu (wstrzymywana podczas strumieniowania/nagrywania klatek, by nie wywoływać przebudowy UI co 300ms)
       _audioSimTimer = Timer.periodic(const Duration(milliseconds: 300), (
         timer,
       ) {
+        if (_isStreamingFrames || isRecording) return;
         _audioLevel = 0.4 + (DateTime.now().millisecond % 50) / 100;
         if (hasListeners) notifyListeners();
       });
+    }
+  }
+
+  /// Zwalnia sesję Camera2/CameraX (CameraId-0) przed przejęciem jej przez natywny koder sprzętowy,
+  /// eliminując deadlock na poziomie HAL w trybie pojedynczego smartfonu.
+  Future<void> releaseCameraForExternalStreamer() async {
+    final controller = _cameraController;
+    _isCameraInitialized = false;
+    _isStreamingFrames = false;
+    _cameraController = null;
+    notifyListeners();
+    if (controller != null) {
+      try {
+        if (controller.value.isStreamingImages) {
+          await controller.stopImageStream();
+        }
+      } catch (_) {}
+      try {
+        await controller.dispose();
+      } catch (_) {}
+      await Future.delayed(const Duration(milliseconds: 150));
     }
   }
 
@@ -465,7 +487,7 @@ class CameraProvider extends ChangeNotifier {
         int frameCounter = 0;
         debugPrint(
           '[CameraProvider] Image stream loop started (fps=${_settings.fps.fps}, '
-          'quality=${_isLiveTransmitting ? 65 : 85})',
+          'quality=${_isLiveTransmitting ? 82 : 88})',
         );
         controller.startImageStream((CameraImage image) async {
           if (!_isLiveTransmitting && !_isProgramPreviewCaptureEnabled) return;
@@ -482,7 +504,7 @@ class CameraProvider extends ChangeNotifier {
           try {
             final jpeg = await CameraFrameConverter.convertYuvToJpeg(
               image,
-              quality: _isLiveTransmitting ? 65 : 85,
+              quality: _isLiveTransmitting ? 82 : 88,
             );
             if (jpeg != null) {
               frameCounter++;

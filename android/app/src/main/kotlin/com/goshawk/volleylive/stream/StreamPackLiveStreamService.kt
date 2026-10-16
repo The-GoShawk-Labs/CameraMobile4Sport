@@ -68,6 +68,9 @@ class StreamPackLiveStreamService(private val context: Context) {
     private var isUserStopped = false
     private var isStreamingActive = false
 
+    @Volatile
+    private var cachedCapabilities: Map<String, Any>? = null
+
     fun initialize(
         width: Int = 1920,
         height: Int = 1080,
@@ -78,22 +81,53 @@ class StreamPackLiveStreamService(private val context: Context) {
         audioSampleRate: Int = 48000,
         audioChannels: Int = 2
     ) {
-        currentWidth = width
-        currentHeight = height
-        currentFps = fps
+        val safeWidth = (if (width > 0) width else 1920) and 1.inv()
+        val safeHeight = (if (height > 0) height else 1080) and 1.inv()
+        val safeFps = fps.coerceIn(15, 60)
+
+        currentWidth = safeWidth
+        currentHeight = safeHeight
+        currentFps = safeFps
         currentVideoBitrate = videoBitrate
         currentAudioBitrate = audioBitrate
         currentGopSeconds = gopSeconds
         currentAudioSampleRate = audioSampleRate
 
+        renderer = VolleyballScoreboardBitmapRenderer(safeWidth, safeHeight)
+        modifier = StreamPackScoreboardModifier(renderer, safeWidth, safeHeight)
+
+        scope.launch(Dispatchers.IO) {
+            configureStreamerInternal(
+                width = safeWidth,
+                height = safeHeight,
+                fps = safeFps,
+                videoBitrate = videoBitrate,
+                audioBitrate = audioBitrate,
+                gopSeconds = gopSeconds,
+                audioSampleRate = audioSampleRate,
+                audioChannels = audioChannels
+            )
+        }
+    }
+
+    @Synchronized
+    private fun configureStreamerInternal(
+        width: Int,
+        height: Int,
+        fps: Int,
+        videoBitrate: Int,
+        audioBitrate: Int,
+        gopSeconds: Float,
+        audioSampleRate: Int,
+        audioChannels: Int
+    ) {
         Log.i(
             TAG,
-            "Initializing StreamPack encoder: ${width}x${height} @ ${fps}fps, " +
+            "Initializing StreamPack encoder (IO): ${width}x${height} @ ${fps}fps, " +
                 "VideoBitrate=${videoBitrate / 1000}kbps CBR, GOP=${gopSeconds}s, " +
                 "AudioBitrate=${audioBitrate / 1000}kbps, AudioRate=${audioSampleRate}Hz"
         )
 
-        // 1. Audio Configuration: AAC-LC Stereo @ 128 kbps (CBR)
         val audioConfig = AudioConfig(
             mimeType = MediaFormat.MIMETYPE_AUDIO_AAC,
             startBitrate = audioBitrate,
@@ -101,7 +135,6 @@ class StreamPackLiveStreamService(private val context: Context) {
             channelConfig = if (audioChannels == 1) AudioFormat.CHANNEL_IN_MONO else AudioFormat.CHANNEL_IN_STEREO
         )
 
-        // 2. Video Configuration: H.264 High Profile (Level 4.1), strict 2.0s GOP interval
         val videoConfig = VideoConfig(
             mimeType = MediaFormat.MIMETYPE_VIDEO_AVC,
             startBitrate = videoBitrate,
@@ -112,87 +145,88 @@ class StreamPackLiveStreamService(private val context: Context) {
             gopDuration = gopSeconds
         )
 
-        // Release any existing streamer before re-creating
         try {
             streamer?.release()
         } catch (_: Exception) {}
 
-        streamer = CameraRtmpLiveStreamer(context = context, enableAudio = true).apply {
-            configure(audioConfig, videoConfig)
-            settings.audio.isMuted = false
+        try {
+            streamer = CameraRtmpLiveStreamer(context = context, enableAudio = true).apply {
+                configure(audioConfig, videoConfig)
+                settings.audio.isMuted = false
 
-            // Setup connection event callbacks
-            onConnectionListener = object : OnConnectionListener {
-                override fun onSuccess() {
-                    Log.i(TAG, "RTMP/RTMPS handshake & publish SUCCESS")
-                    retryCount = 0
-                    isStreamingActive = true
-                    enforceCameraFixedFps()
-                    startTelemetryLoop()
-                    onStatusEvent?.invoke(
-                        "CONNECTED",
-                        mapOf(
-                            "details" to "Połączono z serwerem nadawczym",
-                            "bitrate" to currentVideoBitrate,
-                            "fps" to currentFps
-                        )
-                    )
-                }
-
-                override fun onLost(message: String) {
-                    Log.w(TAG, "RTMP connection lost: $message")
-                    stopTelemetryLoop()
-                    isStreamingActive = false
-
-                    if (!isUserStopped && retryCount < maxRetries && lastRtmpUrl != null && lastStreamKey != null) {
-                        retryCount++
-                        val delayMs = 2000L * retryCount
-                        Log.i(TAG, "Network jitter detected. Reconnecting in ${delayMs}ms (Attempt $retryCount/$maxRetries)...")
+                onConnectionListener = object : OnConnectionListener {
+                    override fun onSuccess() {
+                        Log.i(TAG, "RTMP/RTMPS handshake & publish SUCCESS")
+                        retryCount = 0
+                        isStreamingActive = true
+                        enforceCameraFixedFps()
+                        startTelemetryLoop()
                         onStatusEvent?.invoke(
-                            "RECONNECTING",
+                            "CONNECTED",
                             mapOf(
-                                "attempt" to retryCount,
-                                "maxAttempts" to maxRetries,
-                                "delayMs" to delayMs,
-                                "details" to "Utrata połączenia ($message). Próba wznowienia $retryCount/$maxRetries..."
+                                "details" to "Połączono z serwerem nadawczym",
+                                "bitrate" to currentVideoBitrate,
+                                "fps" to currentFps
                             )
                         )
-                        reconnectJob?.cancel()
-                        reconnectJob = scope.launch {
-                            delay(delayMs)
-                            if (!isUserStopped) {
-                                executeConnection(lastRtmpUrl!!, lastStreamKey!!)
+                    }
+
+                    override fun onLost(message: String) {
+                        Log.w(TAG, "RTMP connection lost: $message")
+                        stopTelemetryLoop()
+                        isStreamingActive = false
+
+                        if (!isUserStopped && retryCount < maxRetries && lastRtmpUrl != null && lastStreamKey != null) {
+                            retryCount++
+                            val delayMs = 2000L * retryCount
+                            Log.i(TAG, "Network jitter detected. Reconnecting in ${delayMs}ms (Attempt $retryCount/$maxRetries)...")
+                            onStatusEvent?.invoke(
+                                "RECONNECTING",
+                                mapOf(
+                                    "attempt" to retryCount,
+                                    "maxAttempts" to maxRetries,
+                                    "delayMs" to delayMs,
+                                    "details" to "Utrata połączenia ($message). Próba wznowienia $retryCount/$maxRetries..."
+                                )
+                            )
+                            reconnectJob?.cancel()
+                            reconnectJob = scope.launch {
+                                delay(delayMs)
+                                if (!isUserStopped) {
+                                    executeConnection(lastRtmpUrl!!, lastStreamKey!!)
+                                }
                             }
+                        } else {
+                            onStatusEvent?.invoke(
+                                "DISCONNECTED",
+                                mapOf("details" to message)
+                            )
                         }
-                    } else {
+                    }
+
+                    override fun onFailed(message: String) {
+                        Log.e(TAG, "RTMP connection failed: $message")
+                        stopTelemetryLoop()
+                        isStreamingActive = false
                         onStatusEvent?.invoke(
-                            "DISCONNECTED",
-                            mapOf("details" to message)
+                            "ERROR",
+                            mapOf("error" to "Błąd połączenia RTMP: $message")
                         )
                     }
                 }
 
-                override fun onFailed(message: String) {
-                    Log.e(TAG, "RTMP connection failed: $message")
-                    stopTelemetryLoop()
-                    isStreamingActive = false
-                    onStatusEvent?.invoke(
-                        "ERROR",
-                        mapOf("error" to "Błąd połączenia RTMP: $message")
-                    )
+                onErrorListener = object : OnErrorListener {
+                    override fun onError(error: StreamPackError) {
+                        Log.e(TAG, "StreamPack internal error: ${error.message}")
+                        onStatusEvent?.invoke(
+                            "ERROR",
+                            mapOf("error" to (error.message ?: "Błąd enkodera sprzętowego"))
+                        )
+                    }
                 }
             }
-
-            // Setup encoder error listener
-            onErrorListener = object : OnErrorListener {
-                override fun onError(error: StreamPackError) {
-                    Log.e(TAG, "StreamPack internal error: ${error.message}")
-                    onStatusEvent?.invoke(
-                        "ERROR",
-                        mapOf("error" to (error.message ?: "Błąd enkodera sprzętowego"))
-                    )
-                }
-            }
+        } catch (e: Exception) {
+            Log.e(TAG, "StreamPack configure failed: ${e.message}")
         }
     }
 
@@ -203,6 +237,7 @@ class StreamPackLiveStreamService(private val context: Context) {
      * - Constant Bitrate (BITRATE_MODE_CBR) supported
      */
     fun validateEncoderCapabilities(): Map<String, Any> {
+        cachedCapabilities?.let { return it }
         var isH264Supported = false
         var isHighProfileSupported = false
         var isCbrSupported = false
@@ -251,16 +286,17 @@ class StreamPackLiveStreamService(private val context: Context) {
             "maxSupportedHeight" to maxHeight,
             "maxSupportedFps" to maxFps,
             "compliantWithYouTube" to (isH264Supported && isHighProfileSupported && isCbrSupported)
-        )
+        ).also { cachedCapabilities = it }
     }
 
     fun updateScoreboard(data: VolleyballScoreboardData) {
         modifier.invalidateCustomBitmap()
+        modifier.setAnchorPosition(data.anchorPosition)
         renderer.updateData(data)
     }
 
-    fun updateScoreboardOverlayBitmap(bytes: ByteArray, width: Int, height: Int) {
-        modifier.updateOverlayBitmap(bytes, width, height)
+    fun updateScoreboardOverlayBitmap(bytes: ByteArray, width: Int, height: Int, anchor: String = "topLeft") {
+        modifier.updateOverlayBitmap(bytes, width, height, anchor)
     }
 
     fun startStream(

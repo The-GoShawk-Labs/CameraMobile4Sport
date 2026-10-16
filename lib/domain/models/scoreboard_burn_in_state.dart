@@ -1,6 +1,111 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:volleylive/domain/models/match_recording_metadata.dart';
 import 'package:volleylive/domain/models/match_session.dart';
+
+/// Siatka 6 pozycji kotwiczenia tablicy wyników wewnątrz aktywnego kadru meczu.
+enum ScoreboardAnchorPosition {
+  topLeft,
+  topCenter,
+  topRight,
+  bottomLeft,
+  bottomCenter,
+  bottomRight;
+
+  static const double safeMarginX =
+      0.025; // Broadcast Safe Margin X: 2.5% szerokości wideo
+  static const double safeMarginY =
+      0.035; // Broadcast Safe Margin Y: 3.5% wysokości wideo
+
+  Alignment get alignment {
+    switch (this) {
+      case ScoreboardAnchorPosition.topLeft:
+        return const Alignment(
+          -1.0 + (2.0 * safeMarginX),
+          -1.0 + (2.0 * safeMarginY),
+        );
+      case ScoreboardAnchorPosition.topCenter:
+        return const Alignment(0.0, -1.0 + (2.0 * safeMarginY));
+      case ScoreboardAnchorPosition.topRight:
+        return const Alignment(
+          1.0 - (2.0 * safeMarginX),
+          -1.0 + (2.0 * safeMarginY),
+        );
+      case ScoreboardAnchorPosition.bottomLeft:
+        return const Alignment(
+          -1.0 + (2.0 * safeMarginX),
+          1.0 - (2.0 * safeMarginY),
+        );
+      case ScoreboardAnchorPosition.bottomCenter:
+        return const Alignment(0.0, 1.0 - (2.0 * safeMarginY));
+      case ScoreboardAnchorPosition.bottomRight:
+        return const Alignment(
+          1.0 - (2.0 * safeMarginX),
+          1.0 - (2.0 * safeMarginY),
+        );
+    }
+  }
+
+  /// Zwraca znormalizowane współrzędne (normX, normY) lewego górnego rogu tablicy w przestrzeni kadru [0.0, 1.0]
+  ({double normX, double normY}) getNormalizedTopLeft({
+    required double widgetWidthNorm,
+    required double widgetHeightNorm,
+  }) {
+    double x;
+    double y;
+    switch (this) {
+      case ScoreboardAnchorPosition.topLeft:
+        x = safeMarginX;
+        y = safeMarginY;
+        break;
+      case ScoreboardAnchorPosition.topCenter:
+        x = (1.0 - widgetWidthNorm) / 2.0;
+        y = safeMarginY;
+        break;
+      case ScoreboardAnchorPosition.topRight:
+        x = 1.0 - safeMarginX - widgetWidthNorm;
+        y = safeMarginY;
+        break;
+      case ScoreboardAnchorPosition.bottomLeft:
+        x = safeMarginX;
+        y = 1.0 - safeMarginY - widgetHeightNorm;
+        break;
+      case ScoreboardAnchorPosition.bottomCenter:
+        x = (1.0 - widgetWidthNorm) / 2.0;
+        y = 1.0 - safeMarginY - widgetHeightNorm;
+        break;
+      case ScoreboardAnchorPosition.bottomRight:
+        x = 1.0 - safeMarginX - widgetWidthNorm;
+        y = 1.0 - safeMarginY - widgetHeightNorm;
+        break;
+    }
+    return (normX: x, normY: y);
+  }
+
+  String get label {
+    switch (this) {
+      case ScoreboardAnchorPosition.topLeft:
+        return 'Góra Lewa';
+      case ScoreboardAnchorPosition.topCenter:
+        return 'Góra Środek';
+      case ScoreboardAnchorPosition.topRight:
+        return 'Góra Prawa';
+      case ScoreboardAnchorPosition.bottomLeft:
+        return 'Dół Lewa';
+      case ScoreboardAnchorPosition.bottomCenter:
+        return 'Dół Środek';
+      case ScoreboardAnchorPosition.bottomRight:
+        return 'Dół Prawa';
+    }
+  }
+
+  static ScoreboardAnchorPosition fromName(String? name) {
+    if (name == null) return ScoreboardAnchorPosition.topLeft;
+    return ScoreboardAnchorPosition.values.firstWhere(
+      (e) => e.name == name,
+      orElse: () => ScoreboardAnchorPosition.topLeft,
+    );
+  }
+}
 
 /// Representation of the dynamic volleyball scoreboard state sent to native
 /// video processors (StreamPack on Android / HaishinKit on iOS) for frame burn-in.
@@ -14,8 +119,9 @@ class VolleyballScoreboardState {
   final int setsA;
   final int setsB;
   final String servingTeam; // "A", "B", or "NONE"
-  final String? eventTag;   // e.g. "ACE!", "BLOCK!", "TIMEOUT"
+  final String? eventTag; // e.g. "ACE!", "BLOCK!", "TIMEOUT"
   final String? toastMessage;
+  final ScoreboardAnchorPosition anchorPosition;
 
   const VolleyballScoreboardState({
     required this.teamA,
@@ -28,6 +134,7 @@ class VolleyballScoreboardState {
     this.servingTeam = 'NONE',
     this.eventTag,
     this.toastMessage,
+    this.anchorPosition = ScoreboardAnchorPosition.topLeft,
   });
 
   /// Factory creating state directly from the app's [MatchSession]
@@ -35,6 +142,7 @@ class VolleyballScoreboardState {
     MatchSession session, {
     String? eventTag,
     String? toastMessage,
+    ScoreboardAnchorPosition anchorPosition = ScoreboardAnchorPosition.topLeft,
   }) {
     String serverStr = 'NONE';
     if (session.currentServer == ServingTeam.teamA) {
@@ -44,7 +152,8 @@ class VolleyballScoreboardState {
     }
 
     final rawToast = toastMessage ?? eventTag;
-    final effectiveToast = ScoreTimelineEntry.isDisplayableSpecialBanner(rawToast)
+    final effectiveToast =
+        ScoreTimelineEntry.isDisplayableSpecialBanner(rawToast)
         ? rawToast
         : null;
 
@@ -59,6 +168,7 @@ class VolleyballScoreboardState {
       servingTeam: serverStr,
       eventTag: effectiveToast,
       toastMessage: effectiveToast,
+      anchorPosition: anchorPosition,
     );
   }
 
@@ -75,6 +185,7 @@ class VolleyballScoreboardState {
     'servingTeam': servingTeam,
     'eventTag': eventTag ?? toastMessage ?? '',
     'toastMessage': toastMessage ?? eventTag ?? '',
+    'anchorPosition': anchorPosition.name,
   };
 
   @override
@@ -90,7 +201,8 @@ class VolleyballScoreboardState {
           setsB == other.setsB &&
           servingTeam == other.servingTeam &&
           eventTag == other.eventTag &&
-          toastMessage == other.toastMessage;
+          toastMessage == other.toastMessage &&
+          anchorPosition == other.anchorPosition;
 
   @override
   int get hashCode => Object.hash(
@@ -104,5 +216,6 @@ class VolleyballScoreboardState {
     servingTeam,
     eventTag,
     toastMessage,
+    anchorPosition,
   );
 }

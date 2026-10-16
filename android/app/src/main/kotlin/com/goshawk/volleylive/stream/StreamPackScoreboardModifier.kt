@@ -11,9 +11,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * OpenGL ES 2.0 processor for StreamPack.
- * Binds the authentic Flutter [ScoreboardOverlay] widget bitmap to an OpenGL texture
+ * Binds the authentic Flutter [ScoreboardOverlay] widget bitmap or native Canvas bitmap to an OpenGL texture
  * and alpha-blends it directly onto the camera stream surface before hardware H.264
  * encoding via MediaCodec.
+ * Positions quad exactly within 6 anchor points with TV broadcast safe margins (2.5% X, 3.5% Y).
  */
 class StreamPackScoreboardModifier(
     private val renderer: VolleyballScoreboardBitmapRenderer,
@@ -31,6 +32,10 @@ class StreamPackScoreboardModifier(
     private var scissorY = 0
     private var scissorW = 0
     private var scissorH = 0
+
+    @Volatile
+    private var anchorPosition = "topLeft"
+    private var currentAspectRatio = 2.8f
 
     // Telemetria wydajnościowa klatki
     private var frameCount = 0L
@@ -60,12 +65,12 @@ class StreamPackScoreboardModifier(
         }
     """.trimIndent()
 
-    // NDC coordinates for HUD banner: centered horizontally, near the top
+    // NDC coordinates for HUD card
     private val quadVertices = floatArrayOf(
-        -0.58f,  0.74f, 0.0f,  // Bottom-Left
-         0.58f,  0.74f, 0.0f,  // Bottom-Right
-        -0.58f,  0.94f, 0.0f,  // Top-Left
-         0.58f,  0.94f, 0.0f   // Top-Right
+        -0.95f,  0.65f, 0.0f,  // Bottom-Left
+        -0.50f,  0.65f, 0.0f,  // Bottom-Right
+        -0.95f,  0.93f, 0.0f,  // Top-Left
+        -0.50f,  0.93f, 0.0f   // Top-Right
     )
 
     private val texCoords = floatArrayOf(
@@ -84,6 +89,13 @@ class StreamPackScoreboardModifier(
         .order(ByteOrder.nativeOrder())
         .asFloatBuffer()
         .apply { put(texCoords); position(0) }
+
+    fun setAnchorPosition(position: String) {
+        if (anchorPosition != position) {
+            anchorPosition = position
+            updateQuadGeometry(currentAspectRatio)
+        }
+    }
 
     fun initGL() {
         program = createProgram(vertexShaderCode, fragmentShaderCode)
@@ -105,7 +117,8 @@ class StreamPackScoreboardModifier(
         GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, renderer.bitmap, 0)
         allocatedTexWidth = renderer.bitmap.width
         allocatedTexHeight = renderer.bitmap.height
-        updateQuadGeometry(renderer.overlayWidth.toFloat() / renderer.overlayHeight.toFloat(), halfW = 0.58f, top = 0.94f)
+        val ratio = if (renderer.overlayHeight > 0) renderer.overlayWidth.toFloat() / renderer.overlayHeight.toFloat() else 2.8f
+        updateQuadGeometry(ratio)
     }
 
     /**
@@ -121,7 +134,10 @@ class StreamPackScoreboardModifier(
     /**
      * Receives the authentic Flutter ScoreboardOverlay widget bitmap bytes
      */
-    fun updateOverlayBitmap(bytes: ByteArray, width: Int, height: Int) {
+    fun updateOverlayBitmap(bytes: ByteArray, width: Int, height: Int, anchor: String? = null) {
+        if (anchor != null) {
+            anchorPosition = anchor
+        }
         try {
             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             if (bmp != null) {
@@ -135,20 +151,74 @@ class StreamPackScoreboardModifier(
         }
     }
 
-    private fun updateQuadGeometry(aspectRatio: Float, halfW: Float = 0.58f, top: Float = 0.94f) {
+    private fun updateQuadGeometry(
+        aspectRatio: Float,
+        targetWidthFraction: Float = 0.224f // ~22.4% of frame width (430 / 1920)
+    ) {
+        currentAspectRatio = aspectRatio
         val frameAspect = frameWidth.toFloat() / frameHeight.toFloat()
-        val ndcHeight = (halfW * 2.0f) * (1.0f / frameAspect) / aspectRatio
-        val bottom = top - ndcHeight
+        val ndcWidth = targetWidthFraction * 2.0f
+        val ndcHeight = ndcWidth * frameAspect / aspectRatio
 
-        scissorX = (((-halfW + 1.0f) / 2.0f) * frameWidth).toInt().coerceAtLeast(0)
-        scissorW = ((halfW * 2.0f / 2.0f) * frameWidth).toInt().coerceAtMost(frameWidth)
-        scissorY = (((bottom + 1.0f) / 2.0f) * frameHeight).toInt().coerceAtLeast(0)
-        scissorH = (((top - bottom) / 2.0f) * frameHeight).toInt().coerceAtMost(frameHeight)
+        // Safe margins: 2.5% of width, 3.5% of height -> in NDC (-1 to 1, range 2.0): 0.05f X, 0.07f Y
+        val safeMarginX = 0.05f
+        val safeMarginY = 0.07f
 
-        quadVertices[0] = -halfW; quadVertices[1] = bottom
-        quadVertices[3] =  halfW; quadVertices[4] = bottom
-        quadVertices[6] = -halfW; quadVertices[7] = top
-        quadVertices[9] =  halfW; quadVertices[10] = top
+        val left: Float
+        val right: Float
+        val top: Float
+        val bottom: Float
+
+        when (anchorPosition) {
+            "topCenter" -> {
+                left = -ndcWidth / 2.0f
+                right = ndcWidth / 2.0f
+                top = 1.0f - safeMarginY
+                bottom = top - ndcHeight
+            }
+            "topRight" -> {
+                right = 1.0f - safeMarginX
+                left = right - ndcWidth
+                top = 1.0f - safeMarginY
+                bottom = top - ndcHeight
+            }
+            "bottomLeft" -> {
+                left = -1.0f + safeMarginX
+                right = left + ndcWidth
+                bottom = -1.0f + safeMarginY
+                top = bottom + ndcHeight
+            }
+            "bottomCenter" -> {
+                left = -ndcWidth / 2.0f
+                right = ndcWidth / 2.0f
+                bottom = -1.0f + safeMarginY
+                top = bottom + ndcHeight
+            }
+            "bottomRight" -> {
+                right = 1.0f - safeMarginX
+                left = right - ndcWidth
+                bottom = -1.0f + safeMarginY
+                top = bottom + ndcHeight
+            }
+            else -> { // "topLeft"
+                left = -1.0f + safeMarginX
+                right = left + ndcWidth
+                top = 1.0f - safeMarginY
+                bottom = top - ndcHeight
+            }
+        }
+
+        scissorX = (((left + 1.0f) / 2.0f) * frameWidth).toInt().coerceIn(0, frameWidth)
+        scissorY = (((bottom + 1.0f) / 2.0f) * frameHeight).toInt().coerceIn(0, frameHeight)
+        val scissorRight = (((right + 1.0f) / 2.0f) * frameWidth).toInt().coerceIn(scissorX, frameWidth)
+        val scissorTop = (((top + 1.0f) / 2.0f) * frameHeight).toInt().coerceIn(scissorY, frameHeight)
+        scissorW = scissorRight - scissorX
+        scissorH = scissorTop - scissorY
+
+        quadVertices[0] = left;  quadVertices[1] = bottom
+        quadVertices[3] = right; quadVertices[4] = bottom
+        quadVertices[6] = left;  quadVertices[7] = top
+        quadVertices[9] = right; quadVertices[10] = top
 
         vertexBuffer.position(0)
         vertexBuffer.put(quadVertices)
@@ -173,7 +243,8 @@ class StreamPackScoreboardModifier(
                 allocatedTexWidth = bmp.width
                 allocatedTexHeight = bmp.height
             }
-            updateQuadGeometry(bmp.width.toFloat() / bmp.height.toFloat(), halfW = 0.55f, top = 0.94f)
+            val ratio = if (bmp.height > 0) bmp.width.toFloat() / bmp.height.toFloat() else 2.8f
+            updateQuadGeometry(ratio)
         } else if (renderer.renderIfDirty()) {
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
             if (renderer.bitmap.width == allocatedTexWidth && renderer.bitmap.height == allocatedTexHeight) {
@@ -183,7 +254,8 @@ class StreamPackScoreboardModifier(
                 allocatedTexWidth = renderer.bitmap.width
                 allocatedTexHeight = renderer.bitmap.height
             }
-            updateQuadGeometry(renderer.overlayWidth.toFloat() / renderer.overlayHeight.toFloat(), halfW = 0.58f, top = 0.94f)
+            val ratio = if (renderer.overlayHeight > 0) renderer.overlayWidth.toFloat() / renderer.overlayHeight.toFloat() else 2.8f
+            updateQuadGeometry(ratio)
         }
 
         // 2. Hardware Alpha Blending

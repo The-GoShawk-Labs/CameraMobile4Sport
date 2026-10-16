@@ -39,6 +39,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
   Timer? _focusIndicatorTimer;
 
   VoidCallback? _p2pListener;
+  String? _lastBurnedSignature;
 
   @override
   void initState() {
@@ -141,13 +142,29 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
   Future<void> _onToggleLiveTransmission(BuildContext context, CameraProvider camera) async {
     final p2p = context.read<P2PConnectionProvider>();
     if (p2p.isSinglePhoneMode) {
-      showModalBottomSheet(
-        context: context,
-        backgroundColor: Colors.transparent,
-        isScrollControlled: true,
-        useRootNavigator: true,
-        builder: (_) => const StreamSettingsModal(),
-      );
+      final streamer = context.read<StreamerProvider>();
+      final match = context.read<MatchProvider>();
+      final isLive =
+          streamer.streamingState == StreamingState.live ||
+          streamer.streamingState == StreamingState.connecting;
+      if (isLive) {
+        await streamer.toggleLiveStream(matchSession: match.session);
+        return;
+      }
+      final streamKey = await streamer.config.resolveEffectiveStreamKey();
+      if (streamer.config.serverUrl.trim().isEmpty ||
+          (streamer.config.requiresStreamKey && streamKey.isEmpty)) {
+        if (!context.mounted) return;
+        showModalBottomSheet(
+          context: context,
+          backgroundColor: Colors.transparent,
+          isScrollControlled: true,
+          useRootNavigator: true,
+          builder: (_) => const StreamSettingsModal(),
+        );
+        return;
+      }
+      await camera.toggleLiveTransmission(p2pProvider: p2p);
       return;
     }
     await camera.toggleLiveTransmission(p2pProvider: p2p);
@@ -493,11 +510,20 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final isLandscape = constraints.maxWidth > constraints.maxHeight;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              _scoreboardBurner.captureAndPush();
-            }
-          });
+          final burnSignature =
+              '${match.session.teamA}:${match.session.teamB}:'
+              '${match.session.currentSetPointsA}:${match.session.currentSetPointsB}:'
+              '${match.session.setsA}:${match.session.setsB}:'
+              '${match.session.currentSetNumber}:${match.session.currentServer.name}:'
+              '${streamer.scoreboardStyle.name}:${streamer.config.anchorPosition.name}:$isLandscape';
+          if (_lastBurnedSignature != burnSignature) {
+            _lastBurnedSignature = burnSignature;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                _scoreboardBurner.captureAndPush();
+              }
+            });
+          }
 
           return Scaffold(
             backgroundColor: Colors.black,
@@ -587,20 +613,80 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
 
               // 5. TABLICA WYNIKOWA OVERLAY NA ŻYWO NA EKRANIE OPERATORA
               if (camera.settings.isHudVisible)
-                Positioned(
-                  top: isLandscape ? 52 : 88,
-                  left: 8,
-                  right: 8,
-                  child: SafeArea(
-                    child: Center(
+                Positioned.fill(
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      top: isLandscape ? 0 : 88,
+                      bottom: isLandscape ? 0 : 96,
+                    ),
+                    child: IgnorePointer(
                       child: ScoreboardOverlay(
                         session: match.session,
                         style: streamer.scoreboardStyle,
+                        anchorPosition: streamer.scoreboardAnchorPosition,
+                        targetAspectRatio: _resolveCameraAspectRatio(
+                          camera,
+                          isLandscape,
+                        ),
                         isTimeoutActive: match.isTimeoutActive,
                         timeoutSeconds: match.timeoutSecondsRemaining,
                         timeoutTeam: match.timeoutCallingTeam,
                         showServeIndicator: streamer.showServeIndicator,
                         activeSpecialEvent: match.activeSpecialEvent,
+                        matchDuration: match.matchDuration,
+                      ),
+                    ),
+                  ),
+                ),
+
+              // PŁYWAJĄCY PRZYCISK: EDYTUJ STYL TABLICY
+              if (camera.settings.isHudVisible)
+                Positioned(
+                  top: isLandscape ? 48 : 92,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: InkWell(
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        showModalBottomSheet(
+                          context: context,
+                          isScrollControlled: true,
+                          backgroundColor: Colors.transparent,
+                          builder: (_) => const ScoreboardCustomizerModal(),
+                        );
+                      },
+                      borderRadius: BorderRadius.circular(20),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.65),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: Colors.white24, width: 1),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Colors.black45,
+                              blurRadius: 8,
+                              offset: Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.edit_outlined, size: 14, color: AppTheme.cyanAccent),
+                            SizedBox(width: 6),
+                            Text(
+                              'Edytuj styl',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.4,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -673,6 +759,22 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
     ),
   );
 }
+
+  double _resolveCameraAspectRatio(CameraProvider camera, bool isLandscape) {
+    if (camera.isCameraInitialized &&
+        camera.cameraController != null &&
+        camera.cameraController!.value.isInitialized) {
+      final previewSize = camera.cameraController!.value.previewSize;
+      final double pWidth = previewSize?.width ?? 1920.0;
+      final double pHeight = previewSize?.height ?? 1080.0;
+      final double sensorLong = pWidth > pHeight ? pWidth : pHeight;
+      final double sensorShort = pWidth > pHeight ? pHeight : pWidth;
+      return isLandscape
+          ? (sensorLong / sensorShort)
+          : (sensorShort / sensorLong);
+    }
+    return isLandscape ? (16.0 / 9.0) : (9.0 / 16.0);
+  }
 
   Widget _buildCameraPreviewContent(CameraProvider camera, bool isLandscape) {
     if (camera.isCameraInitialized &&

@@ -10,5 +10,6 @@ data class VolleyballScoreboardData(
     val setsB: Int = 0,
     val servingTeam: String = "NONE",
     val eventTag: String = "",
-    val toastMessage: String = ""
+    val toastMessage: String = "",
+    val anchorPosition: String = "topLeft"
 )

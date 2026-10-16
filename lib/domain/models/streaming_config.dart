@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:volleylive/core/security/secure_storage_service.dart';
+import 'package:volleylive/domain/models/scoreboard_burn_in_state.dart';
 
 enum StreamingPlatformType {
   youtube('YouTube Live (RTMPS)', 'rtmps://a.rtmps.youtube.com/live2'),
@@ -145,6 +146,7 @@ class StreamConfig {
   static const String prefKeyAudioSampleRate = 'stream_config_audio_sample_rate';
   static const String prefKeyLocalRecording = 'stream_config_local_recording';
   static const String prefKeyDirectStreamKey = 'stream_config_direct_stream_key';
+  static const String prefKeyScoreboardAnchor = 'stream_config_scoreboard_anchor';
 
   final String serverUrl;
   final String streamKey;
@@ -159,6 +161,7 @@ class StreamConfig {
   final int audioSampleRate; // 48000 or 44100
   final int audioChannels; // 2 (Stereo)
   final bool isLocalProgramRecordingEnabled;
+  final ScoreboardAnchorPosition anchorPosition;
 
   const StreamConfig({
     this.serverUrl = 'rtmps://a.rtmps.youtube.com/live2',
@@ -174,6 +177,7 @@ class StreamConfig {
     this.audioSampleRate = 48000,
     this.audioChannels = 2,
     this.isLocalProgramRecordingEnabled = true,
+    this.anchorPosition = ScoreboardAnchorPosition.topLeft,
   });
 
   /// Factory creating configuration directly from preset defaults
@@ -184,6 +188,7 @@ class StreamConfig {
     String credentialReference = '',
     bool isLocalProgramRecordingEnabled = true,
     int? customVideoBitrateKbps,
+    ScoreboardAnchorPosition anchorPosition = ScoreboardAnchorPosition.topLeft,
   }) {
     final vBitrate = (customVideoBitrateKbps ?? preset.videoBitrateKbps) * 1000;
     return StreamConfig(
@@ -200,6 +205,7 @@ class StreamConfig {
       audioSampleRate: 48000,
       audioChannels: 2,
       isLocalProgramRecordingEnabled: isLocalProgramRecordingEnabled,
+      anchorPosition: anchorPosition,
     );
   }
 
@@ -243,6 +249,7 @@ class StreamConfig {
     int? audioSampleRate,
     int? audioChannels,
     bool? isLocalProgramRecordingEnabled,
+    ScoreboardAnchorPosition? anchorPosition,
   }) {
     return StreamConfig(
       serverUrl: serverUrl ?? this.serverUrl,
@@ -259,6 +266,7 @@ class StreamConfig {
       audioChannels: audioChannels ?? this.audioChannels,
       isLocalProgramRecordingEnabled:
           isLocalProgramRecordingEnabled ?? this.isLocalProgramRecordingEnabled,
+      anchorPosition: anchorPosition ?? this.anchorPosition,
     );
   }
 
@@ -313,6 +321,7 @@ class StreamConfig {
     'audioSampleRate': audioSampleRate,
     'audioChannels': audioChannels,
     'isLocalProgramRecordingEnabled': isLocalProgramRecordingEnabled,
+    'anchorPosition': anchorPosition.name,
     'profile': 'high', // AVCProfileHigh
     'bitrateMode': 'CBR',
   };
@@ -333,6 +342,7 @@ class StreamConfig {
       audioChannels: (map['audioChannels'] as num?)?.toInt() ?? 2,
       isLocalProgramRecordingEnabled:
           (map['isLocalProgramRecordingEnabled'] as bool?) ?? true,
+      anchorPosition: ScoreboardAnchorPosition.fromName(map['anchorPosition'] as String?),
     );
   }
 
@@ -355,6 +365,7 @@ class StreamConfig {
     await prefs.setDouble(prefKeyGopSeconds, gopSeconds);
     await prefs.setInt(prefKeyAudioSampleRate, audioSampleRate);
     await prefs.setBool(prefKeyLocalRecording, isLocalProgramRecordingEnabled);
+    await prefs.setString(prefKeyScoreboardAnchor, anchorPosition.name);
   }
 
   /// Restores configuration from SharedPreferences
@@ -374,6 +385,8 @@ class StreamConfig {
     final gopSeconds = prefs.getDouble(prefKeyGopSeconds) ?? preset.gopSeconds;
     final audioSampleRate = prefs.getInt(prefKeyAudioSampleRate) ?? 48000;
     final localRec = prefs.getBool(prefKeyLocalRecording) ?? true;
+    final anchorStr = prefs.getString(prefKeyScoreboardAnchor);
+    final anchorPos = ScoreboardAnchorPosition.fromName(anchorStr);
 
     return StreamConfig(
       serverUrl: serverUrl,
@@ -389,6 +402,7 @@ class StreamConfig {
       audioSampleRate: audioSampleRate,
       audioChannels: 2,
       isLocalProgramRecordingEnabled: localRec,
+      anchorPosition: anchorPos,
     );
   }
 

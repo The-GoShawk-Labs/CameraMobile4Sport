@@ -9,6 +9,7 @@ import 'package:volleylive/domain/models/connection_state.dart';
 import 'package:volleylive/domain/models/match_session.dart';
 import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/domain/models/match_recording_metadata.dart';
+import 'package:volleylive/domain/models/scoreboard_burn_in_state.dart';
 import 'package:volleylive/domain/models/streaming_config.dart';
 import 'package:volleylive/domain/services/recording_service.dart';
 import 'package:volleylive/domain/services/remote_frame_recorder.dart';
@@ -496,6 +497,7 @@ class _MockFailingOverlayBurner extends VideoOverlayBurnerService {
     required MatchSession matchSession,
     required Duration duration,
     ScoreboardThemeStyle style = ScoreboardThemeStyle.tvProBroadcast,
+    ScoreboardAnchorPosition anchorPosition = ScoreboardAnchorPosition.topLeft,
     bool isPortrait = false,
     String? overlayImagePath,
     Uint8List? overlayPngBytes,

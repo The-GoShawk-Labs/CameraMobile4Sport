@@ -2,671 +2,570 @@ import 'package:flutter/material.dart';
 import 'package:volleylive/core/theme/app_theme.dart';
 import 'package:volleylive/domain/models/match_recording_metadata.dart';
 import 'package:volleylive/domain/models/match_session.dart';
+import 'package:volleylive/domain/models/scoreboard_burn_in_state.dart';
 import 'package:volleylive/domain/models/streaming_config.dart';
 
+/// Nowoczesna, telewizyjna tablica wyników (Scoreboard / Scorebug)
+/// wzorowana na systemach komercyjnych (np. SportCam).
+///
+/// Obsługuje:
+/// 1. Siatkę 6 pozycji kotwiczenia (ScoreboardAnchorPosition) wewnątrz aktywnego kadru 16:9.
+/// 2. Skalowanie proporcjonalne względem rozdzielczości FullHD (1920x1080) i widoku wideo.
+/// 3. Kompaktowy układ telewizyjny o proporcjach ~2.8:1 (430 x 154 px bazowo).
+/// 4. Ochronę przed jankiem UI i zbędnymi przerysowaniami (RepaintBoundary).
 class ScoreboardOverlay extends StatelessWidget {
   final MatchSession session;
   final ScoreboardThemeStyle style;
+  final ScoreboardAnchorPosition anchorPosition;
+  final double targetAspectRatio;
+  final double? customScale;
   final bool isTimeoutActive;
   final int timeoutSeconds;
   final ServingTeam timeoutTeam;
   final bool showServeIndicator;
-  final String? activeSpecialEvent; // np. 'ACE!', 'CHALLENGE'
+  final String? activeSpecialEvent;
+  final Duration? matchDuration;
   final bool animate;
+  final bool isStandaloneCard;
 
   const ScoreboardOverlay({
     super.key,
     required this.session,
     this.style = ScoreboardThemeStyle.tvProBroadcast,
+    this.anchorPosition = ScoreboardAnchorPosition.topLeft,
+    this.targetAspectRatio = 16.0 / 9.0,
+    this.customScale,
     this.isTimeoutActive = false,
     this.timeoutSeconds = 0,
     this.timeoutTeam = ServingTeam.none,
     this.showServeIndicator = true,
     this.activeSpecialEvent,
+    this.matchDuration,
     this.animate = true,
+    this.isStandaloneCard = false,
   });
 
-  bool get _isDecidingSet {
-    // 5. set w siatkówce halowej lub 3. set w plażowej / best-of-3
-    return session.currentSetNumber >= 5 || (session.setsA == 1 && session.setsB == 1 && session.currentSetNumber == 3);
-  }
-
-  int get _targetPoints {
-    if (style == ScoreboardThemeStyle.beachVolley) {
-      return session.currentSetNumber >= 3 ? 15 : 21;
+  String _formatMatchTime(Duration? duration) {
+    if (duration != null) {
+      final m = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+      final s = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+      if (duration.inHours > 0) {
+        final h = duration.inHours.toString().padLeft(2, '0');
+        return '$h:$m:$s';
+      }
+      return '$m:$s';
     }
-    return _isDecidingSet ? 15 : 25;
+    return '00:00';
   }
-
-  bool _isSetPoint(int points, int oppPoints) {
-    final target = _targetPoints;
-    return points >= (target - 1) && (points - oppPoints) >= 1;
-  }
-
-  bool get _isSetPointA => _isSetPoint(session.currentSetPointsA, session.currentSetPointsB) && !session.isMatchOver;
-  bool get _isSetPointB => _isSetPoint(session.currentSetPointsB, session.currentSetPointsA) && !session.isMatchOver;
-
-  bool get _isMatchPointA => _isSetPointA && (session.setsA == 2 || (_isDecidingSet && session.setsA == session.setsB));
-  bool get _isMatchPointB => _isSetPointB && (session.setsB == 2 || (_isDecidingSet && session.setsA == session.setsB));
 
   @override
   Widget build(BuildContext context) {
-    return FittedBox(
-      fit: BoxFit.scaleDown,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // GŁÓWNY WIDGET SCOREBOARDU W ZALEŻNOŚCI OD WYBRANEGO STYLU
-          _buildScoreboardBody(context),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Jeśli rodzic jest nieograniczony lub wymagana jest sama karta:
+        final hasInfiniteBounds =
+            !constraints.maxWidth.isFinite ||
+            !constraints.maxHeight.isFinite ||
+            constraints.maxWidth <= 0 ||
+            constraints.maxHeight <= 0;
 
-          // DYNAMICZNY BANER ZDARZEŃ (SET POINT / MATCH POINT / TIMEOUT / SPECIAL)
-          _buildDynamicEventBanner(),
-        ],
-      ),
+        if (isStandaloneCard || hasInfiniteBounds) {
+          final baseW =
+              (constraints.maxWidth.isFinite && constraints.maxWidth > 0)
+              ? constraints.maxWidth
+              : 430.0;
+          final rawScale = customScale ?? (baseW / 430.0);
+          final scale = (rawScale.isFinite && rawScale > 0 ? rawScale : 1.0)
+              .clamp(0.1, 2.5);
+          return RepaintBoundary(
+            child: SizedBox(
+              width: 430.0 * scale,
+              height: 154.0 * scale,
+              child: FittedBox(
+                fit: BoxFit.fill,
+                child: SizedBox(
+                  width: 430.0,
+                  height: 154.0,
+                  child: _buildScoreboardCard(context, 1.0),
+                ),
+              ),
+            ),
+          );
+        }
+
+        // =====================================================================
+        // ALGORYTM WERYFIKACJI VIEWPORTU WIDEO (16:9 ORAZ PIONOWEGO 9:16)
+        // =====================================================================
+        final parentW = constraints.maxWidth;
+        final parentH = constraints.maxHeight;
+        final safeAspect =
+            (targetAspectRatio.isFinite && targetAspectRatio > 0)
+            ? targetAspectRatio
+            : (16.0 / 9.0);
+        final isPortraitVideo = safeAspect < 1.0;
+
+        double videoW;
+        double videoH;
+        double offsetX = 0.0;
+        double offsetY = 0.0;
+
+        if (parentW / parentH > safeAspect) {
+          // Pillarbox: kontener jest szerszy niż strumień wideo (np. pionowe wideo 9:16 w oknie 16:9 lub ekran 20:9)
+          videoH = parentH;
+          videoW = videoH * safeAspect;
+          offsetX = (parentW - videoW) / 2.0;
+          offsetY = 0.0;
+        } else {
+          // Letterbox: kontener jest wyższy niż strumień wideo
+          videoW = parentW;
+          videoH = videoW / safeAspect;
+          offsetX = 0.0;
+          offsetY = (parentH - videoH) / 2.0;
+        }
+
+        // Dla strumienia poziomego (16:9) szerokość bazowa FullHD to 1920px (karta ~22.4% szerokości kadru).
+        // Dla strumienia pionowego (9:16) szerokość bazowa FullHD to 1080px (karta ~39.8% szerokości pionowego kadru),
+        // dzięki czemu tablica idealnie mieści się wewnątrz pionowego strumienia wideo.
+        final referenceStreamWidth = isPortraitVideo ? 1080.0 : 1920.0;
+        final rawScale = customScale ?? (videoW / referenceStreamWidth);
+        final scale = (rawScale.isFinite && rawScale > 0 ? rawScale : 0.5)
+            .clamp(0.05, 2.5);
+        final cardW = (430.0 * scale).clamp(10.0, videoW * 0.92);
+        final cardH = cardW * (154.0 / 430.0);
+
+        // Bezpieczne marginesy telewizyjne (Broadcast Safe Margin) wewnątrz aktywnego kadru wideo
+        final marginX = videoW * (isPortraitVideo ? 0.035 : ScoreboardAnchorPosition.safeMarginX);
+        final marginY = videoH * ScoreboardAnchorPosition.safeMarginY;
+
+        double left;
+        double top;
+
+        switch (anchorPosition) {
+          case ScoreboardAnchorPosition.topLeft:
+            left = offsetX + marginX;
+            top = offsetY + marginY;
+            break;
+          case ScoreboardAnchorPosition.topCenter:
+            left = offsetX + (videoW - cardW) / 2.0;
+            top = offsetY + marginY;
+            break;
+          case ScoreboardAnchorPosition.topRight:
+            left = offsetX + videoW - marginX - cardW;
+            top = offsetY + marginY;
+            break;
+          case ScoreboardAnchorPosition.bottomLeft:
+            left = offsetX + marginX;
+            top = offsetY + videoH - marginY - cardH;
+            break;
+          case ScoreboardAnchorPosition.bottomCenter:
+            left = offsetX + (videoW - cardW) / 2.0;
+            top = offsetY + videoH - marginY - cardH;
+            break;
+          case ScoreboardAnchorPosition.bottomRight:
+            left = offsetX + videoW - marginX - cardW;
+            top = offsetY + videoH - marginY - cardH;
+            break;
+        }
+
+        // Gwarancja, że widżet nigdy nie wyjdzie poza granice aktywnego strumienia wideo
+        final minLeft = offsetX;
+        final maxLeft = (offsetX + videoW - cardW) > minLeft
+            ? (offsetX + videoW - cardW)
+            : minLeft;
+        final minTop = offsetY;
+        final maxTop = (offsetY + videoH - cardH) > minTop
+            ? (offsetY + videoH - cardH)
+            : minTop;
+        left = left.clamp(minLeft, maxLeft);
+        top = top.clamp(minTop, maxTop);
+
+        return Stack(
+          fit: StackFit.expand,
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: left,
+              top: top,
+              width: cardW,
+              height: cardH,
+              child: RepaintBoundary(
+                child: FittedBox(
+                  fit: BoxFit.fill,
+                  child: SizedBox(
+                    width: 430.0,
+                    height: 154.0,
+                    child: _buildScoreboardCard(context, 1.0),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
-  Widget _buildScoreboardBody(BuildContext context) {
+  Widget _buildScoreboardCard(BuildContext context, double scale) {
     switch (style) {
       case ScoreboardThemeStyle.tvProBroadcast:
-        return _buildTvProBroadcast();
+        return _buildSportCamTvBroadcast(scale);
       case ScoreboardThemeStyle.cyberGlow:
-        return _buildCyberGlow();
+        return _buildCyberGlow(scale);
       case ScoreboardThemeStyle.minimalist:
-        return _buildMinimalist();
+        return _buildMinimalist(scale);
       case ScoreboardThemeStyle.beachVolley:
-        return _buildBeachVolley();
+        return _buildBeachVolley(scale);
     }
   }
 
   // ===========================================================================
-  // 1. STYL: TV PRO BROADCAST (Telewizyjna belka transmisyjna)
+  // 1. STYL SPORTCAM TV PRO BROADCAST (Telewizyjna karta 2.8:1)
   // ===========================================================================
-  Widget _buildTvProBroadcast() {
+  Widget _buildSportCamTvBroadcast(double scale) {
     final isServingA = showServeIndicator && session.currentServer == ServingTeam.teamA;
     final isServingB = showServeIndicator && session.currentServer == ServingTeam.teamB;
 
     return Container(
-      height: 48,
+      width: 430.0 * scale,
+      height: 154.0 * scale,
       decoration: BoxDecoration(
-        color: const Color(0xF00D111A),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFF2E3A52), width: 1.2),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x99000000),
-            blurRadius: 18,
-            offset: Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // TEAM A: KOLOROWY PASEK AKCENTU
-          Container(
-            width: 5,
-            decoration: BoxDecoration(
-              color: session.teamAColor,
-              borderRadius: const BorderRadius.horizontal(left: Radius.circular(8)),
-            ),
-          ),
-
-          // TEAM A: NAZWA I SERWIS
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            constraints: const BoxConstraints(maxWidth: 150),
-            alignment: Alignment.center,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (isServingA) ...[
-                  _buildServeBallIndicator(session.teamAColor),
-                  const SizedBox(width: 6),
-                ],
-                Flexible(
-                  child: Text(
-                    session.teamA.toUpperCase(),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.8,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // TEAM A: WYNIK SETÓW (KROPKI / CYFRA)
-          _buildSetsBadge(session.setsA, session.teamAColor),
-
-          // TEAM A: WYNIK PUNKTÓW
-          Container(
-            width: 44,
-            height: double.infinity,
-            color: const Color(0xFF151C28),
-            alignment: Alignment.center,
-            child: _AnimatedScoreDigit(
-              score: session.currentSetPointsA,
-              color: session.teamAColor,
-              fontSize: 22,
-              animate: animate,
-            ),
-          ),
-
-          // SEKCJA ŚRODKOWA: OKRES / SET & WYNIKI
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            decoration: const BoxDecoration(
-              color: Color(0xFF090C12),
-              border: Border.symmetric(
-                vertical: BorderSide(color: Color(0xFF1F293D), width: 1),
-              ),
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  session.periodDisplay,
-                  style: const TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.6,
-                    color: Colors.white70,
-                  ),
-                ),
-                if (session.sport == MatchSport.volleyball || session.sport == MatchSport.beachVolleyball)
-                  Text(
-                    '${session.setsA}-${session.setsB}',
-                    style: const TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
-                      color: AppTheme.amberAccent,
-                    ),
-                  )
-                else if (session.foulsA > 0 || session.foulsB > 0)
-                  Text(
-                    'F: ${session.foulsA}-${session.foulsB}',
-                    style: const TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
-                      color: AppTheme.redLive,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-
-          // TEAM B: WYNIK PUNKTÓW
-          Container(
-            width: 44,
-            height: double.infinity,
-            color: const Color(0xFF151C28),
-            alignment: Alignment.center,
-            child: _AnimatedScoreDigit(
-              score: session.currentSetPointsB,
-              color: session.teamBColor,
-              fontSize: 22,
-              animate: animate,
-            ),
-          ),
-
-          // TEAM B: WYNIK SETÓW
-          _buildSetsBadge(session.setsB, session.teamBColor),
-
-          // TEAM B: NAZWA I SERWIS
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            constraints: const BoxConstraints(maxWidth: 150),
-            alignment: Alignment.center,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Flexible(
-                  child: Text(
-                    session.teamB.toUpperCase(),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.8,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-                if (isServingB) ...[
-                  const SizedBox(width: 6),
-                  _buildServeBallIndicator(session.teamBColor),
-                ],
-              ],
-            ),
-          ),
-
-          // TEAM B: KOLOROWY PASEK AKCENTU
-          Container(
-            width: 5,
-            decoration: BoxDecoration(
-              color: session.teamBColor,
-              borderRadius: const BorderRadius.horizontal(right: Radius.circular(8)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ===========================================================================
-  // 2. STYL: CYBER GLOW NEON (Nowoczesny esportowy styl glassmorphism)
-  // ===========================================================================
-  Widget _buildCyberGlow() {
-    final isServingA = showServeIndicator && session.currentServer == ServingTeam.teamA;
-    final isServingB = showServeIndicator && session.currentServer == ServingTeam.teamB;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xEB0A0E17),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.45), width: 1.5),
+        color: const Color(0xF2F4F6F9), // 95% opacity #F4F6F9
+        borderRadius: BorderRadius.circular(10.0 * scale),
         boxShadow: [
           BoxShadow(
-            color: AppTheme.cyanAccent.withValues(alpha: 0.15),
-            blurRadius: 20,
-            spreadRadius: 2,
-          ),
-          const BoxShadow(
-            color: Colors.black87,
-            blurRadius: 16,
-            offset: Offset(0, 4),
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 12.0 * scale,
+            offset: Offset(0, 4.0 * scale),
           ),
         ],
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10.0 * scale),
+        child: Column(
+          children: [
+            // WIERSZ 1: GOSPODARZE (TEAM A)
+            Expanded(
+              child: _buildSportCamTeamRow(
+                teamName: session.teamA,
+                teamColor: session.teamAColor,
+                score: session.currentSetPointsA,
+                setsWon: session.setsA,
+                isServing: isServingA,
+                scale: scale,
+                isTopRow: true,
+              ),
+            ),
+
+            // SUBTELNY SEPARATOR
+            Container(height: 1.0 * scale, color: const Color(0xFFE5E7EB)),
+
+            // WIERSZ 2: GOŚCIE (TEAM B)
+            Expanded(
+              child: _buildSportCamTeamRow(
+                teamName: session.teamB,
+                teamColor: session.teamBColor,
+                score: session.currentSetPointsB,
+                setsWon: session.setsB,
+                isServing: isServingB,
+                scale: scale,
+                isTopRow: false,
+              ),
+            ),
+
+            // WIERSZ 3: DOLNY PASEK STATUSU / FOOTER (~26% WYSOKOŚCI)
+            _buildSportCamFooter(scale),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSportCamTeamRow({
+    required String teamName,
+    required Color teamColor,
+    required int score,
+    required int setsWon,
+    required bool isServing,
+    required double scale,
+    required bool isTopRow,
+  }) {
+    return Container(
+      color: Colors.transparent,
+      padding: EdgeInsets.only(right: 6.0 * scale),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // NAZWY DRUŻYN
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
-                width: 90,
-                child: Text(
-                  session.teamA.toUpperCase(),
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.8,
-                    color: Colors.white,
+          // Pasek koloru drużyny (szerokość 8 * scale)
+          Container(
+            width: 8.0 * scale,
+            decoration: BoxDecoration(
+              color: teamColor,
+              borderRadius: BorderRadius.only(
+                topLeft: isTopRow ? Radius.circular(10.0 * scale) : Radius.zero,
+              ),
+            ),
+          ),
+          SizedBox(width: 10.0 * scale),
+
+          // Nazwa drużyny i wskaźnik serwisu
+          Expanded(
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    teamName.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontFamily: 'Roboto',
+                      fontSize: 16.0 * scale,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.5,
+                      color: const Color(0xFF111827),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 10),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.white10,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  'SET ${session.currentSetNumber}',
-                  style: const TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: AppTheme.textSecondary),
-                ),
-              ),
-              const SizedBox(width: 10),
-              SizedBox(
-                width: 90,
-                child: Text(
-                  session.teamB.toUpperCase(),
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.8,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ],
+                if (showServeIndicator && isServing) ...[
+                  SizedBox(width: 6.0 * scale),
+                  _buildServeBallIndicator(teamColor, size: 8.5 * scale),
+                ],
+              ],
+            ),
           ),
 
-          const SizedBox(height: 6),
+          // Wskaźniki wygranych setów
+          _buildSetsDots(setsWon, teamColor, scale),
+          SizedBox(width: 8.0 * scale),
 
-          // PUNKTY I SETY
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // TEAM A KAFELEK
-              Container(
-                width: 88,
-                height: 46,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0F1A28),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: isServingA ? session.teamAColor : const Color(0xFF1E334D),
-                    width: 1.5,
-                  ),
-                  boxShadow: [
-                    if (isServingA)
-                      BoxShadow(
-                        color: session.teamAColor.withValues(alpha: 0.35),
-                        blurRadius: 12,
-                      ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    if (isServingA) ...[
-                      _buildServeBallIndicator(session.teamAColor),
-                      const SizedBox(width: 6),
-                    ],
-                    _AnimatedScoreDigit(
-                      score: session.currentSetPointsA,
-                      color: session.teamAColor,
-                      fontSize: 26,
-                      animate: animate,
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(width: 8),
-
-              // SET SCORE ŚRODEK
-              SizedBox(
-                width: 50,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      '${session.setsA} : ${session.setsB}',
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white,
-                        letterSpacing: 1,
-                      ),
-                    ),
-                    const Text(
-                      'SETS',
-                      style: TextStyle(
-                        fontSize: 8,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(width: 8),
-
-              // TEAM B KAFELEK
-              Container(
-                width: 88,
-                height: 46,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF221A0F),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: isServingB ? session.teamBColor : const Color(0xFF4A3816),
-                    width: 1.5,
-                  ),
-                  boxShadow: [
-                    if (isServingB)
-                      BoxShadow(
-                        color: session.teamBColor.withValues(alpha: 0.35),
-                        blurRadius: 12,
-                      ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _AnimatedScoreDigit(
-                      score: session.currentSetPointsB,
-                      color: session.teamBColor,
-                      fontSize: 26,
-                      animate: animate,
-                    ),
-                    if (isServingB) ...[
-                      const SizedBox(width: 6),
-                      _buildServeBallIndicator(session.teamBColor),
-                    ],
-                  ],
-                ),
-              ),
-            ],
+          // Ciemny boks punktowy (#1E2229)
+          Container(
+            width: 58.0 * scale,
+            height: 42.0 * scale,
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E2229),
+              borderRadius: BorderRadius.circular(6.0 * scale),
+            ),
+            alignment: Alignment.center,
+            child: _AnimatedScoreDigit(
+              score: score,
+              color: Colors.white,
+              fontSize: 24.0 * scale,
+              animate: animate,
+            ),
           ),
         ],
       ),
     );
   }
 
-  // ===========================================================================
-  // 3. STYL: MINIMALIST CLEAN (Dyskretna pigułka narożna)
-  // ===========================================================================
-  Widget _buildMinimalist() {
-    final isServingA = showServeIndicator && session.currentServer == ServingTeam.teamA;
-    final isServingB = showServeIndicator && session.currentServer == ServingTeam.teamB;
+  Widget _buildSportCamFooter(double scale) {
+    final footerHeight = 40.0 * scale;
+    final displayTime = _formatMatchTime(matchDuration);
+    final currentSetLabel = 'SET ${session.currentSetNumber}';
+    final rawBanner = activeSpecialEvent;
+    final hasBanner = ScoreTimelineEntry.isDisplayableSpecialBanner(rawBanner);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      height: footerHeight,
+      padding: EdgeInsets.symmetric(horizontal: 10.0 * scale),
       decoration: BoxDecoration(
-        color: const Color(0xD90A0D14),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white24, width: 1),
-        boxShadow: const [
-          BoxShadow(color: Colors.black54, blurRadius: 10, offset: Offset(0, 2)),
-        ],
+        color: const Color(0xFFE5E7EB),
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(10.0 * scale)),
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // TEAM A
-          if (isServingA) ...[
-            _buildServeBallIndicator(session.teamAColor, size: 6),
-            const SizedBox(width: 4),
-          ],
-          Text(
-            session.teamA.toUpperCase(),
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              color: session.teamAColor,
+          // Lewa strona: logo / nazwa aplikacji lub specjalny banner
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: hasBanner
+                  ? Container(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 6.0 * scale,
+                        vertical: 2.0 * scale,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDC2626),
+                        borderRadius: BorderRadius.circular(4.0 * scale),
+                      ),
+                      child: Text(
+                        rawBanner!.trim().toUpperCase(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 9.5 * scale,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    )
+                  : Text(
+                      session.sport.shortName.isNotEmpty
+                          ? '${session.sport.shortName} LIVE'
+                          : 'VOLLEY LIVE',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: 'Roboto',
+                        fontSize: 10.0 * scale,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.8,
+                        color: const Color(0xFF4B5563),
+                      ),
+                    ),
             ),
           ),
-          const SizedBox(width: 6),
-          _AnimatedScoreDigit(
-            score: session.currentSetPointsA,
-            color: Colors.white,
-            fontSize: 16,
-            animate: animate,
-          ),
 
-          // ROZDZIELACZ & SETY
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
+          // Środek: numer seta
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 8.0 * scale, vertical: 2.0 * scale),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.65),
+              borderRadius: BorderRadius.circular(4.0 * scale),
+            ),
             child: Text(
-              '(${session.setsA}-${session.setsB})',
-              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white54),
+              currentSetLabel,
+              style: TextStyle(
+                fontFamily: 'Roboto',
+                fontSize: 11.0 * scale,
+                fontWeight: FontWeight.w800,
+                color: const Color(0xFF1F2937),
+              ),
             ),
           ),
 
-          // TEAM B
-          _AnimatedScoreDigit(
-            score: session.currentSetPointsB,
-            color: Colors.white,
-            fontSize: 16,
-            animate: animate,
-          ),
-          const SizedBox(width: 6),
-          Text(
-            session.teamB.toUpperCase(),
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              color: session.teamBColor,
+          // Prawa strona: czas meczu MM:SS ze stałą szerokością cyfr (tabular figures)
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                displayTime,
+                style: TextStyle(
+                  fontFamily: 'Roboto',
+                  fontSize: 11.5 * scale,
+                  fontWeight: FontWeight.w800,
+                  color: const Color(0xFF111827),
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
             ),
           ),
-          if (isServingB) ...[
-            const SizedBox(width: 4),
-            _buildServeBallIndicator(session.teamBColor, size: 6),
-          ],
         ],
       ),
     );
   }
 
+  Widget _buildSetsDots(int setsWon, Color color, double scale) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(3, (idx) {
+        final isWon = idx < setsWon;
+        return Container(
+          margin: EdgeInsets.symmetric(horizontal: 1.5 * scale),
+          width: 7.0 * scale,
+          height: 7.0 * scale,
+          decoration: BoxDecoration(
+            color: isWon ? color : const Color(0xFFCBD5E1),
+            shape: BoxShape.circle,
+          ),
+        );
+      }),
+    );
+  }
+
   // ===========================================================================
-  // 4. STYL: BEACH VOLLEY 2V2 (Siatkówka Plażowa z historią setów)
+  // 2. STYL: CYBER GLOW NEON (Alternatywny styl)
   // ===========================================================================
-  Widget _buildBeachVolley() {
+  Widget _buildCyberGlow(double scale) {
     final isServingA = showServeIndicator && session.currentServer == ServingTeam.teamA;
     final isServingB = showServeIndicator && session.currentServer == ServingTeam.teamB;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      width: 430.0 * scale,
+      height: 154.0 * scale,
+      padding: EdgeInsets.all(10.0 * scale),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xEE161F2E), Color(0xEE0B1019)],
+        color: const Color(0xEB0A0E17),
+        borderRadius: BorderRadius.circular(14.0 * scale),
+        border: Border.all(
+          color: AppTheme.cyanAccent.withValues(alpha: 0.6),
+          width: 1.5 * scale,
         ),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFFFD54F).withValues(alpha: 0.5), width: 1.2),
-        boxShadow: const [
-          BoxShadow(color: Colors.black87, blurRadius: 14, offset: Offset(0, 4)),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.cyanAccent.withValues(alpha: 0.2),
+            blurRadius: 16.0 * scale,
+          ),
         ],
       ),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // NAGŁÓWEK BEACH VOLLEY
           Row(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Icon(Icons.wb_sunny_rounded, color: Color(0xFFFFD54F), size: 12),
-              const SizedBox(width: 4),
-              const Text(
-                'BEACH VOLLEYBALL',
+              Text(
+                session.teamA.toUpperCase(),
                 style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w900,
-                  color: Color(0xFFFFD54F),
-                  letterSpacing: 1,
+                  fontSize: 15.0 * scale,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
                 ),
               ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                decoration: BoxDecoration(
-                  color: Colors.white12,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  'SET ${session.currentSetNumber} (to $_targetPoints)',
-                  style: const TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.white70),
+              if (isServingA) _buildServeBallIndicator(session.teamAColor, size: 8 * scale),
+              Text(
+                '${session.currentSetPointsA}',
+                style: TextStyle(
+                  fontSize: 26.0 * scale,
+                  fontWeight: FontWeight.w900,
+                  color: session.teamAColor,
                 ),
               ),
             ],
           ),
-
-          const SizedBox(height: 6),
-
-          // WYNIKI I DRUŻYNY
           Row(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              // TEAM A
-              SizedBox(
-                width: 75,
-                child: Row(
-                  children: [
-                    if (isServingA) ...[
-                      _buildServeBallIndicator(const Color(0xFFFFD54F)),
-                      const SizedBox(width: 4),
-                    ],
-                    Expanded(
-                      child: Text(
-                        session.teamA.toUpperCase(),
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Colors.white),
-                      ),
-                    ),
-                  ],
+              Text(
+                session.teamB.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 15.0 * scale,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
                 ),
               ),
-
-              // PUNKTY A
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1E293B),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: _AnimatedScoreDigit(
-                  score: session.currentSetPointsA,
-                  color: const Color(0xFFFFD54F),
-                  fontSize: 18,
-                  animate: animate,
+              if (isServingB) _buildServeBallIndicator(session.teamBColor, size: 8 * scale),
+              Text(
+                '${session.currentSetPointsB}',
+                style: TextStyle(
+                  fontSize: 26.0 * scale,
+                  fontWeight: FontWeight.w900,
+                  color: session.teamBColor,
                 ),
               ),
-
-              // SETS
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Text(
-                  '${session.setsA} : ${session.setsB}',
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: Colors.white),
+            ],
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'SET ${session.currentSetNumber} (${session.setsA}:${session.setsB})',
+                style: TextStyle(
+                  fontSize: 10.0 * scale,
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.cyanAccent,
                 ),
               ),
-
-              // PUNKTY B
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1E293B),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: _AnimatedScoreDigit(
-                  score: session.currentSetPointsB,
-                  color: const Color(0xFF00E5FF),
-                  fontSize: 18,
-                  animate: animate,
-                ),
-              ),
-
-              // TEAM B
-              SizedBox(
-                width: 75,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        session.teamB.toUpperCase(),
-                        textAlign: TextAlign.end,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: Colors.white),
-                      ),
-                    ),
-                    if (isServingB) ...[
-                      const SizedBox(width: 4),
-                      _buildServeBallIndicator(const Color(0xFF00E5FF)),
-                    ],
-                  ],
+              Text(
+                _formatMatchTime(matchDuration),
+                style: TextStyle(
+                  fontSize: 10.0 * scale,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white70,
+                  fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
             ],
@@ -677,131 +576,170 @@ class ScoreboardOverlay extends StatelessWidget {
   }
 
   // ===========================================================================
-  // DYNAMICZNY BANER ZDARZEŃ (SET POINT / MATCH POINT / TIMEOUT / SPECIAL)
+  // 3. STYL: MINIMALIST
   // ===========================================================================
-  Widget _buildDynamicEventBanner() {
-    // 1. Przerwa na żądanie (Timeout)
-    if (isTimeoutActive) {
-      final teamName = timeoutTeam == ServingTeam.teamA ? session.teamA : session.teamB;
-      return Container(
-        margin: const EdgeInsets.only(top: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        decoration: BoxDecoration(
-          color: const Color(0xF0FFAB00),
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: const [
-            BoxShadow(color: Color(0x80FFAB00), blurRadius: 10, offset: Offset(0, 2)),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.hourglass_bottom_rounded, color: Colors.black, size: 14),
-            const SizedBox(width: 5),
-            Text(
-              'TIMEOUT ${timeoutSeconds}s: ${teamName.toUpperCase()}',
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w900,
-                color: Colors.black,
-                letterSpacing: 0.5,
+  Widget _buildMinimalist(double scale) {
+    return Container(
+      width: 430.0 * scale,
+      height: 154.0 * scale,
+      padding: EdgeInsets.all(12.0 * scale),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.85),
+        borderRadius: BorderRadius.circular(10.0 * scale),
+        border: Border.all(color: Colors.white24, width: 1.0 * scale),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                session.teamA.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 16.0 * scale,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
               ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    // 2. Aktywne zdarzenie specjalne (np. Ace / Challenge)
-    if (activeSpecialEvent != null &&
-        ScoreTimelineEntry.isDisplayableSpecialBanner(activeSpecialEvent)) {
-      return Container(
-        margin: const EdgeInsets.only(top: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-        decoration: BoxDecoration(
-          color: AppTheme.purpleAccent,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: AppTheme.purpleAccent.withValues(alpha: 0.6),
-              blurRadius: 12,
-            ),
-          ],
-        ),
-        child: Text(
-          activeSpecialEvent!.toUpperCase(),
-          style: const TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w900,
-            color: Colors.white,
-            letterSpacing: 1.2,
-          ),
-        ),
-      );
-    }
-
-    // 3. Piłka Meczowa (Match Point)
-    if (_isMatchPointA || _isMatchPointB) {
-      final team = _isMatchPointA ? session.teamA : session.teamB;
-      return Container(
-        margin: const EdgeInsets.only(top: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFFFF1744), Color(0xFFFF5252)],
-          ),
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: const [
-            BoxShadow(color: Color(0x99FF1744), blurRadius: 12, offset: Offset(0, 2)),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.sports_volleyball, color: Colors.white, size: 13),
-            const SizedBox(width: 5),
-            Text(
-              '🔥 MATCH POINT: ${team.toUpperCase()}',
-              style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w900,
-                color: Colors.white,
-                letterSpacing: 0.8,
+              Text(
+                '${session.currentSetPointsA}',
+                style: TextStyle(
+                  fontSize: 26.0 * scale,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                ),
               ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    // 4. Piłka Setowa (Set Point)
-    if (_isSetPointA || _isSetPointB) {
-      final team = _isSetPointA ? session.teamA : session.teamB;
-      return Container(
-        margin: const EdgeInsets.only(top: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFFFF9100), Color(0xFFFFB74D)],
+            ],
           ),
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: const [
-            BoxShadow(color: Color(0x66FF9100), blurRadius: 8, offset: Offset(0, 2)),
-          ],
-        ),
-        child: Text(
-          '⚡ SET POINT: ${team.toUpperCase()}',
-          style: const TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w900,
-            color: Colors.black,
-            letterSpacing: 0.6,
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                session.teamB.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 16.0 * scale,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              Text(
+                '${session.currentSetPointsB}',
+                style: TextStyle(
+                  fontSize: 26.0 * scale,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                ),
+              ),
+            ],
           ),
-        ),
-      );
-    }
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'SET ${session.currentSetNumber}',
+                style: TextStyle(
+                  fontSize: 11.0 * scale,
+                  color: Colors.white70,
+                ),
+              ),
+              Text(
+                _formatMatchTime(matchDuration),
+                style: TextStyle(
+                  fontSize: 11.0 * scale,
+                  color: Colors.white70,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 
-    return const SizedBox.shrink();
+  // ===========================================================================
+  // 4. STYL: BEACH VOLLEY
+  // ===========================================================================
+  Widget _buildBeachVolley(double scale) {
+    return Container(
+      width: 430.0 * scale,
+      height: 154.0 * scale,
+      padding: EdgeInsets.all(10.0 * scale),
+      decoration: BoxDecoration(
+        color: const Color(0xE61A1409),
+        borderRadius: BorderRadius.circular(12.0 * scale),
+        border: Border.all(color: const Color(0xFFFACC15), width: 1.5 * scale),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                session.teamA.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 15.0 * scale,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              Text(
+                '${session.currentSetPointsA}',
+                style: TextStyle(
+                  fontSize: 24.0 * scale,
+                  fontWeight: FontWeight.w900,
+                  color: const Color(0xFFFACC15),
+                ),
+              ),
+            ],
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                session.teamB.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 15.0 * scale,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              Text(
+                '${session.currentSetPointsB}',
+                style: TextStyle(
+                  fontSize: 24.0 * scale,
+                  fontWeight: FontWeight.w900,
+                  color: const Color(0xFFFACC15),
+                ),
+              ),
+            ],
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'BEACH SET ${session.currentSetNumber}',
+                style: TextStyle(
+                  fontSize: 10.0 * scale,
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFFFACC15),
+                ),
+              ),
+              Text(
+                _formatMatchTime(matchDuration),
+                style: TextStyle(
+                  fontSize: 10.0 * scale,
+                  color: Colors.white70,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   // ===========================================================================
@@ -821,27 +759,6 @@ class ScoreboardOverlay extends StatelessWidget {
             spreadRadius: 1,
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildSetsBadge(int sets, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: List.generate(3, (idx) {
-          final isWon = idx < sets;
-          return Container(
-            margin: const EdgeInsets.symmetric(horizontal: 1.5),
-            width: 4,
-            height: 14,
-            decoration: BoxDecoration(
-              color: isWon ? color : Colors.white12,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          );
-        }),
       ),
     );
   }

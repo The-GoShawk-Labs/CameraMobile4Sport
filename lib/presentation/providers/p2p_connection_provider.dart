@@ -19,6 +19,8 @@ class P2PConnectionProvider extends ChangeNotifier {
   bool _isHost = false;
   int _clientCount = 0;
 
+  final ValueNotifier<Uint8List?> videoFrameNotifier =
+      ValueNotifier<Uint8List?>(null);
   Uint8List? _currentVideoFrame;
   DateTime? _lastVideoFrameAt;
   bool _isCameraConnected = false;
@@ -93,6 +95,7 @@ class P2PConnectionProvider extends ChangeNotifier {
       _connectionState = state;
       if (state != CameraConnectionState.connected) {
         _currentVideoFrame = null;
+        videoFrameNotifier.value = null;
         _lastVideoFrameAt = null;
         _isCameraConnected = false;
         _isCameraStreaming = false;
@@ -110,13 +113,17 @@ class P2PConnectionProvider extends ChangeNotifier {
     });
 
     _videoSub = _repository.incomingVideoFrames.listen((frame) {
+      final wasFirstFrame = _currentVideoFrame == null;
       _currentVideoFrame = frame;
       _lastVideoFrameAt = DateTime.now();
       _isCameraConnected = true;
       _isCameraStreaming = true;
       _hasStreamTimeout = false;
       _streamStatusError = null;
-      notifyListeners();
+      videoFrameNotifier.value = frame;
+      if (wasFirstFrame) {
+        notifyListeners();
+      }
     });
 
     _clientCountSub = _repository.clientCountStream.listen((count) {
@@ -345,6 +352,7 @@ class P2PConnectionProvider extends ChangeNotifier {
     await _repository.disconnect();
     _isHost = false;
     _currentVideoFrame = null;
+    videoFrameNotifier.value = null;
     _lastVideoFrameAt = null;
     _isCameraConnected = false;
     _isCameraStreaming = false;
@@ -362,6 +370,7 @@ class P2PConnectionProvider extends ChangeNotifier {
     _msgSub?.cancel();
     _videoSub?.cancel();
     _clientCountSub?.cancel();
+    videoFrameNotifier.dispose();
     _repository.disconnect();
     super.dispose();
   }

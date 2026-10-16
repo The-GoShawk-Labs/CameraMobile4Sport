@@ -27,6 +27,9 @@ class MatchProvider extends ChangeNotifier {
   String? _activeSpecialEvent;
   bool _isOutdoorModeEnabled = false;
   bool _isScreenLocked = false;
+  Duration _matchDuration = Duration.zero;
+  bool _isMatchTimerRunning = false;
+  Timer? _matchTimer;
 
   MatchProvider() {
     _initDefaultSession();
@@ -42,6 +45,40 @@ class MatchProvider extends ChangeNotifier {
   String? get activeSpecialEvent => _activeSpecialEvent;
   bool get isOutdoorModeEnabled => _isOutdoorModeEnabled;
   bool get isScreenLocked => _isScreenLocked;
+  Duration get matchDuration => _matchDuration;
+  bool get isMatchTimerRunning => _isMatchTimerRunning;
+
+  String get formattedMatchDuration {
+    final minutes = _matchDuration.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = _matchDuration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    if (_matchDuration.inHours > 0) {
+      final hours = _matchDuration.inHours.toString().padLeft(2, '0');
+      return '$hours:$minutes:$seconds';
+    }
+    return '$minutes:$seconds';
+  }
+
+  void toggleMatchTimer() {
+    if (_isMatchTimerRunning) {
+      _matchTimer?.cancel();
+      _isMatchTimerRunning = false;
+    } else {
+      _isMatchTimerRunning = true;
+      _matchTimer?.cancel();
+      _matchTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        _matchDuration += const Duration(seconds: 1);
+        notifyListeners();
+      });
+    }
+    notifyListeners();
+  }
+
+  void resetMatchTimer() {
+    _matchTimer?.cancel();
+    _isMatchTimerRunning = false;
+    _matchDuration = Duration.zero;
+    notifyListeners();
+  }
 
   ScoreUpdatePayload get toScorePayload {
     return ScoreUpdatePayload(
@@ -231,6 +268,26 @@ class MatchProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void incrementSetNumber() {
+    _currentSession = _currentSession.copyWith(
+      currentSetNumber: _currentSession.currentSetNumber + 1,
+      currentSetPointsA: 0,
+      currentSetPointsB: 0,
+    );
+    _notifyScoreboardBridge();
+    notifyListeners();
+  }
+
+  void decrementSetNumber() {
+    if (_currentSession.currentSetNumber > 1) {
+      _currentSession = _currentSession.copyWith(
+        currentSetNumber: _currentSession.currentSetNumber - 1,
+      );
+      _notifyScoreboardBridge();
+      notifyListeners();
+    }
+  }
+
   void requestSubstitutionA() {
     _currentSession = _engine.requestSubstitutionA(_currentSession);
     _emitLatestEvent();
@@ -303,6 +360,7 @@ class MatchProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _matchTimer?.cancel();
     _timeoutTimer?.cancel();
     _specialEventTimer?.cancel();
     _scoreEventsController.close();

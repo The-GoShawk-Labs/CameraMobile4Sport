@@ -5,6 +5,7 @@ import 'package:volleylive/core/security/secure_storage_service.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
 import 'package:volleylive/domain/models/match_session.dart';
 import 'package:volleylive/domain/models/recording_result.dart';
+import 'package:volleylive/domain/models/scoreboard_burn_in_state.dart';
 import 'package:volleylive/domain/models/score_event.dart';
 import 'package:volleylive/domain/models/streaming_config.dart';
 import 'package:volleylive/domain/services/native_stream_burner_bridge.dart';
@@ -59,6 +60,7 @@ class StreamerProvider extends ChangeNotifier {
   StreamConfig get config => _config;
   StreamingDestination get destination => _destination;
   ScoreboardThemeStyle get scoreboardStyle => _scoreboardStyle;
+  ScoreboardAnchorPosition get scoreboardAnchorPosition => _config.anchorPosition;
   bool get showServeIndicator => _showServeIndicator;
   bool get showTimeoutCountdown => _showTimeoutCountdown;
   String get maskedStreamKey => _maskedStreamKey;
@@ -163,6 +165,12 @@ class StreamerProvider extends ChangeNotifier {
 
   void setScoreboardStyle(ScoreboardThemeStyle style) {
     _scoreboardStyle = style;
+    notifyListeners();
+  }
+
+  void setScoreboardAnchorPosition(ScoreboardAnchorPosition position) {
+    _config = _config.copyWith(anchorPosition: position);
+    unawaited(_config.saveToPreferences());
     notifyListeners();
   }
 

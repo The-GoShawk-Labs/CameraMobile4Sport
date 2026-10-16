@@ -81,15 +81,20 @@ class _StreamSettingsModalState extends State<StreamSettingsModal> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Row(
-                  children: [
-                    Icon(Icons.live_tv, color: AppTheme.redLive, size: 22),
-                    SizedBox(width: 8),
-                    Text(
-                      'Konfiguracja RTMP / YouTube Live',
-                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Colors.white),
-                    ),
-                  ],
+                const Expanded(
+                  child: Row(
+                    children: [
+                      Icon(Icons.live_tv, color: AppTheme.redLive, size: 22),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Konfiguracja RTMP / YouTube Live',
+                          style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Colors.white),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 IconButton(
                   icon: const Icon(Icons.close, color: Colors.white),
@@ -107,6 +112,7 @@ class _StreamSettingsModalState extends State<StreamSettingsModal> {
             const SizedBox(height: 6),
             DropdownButtonFormField<YouTubeLivePreset>(
               initialValue: config.preset,
+              isExpanded: true,
               dropdownColor: AppTheme.surfaceCard,
               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
               decoration: InputDecoration(
@@ -118,7 +124,7 @@ class _StreamSettingsModalState extends State<StreamSettingsModal> {
               items: YouTubeLivePreset.values.map((preset) {
                 return DropdownMenuItem(
                   value: preset,
-                  child: Text(preset.label),
+                  child: Text(preset.label, overflow: TextOverflow.ellipsis),
                 );
               }).toList(),
               onChanged: (newPreset) {
@@ -157,18 +163,20 @@ class _StreamSettingsModalState extends State<StreamSettingsModal> {
                         size: 16,
                       ),
                       const SizedBox(width: 6),
-                      Text(
-                        config.isCustomRtmp
-                            ? 'Własny RTMP (PC/Lokalna sieć) - gotowy do transmisji'
-                            : (config.isYouTubeCompliant
-                                ? 'Zgodność z YouTube Live Ingestion: 100%'
-                                : 'Wymagana korekta parametrów dla YouTube'),
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: (config.isCustomRtmp || config.isYouTubeCompliant)
-                              ? AppTheme.greenLive
-                              : AppTheme.amberAccent,
+                      Expanded(
+                        child: Text(
+                          config.isCustomRtmp
+                              ? 'Własny RTMP (PC/Lokalna sieć) - gotowy do transmisji'
+                              : (config.isYouTubeCompliant
+                                  ? 'Zgodność z YouTube Live Ingestion: 100%'
+                                  : 'Wymagana korekta parametrów dla YouTube'),
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: (config.isCustomRtmp || config.isYouTubeCompliant)
+                                ? AppTheme.greenLive
+                                : AppTheme.amberAccent,
+                          ),
                         ),
                       ),
                     ],

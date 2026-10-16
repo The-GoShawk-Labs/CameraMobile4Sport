@@ -45,7 +45,8 @@ class StreamTelemetry {
 
   factory StreamTelemetry.fromMap(Map<dynamic, dynamic> map) {
     return StreamTelemetry(
-      bitrateBps: (map['bitrate'] as num?)?.toInt() ??
+      bitrateBps:
+          (map['bitrate'] as num?)?.toInt() ??
           ((map['bitrateKbps'] as num?)?.toInt() ?? 0) * 1000,
       fps: (map['fps'] as num?)?.toInt() ?? 0,
       droppedFrames: (map['droppedFrames'] as num?)?.toInt() ?? 0,
@@ -73,17 +74,20 @@ class StreamEvent {
   }) : timestamp = timestamp ?? DateTime.now();
 
   @override
-  String toString() => 'StreamEvent(type: $type, message: $message, telemetry: $telemetry)';
+  String toString() =>
+      'StreamEvent(type: $type, message: $message, telemetry: $telemetry)';
 }
 
 /// Native bridge connecting Flutter match state with platform video rendering engines:
 /// - Android: StreamPack (ThibaultBee) with Surface/OpenGL texture overlay and MediaCodec CBR encoder
 /// - iOS: HaishinKit (HaishinKit.swift) with VideoToolbox H.264 High Profile and VisualEffect
 class NativeStreamBurnerBridge {
-  static const MethodChannel _methodChannel =
-      MethodChannel('com.goshawk.volleylive/live_stream_bridge');
-  static const EventChannel _eventChannel =
-      EventChannel('com.goshawk.volleylive/stream_events');
+  static const MethodChannel _methodChannel = MethodChannel(
+    'com.goshawk.volleylive/live_stream_bridge',
+  );
+  static const EventChannel _eventChannel = EventChannel(
+    'com.goshawk.volleylive/stream_events',
+  );
 
   static final NativeStreamBurnerBridge _instance =
       NativeStreamBurnerBridge._internal();
@@ -135,10 +139,7 @@ class NativeStreamBurnerBridge {
           debugPrint('[NativeStreamBurnerBridge] Event channel error: $err');
           _setStatus(NativeStreamStatus.error);
           _eventController.add(
-            StreamEvent(
-              type: StreamEventType.error,
-              message: err.toString(),
-            ),
+            StreamEvent(type: StreamEventType.error, message: err.toString()),
           );
         },
       );
@@ -228,7 +229,9 @@ class NativeStreamBurnerBridge {
   }
 
   void _handleConnectionDrop(String reason) {
-    if (_retryAttempt < _maxRetryAttempts && _lastRtmpUrl != null && _lastStreamKey != null) {
+    if (_retryAttempt < _maxRetryAttempts &&
+        _lastRtmpUrl != null &&
+        _lastStreamKey != null) {
       _retryAttempt++;
       _setStatus(NativeStreamStatus.reconnecting);
       final delaySeconds = 2 * _retryAttempt; // 2s, 4s, 6s exponential backoff
@@ -240,7 +243,8 @@ class NativeStreamBurnerBridge {
       _eventController.add(
         StreamEvent(
           type: StreamEventType.reconnecting,
-          message: 'Utrata połączenia ($reason). Wznawianie za ${delaySeconds}s (próba $_retryAttempt/$_maxRetryAttempts)...',
+          message:
+              'Utrata połączenia ($reason). Wznawianie za ${delaySeconds}s (próba $_retryAttempt/$_maxRetryAttempts)...',
           attempt: _retryAttempt,
           maxAttempts: _maxRetryAttempts,
         ),
@@ -257,7 +261,8 @@ class NativeStreamBurnerBridge {
       _eventController.add(
         StreamEvent(
           type: StreamEventType.error,
-          message: 'Transmisja przerwana po $_maxRetryAttempts nieudanych próbach reconnectu: $reason',
+          message:
+              'Transmisja przerwana po $_maxRetryAttempts nieudanych próbach reconnectu: $reason',
         ),
       );
     }
@@ -276,7 +281,9 @@ class NativeStreamBurnerBridge {
           config: _lastConfig,
         );
       } catch (e) {
-        debugPrint('[NativeStreamBurnerBridge] Reconnection attempt failed: $e');
+        debugPrint(
+          '[NativeStreamBurnerBridge] Reconnection attempt failed: $e',
+        );
       }
     }
   }
@@ -294,7 +301,10 @@ class NativeStreamBurnerBridge {
   Future<bool> initializeStream(StreamConfig config) async {
     _lastConfig = config;
     try {
-      final bool? success = await _methodChannel.invokeMethod('initializeStream', config.toMap());
+      final bool? success = await _methodChannel.invokeMethod(
+        'initializeStream',
+        config.toMap(),
+      );
       return success ?? false;
     } on PlatformException catch (_) {
       // Fallback to legacy initialize method if older native build is running
@@ -337,12 +347,16 @@ class NativeStreamBurnerBridge {
   /// Validates hardware encoder capabilities (H.264 High Profile, CBR, resolution limits).
   Future<Map<String, dynamic>> validateEncoderCapabilities() async {
     try {
-      final dynamic result = await _methodChannel.invokeMethod('validateEncoderCapabilities');
+      final dynamic result = await _methodChannel.invokeMethod(
+        'validateEncoderCapabilities',
+      );
       if (result is Map) {
         return Map<String, dynamic>.from(result);
       }
     } on PlatformException catch (e) {
-      debugPrint('[NativeStreamBurnerBridge] validateEncoderCapabilities failed: ${e.message}');
+      debugPrint(
+        '[NativeStreamBurnerBridge] validateEncoderCapabilities failed: ${e.message}',
+      );
     }
     // Default safe fallback if platform call is not implemented
     return {
@@ -375,9 +389,9 @@ class NativeStreamBurnerBridge {
 
     _setStatus(NativeStreamStatus.connecting);
 
-    final finalWidth = config?.width ?? width;
-    final finalHeight = config?.height ?? height;
-    final finalFps = config?.fps ?? fps;
+    final finalWidth = ((config?.width ?? width) > 0 ? (config?.width ?? width) : 1920) & ~1;
+    final finalHeight = ((config?.height ?? height) > 0 ? (config?.height ?? height) : 1080) & ~1;
+    final finalFps = (config?.fps ?? fps).clamp(15, 60);
     final finalBitrate = config?.videoBitrate ?? videoBitrateBps;
     final finalAudioBitrate = config?.audioBitrate ?? 128000;
     final finalGopSeconds = config?.gopSeconds ?? 2.0;
@@ -404,20 +418,27 @@ class NativeStreamBurnerBridge {
         return false;
       }
     } on PlatformException catch (e) {
-      debugPrint('[NativeStreamBurnerBridge] startLiveStream failed: ${e.message}');
+      debugPrint(
+        '[NativeStreamBurnerBridge] startLiveStream failed: ${e.message}',
+      );
       _setStatus(NativeStreamStatus.error);
       return false;
     }
   }
 
   /// Updates scoreboard burned into live video frames.
-  Future<void> updateScoreboard(VolleyballScoreboardState state, {bool force = false}) async {
+  Future<void> updateScoreboard(
+    VolleyballScoreboardState state, {
+    bool force = false,
+  }) async {
     if (!force && _lastState == state) return;
     _lastState = state;
     try {
       await _methodChannel.invokeMethod('updateScoreboard', state.toMap());
     } on PlatformException catch (e) {
-      debugPrint('[NativeStreamBurnerBridge] updateScoreboard error: ${e.message}');
+      debugPrint(
+        '[NativeStreamBurnerBridge] updateScoreboard error: ${e.message}',
+      );
     }
   }
 
@@ -426,15 +447,26 @@ class NativeStreamBurnerBridge {
     required Uint8List bytes,
     required int width,
     required int height,
+    String? anchorPosition,
   }) async {
+    if (bytes.isEmpty) return;
+    final safeWidth = width > 0 ? width : 430;
+    final safeHeight = height > 0 ? height : 154;
+    final safeAnchor =
+        (anchorPosition != null && anchorPosition.trim().isNotEmpty)
+        ? anchorPosition.trim()
+        : ScoreboardAnchorPosition.topLeft.name;
     try {
       await _methodChannel.invokeMethod('updateScoreboardOverlayBitmap', {
         'bitmapBytes': bytes,
-        'width': width,
-        'height': height,
+        'width': safeWidth,
+        'height': safeHeight,
+        'anchorPosition': safeAnchor,
       });
     } on PlatformException catch (e) {
-      debugPrint('[NativeStreamBurnerBridge] updateScoreboardOverlayBitmap error: ${e.message}');
+      debugPrint(
+        '[NativeStreamBurnerBridge] updateScoreboardOverlayBitmap error: ${e.message}',
+      );
     }
   }
 
@@ -453,7 +485,9 @@ class NativeStreamBurnerBridge {
         ),
       );
     } on PlatformException catch (e) {
-      debugPrint('[NativeStreamBurnerBridge] stopLiveStream error: ${e.message}');
+      debugPrint(
+        '[NativeStreamBurnerBridge] stopLiveStream error: ${e.message}',
+      );
     }
   }
 

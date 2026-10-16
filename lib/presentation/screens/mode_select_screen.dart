@@ -307,52 +307,64 @@ class ModeSelectScreen extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: AppTheme.cyanAccent.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: AppTheme.cyanAccent),
+                      InkWell(
+                        onTap: () {
+                          p2p.selectRole(DeviceRole.singlePhoneAllInOne);
+                          context.push(AppRouter.scorerRoute);
+                        },
+                        borderRadius: BorderRadius.circular(14),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: AppTheme.cyanAccent.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: AppTheme.cyanAccent),
+                              ),
+                              child: const Icon(Icons.phone_android, color: AppTheme.cyanAccent, size: 26),
                             ),
-                            child: const Icon(Icons.phone_android, color: AppTheme.cyanAccent, size: 26),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.cyanAccent.withValues(alpha: 0.25),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: const Text(
-                                    'TRYB POJEDYNCZEGO URZĄDZENIA',
-                                    style: TextStyle(
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w900,
-                                      color: AppTheme.cyanAccent,
-                                      letterSpacing: 0.8,
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.cyanAccent.withValues(alpha: 0.25),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: const Text(
+                                      'TRYB POJEDYNCZEGO URZĄDZENIA',
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w900,
+                                        color: AppTheme.cyanAccent,
+                                        letterSpacing: 0.8,
+                                      ),
                                     ),
                                   ),
-                                ),
-                                const SizedBox(height: 4),
-                                const Text(
-                                  'TRYB JEDNEGO SMARTFONA (ALL-IN-ONE)',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w900,
-                                    color: Colors.white,
-                                    letterSpacing: 0.3,
+                                  const SizedBox(height: 4),
+                                  const Text(
+                                    'TRYB JEDNEGO SMARTFONA (ALL-IN-ONE)',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w900,
+                                      color: Colors.white,
+                                      letterSpacing: 0.3,
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
-                        ],
+                            const Icon(
+                              Icons.arrow_forward_ios,
+                              color: AppTheme.cyanAccent,
+                              size: 16,
+                            ),
+                          ],
+                        ),
                       ),
                       const SizedBox(height: 10),
                       const Text(
@@ -610,13 +622,17 @@ class ModeSelectScreen extends StatelessWidget {
                             children: [
                               Icon(Icons.stream, color: AppTheme.amberAccent, size: 16),
                               SizedBox(width: 8),
-                              Text(
-                                'KONFIGURACJA TRANSMISJI RTMP / YOUTUBE',
-                                style: TextStyle(
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w900,
-                                  color: AppTheme.amberAccent,
-                                  letterSpacing: 0.5,
+                              Flexible(
+                                child: Text(
+                                  'KONFIGURACJA TRANSMISJI RTMP / YOUTUBE',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w900,
+                                    color: AppTheme.amberAccent,
+                                    letterSpacing: 0.5,
+                                  ),
                                 ),
                               ),
                             ],

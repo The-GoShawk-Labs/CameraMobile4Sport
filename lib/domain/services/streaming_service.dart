@@ -160,7 +160,7 @@ class StreamingService implements IStreamingService {
         width: config.width,
         height: config.height,
         bitrateKbps: config.videoBitrateKbps,
-        fps: (config.fps > 0 ? config.fps : 15).clamp(10, 30),
+        fps: (config.fps > 0 ? config.fps : 24).clamp(15, 30),
         audioSampleRate: config.audioSampleRate,
       );
       if (!success) {

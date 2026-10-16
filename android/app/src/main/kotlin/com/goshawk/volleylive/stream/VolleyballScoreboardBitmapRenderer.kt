@@ -9,15 +9,17 @@ import java.util.concurrent.atomic.AtomicReference
  * Allocates all Bitmaps, Paints, and geometry ONCE during construction.
  * Renders to the backing Bitmap ONLY when state updates (`isDirty == true`),
  * preventing garbage collection thrashing at 60 FPS.
+ * Proportional to stream resolution (SportCam style ~2.8:1 ratio).
  */
 class VolleyballScoreboardBitmapRenderer(
     private val frameWidth: Int = 1920,
     private val frameHeight: Int = 1080
 ) {
-    // Proportional HUD card at top of video stream (width ~58% of frame, height 160px for card + event banner)
-    val overlayWidth = (frameWidth * 0.58f).toInt()
-    val overlayHeight = 160
-    val cardHeight = 110f
+    private val scale = frameWidth / 1920f
+
+    // Proportional TV card (430x154 for Full HD, ratio ~2.8:1)
+    val overlayWidth = ((430f * scale).toInt() and 1.inv()).coerceAtLeast(160)
+    val overlayHeight = ((154f * scale).toInt() and 1.inv()).coerceAtLeast(60)
 
     val bitmap: Bitmap = Bitmap.createBitmap(overlayWidth, overlayHeight, Bitmap.Config.ARGB_8888)
     private val canvas = Canvas(bitmap)
@@ -25,114 +27,89 @@ class VolleyballScoreboardBitmapRenderer(
     private val isDirty = AtomicBoolean(true)
     private val currentState = AtomicReference(VolleyballScoreboardData())
 
-    // Pre-allocated Paints (Hardware antialiased)
+    // Paints
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(240, 13, 17, 26) // Deep Navy/Dark Slate #0D111A
+        color = Color.argb(242, 244, 246, 249) // #F4F6F9 95% opacity
         style = Paint.Style.FILL
     }
 
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(200, 46, 58, 82) // #2E3A52
+        color = Color.argb(160, 209, 213, 219) // #D1D5DB
         style = Paint.Style.STROKE
-        strokeWidth = 2.5f
+        strokeWidth = 1.5f * scale
     }
 
     private val accentStripAPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(0, 229, 255) // Cyan
+        color = Color.rgb(0, 180, 216) // Vibrant Blue / Cyan #00B4D8
         style = Paint.Style.FILL
     }
 
     private val accentStripBPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(250, 204, 21) // Gold
+        color = Color.rgb(239, 68, 68) // Vibrant Red #EF4444
         style = Paint.Style.FILL
     }
 
-    private val centerBoxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(9, 12, 18) // #090C12
+    private val scoreBoxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(30, 34, 41) // #1E2229
         style = Paint.Style.FILL
     }
 
-    private val pointsBoxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(21, 28, 40) // #151C28
+    private val footerBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(229, 231, 235) // #E5E7EB
         style = Paint.Style.FILL
     }
 
-    private val separatorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(31, 41, 61) // #1F293D
-        strokeWidth = 2.0f
-    }
-
-    private val teamANamePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        textSize = 26f
+    private val teamNamePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(17, 24, 39) // #111827
+        textSize = 19f * scale
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.LEFT
     }
 
-    private val teamBNamePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val scoreTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
-        textSize = 26f
+        textSize = 26f * scale
+        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        textAlign = Paint.Align.CENTER
+    }
+
+    private val setsTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(107, 114, 128) // #6B7280
+        textSize = 12f * scale
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.RIGHT
     }
 
-    private val scoreAPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(0, 229, 255)
-        textSize = 40f
+    private val footerTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(55, 65, 81) // #374151
+        textSize = 12f * scale
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-        textAlign = Paint.Align.CENTER
-    }
-
-    private val scoreBPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(250, 204, 21)
-        textSize = 40f
-        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-        textAlign = Paint.Align.CENTER
-    }
-
-    private val periodLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(200, 255, 255, 255)
-        textSize = 17f
-        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-        textAlign = Paint.Align.CENTER
-    }
-
-    private val setsScorePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(255, 179, 0) // Amber #FFB300
-        textSize = 20f
-        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-        textAlign = Paint.Align.CENTER
     }
 
     private val serveDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(250, 204, 21) // Gold
+        color = Color.rgb(250, 204, 21) // Gold #FACC15
         style = Paint.Style.FILL
     }
 
-    private val redBannerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(230, 229, 57, 53) // Red #E53935
-        style = Paint.Style.FILL
+    private val rowDividerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(80, 229, 231, 235)
+        strokeWidth = 1f * scale
     }
 
-    private val redBannerTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        textSize = 18f
-        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-        textAlign = Paint.Align.CENTER
-        letterSpacing = 0.04f
-    }
-
-    private val cardRect = RectF(0f, 0f, overlayWidth.toFloat(), cardHeight)
-    private val redBannerRect = RectF()
-    private val centerBoxRect = RectF()
-    private val pointsBoxARect = RectF()
-    private val pointsBoxBRect = RectF()
+    // Geometry rects
+    private val cardRect = RectF(0f, 0f, overlayWidth.toFloat(), overlayHeight.toFloat())
     private val stripARect = RectF()
     private val stripBRect = RectF()
+    private val scoreBoxARect = RectF()
+    private val scoreBoxBRect = RectF()
+    private val footerRect = RectF()
 
     fun updateData(newData: VolleyballScoreboardData) {
-        currentState.set(newData)
-        isDirty.set(true)
+        val prev = currentState.get()
+        if (prev != newData) {
+            currentState.set(newData)
+            isDirty.set(true)
+        }
     }
 
     /**
@@ -147,94 +124,88 @@ class VolleyballScoreboardBitmapRenderer(
         val data = currentState.get()
         bitmap.eraseColor(Color.TRANSPARENT)
 
-        // 1. Draw outer TV Broadcast Card
-        canvas.drawRoundRect(cardRect, 18f, 18f, bgPaint)
-        canvas.drawRoundRect(cardRect, 18f, 18f, borderPaint)
+        val cr = 10f * scale
+        val rowHeight = (overlayHeight * 0.37f)
+        val footerHeight = overlayHeight - (rowHeight * 2f)
 
-        val midX = overlayWidth / 2f
-        val midY = cardHeight / 2f
+        // 1. Draw outer Card
+        canvas.drawRoundRect(cardRect, cr, cr, bgPaint)
+        canvas.drawRoundRect(cardRect, cr, cr, borderPaint)
 
-        // 2. Team A & B Accent Strips (Left & Right edges)
-        stripARect.set(0f, 0f, 12f, cardHeight)
-        canvas.drawRoundRect(stripARect, 6f, 6f, accentStripAPaint)
+        // 2. Footer background
+        footerRect.set(0f, overlayHeight - footerHeight, overlayWidth.toFloat(), overlayHeight.toFloat())
+        canvas.drawRoundRect(footerRect, 0f, 0f, footerBgPaint)
+        canvas.drawLine(0f, overlayHeight - footerHeight, overlayWidth.toFloat(), overlayHeight - footerHeight, borderPaint)
 
-        stripBRect.set(overlayWidth - 12f, 0f, overlayWidth.toFloat(), cardHeight)
-        canvas.drawRoundRect(stripBRect, 6f, 6f, accentStripBPaint)
+        // 3. Row 1: Team A
+        val stripW = 8f * scale
+        val scoreBoxW = 48f * scale
+        val scoreBoxH = 28f * scale
+        val scoreBoxRight = overlayWidth - 8f * scale
 
-        // 3. Center Period Box ("SET X" & "setsA-setsB")
-        val centerBoxWidth = 130f
-        centerBoxRect.set(
-            midX - centerBoxWidth / 2,
-            0f,
-            midX + centerBoxWidth / 2,
-            cardHeight
-        )
-        canvas.drawRect(centerBoxRect, centerBoxPaint)
-        canvas.drawLine(centerBoxRect.left, 0f, centerBoxRect.left, cardHeight, separatorPaint)
-        canvas.drawLine(centerBoxRect.right, 0f, centerBoxRect.right, cardHeight, separatorPaint)
+        // Strip A
+        stripARect.set(0f, 0f, stripW, rowHeight)
+        canvas.drawRoundRect(stripARect, 4f * scale, 4f * scale, accentStripAPaint)
 
-        canvas.drawText("SET ${data.currentSet}", midX, midY - 6f, periodLabelPaint)
-        canvas.drawText("${data.setsA}-${data.setsB}", midX, midY + 24f, setsScorePaint)
+        // Name A
+        val teamAY = rowHeight * 0.62f
+        canvas.drawText(data.teamA.take(10).uppercase(), stripW + 10f * scale, teamAY, teamNamePaint)
 
-        // 4. Team A Points Box (Dark Navy)
-        val pointsBoxWidth = 90f
-        pointsBoxARect.set(
-            centerBoxRect.left - pointsBoxWidth,
-            0f,
-            centerBoxRect.left,
-            cardHeight
-        )
-        canvas.drawRect(pointsBoxARect, pointsBoxPaint)
-        canvas.drawText(
-            data.scoreA.toString(),
-            pointsBoxARect.centerX(),
-            midY + 14f,
-            scoreAPaint
-        )
-
-        // 5. Team B Points Box (Dark Navy)
-        pointsBoxBRect.set(
-            centerBoxRect.right,
-            0f,
-            centerBoxRect.right + pointsBoxWidth,
-            cardHeight
-        )
-        canvas.drawRect(pointsBoxBRect, pointsBoxPaint)
-        canvas.drawText(
-            data.scoreB.toString(),
-            pointsBoxBRect.centerX(),
-            midY + 14f,
-            scoreBPaint
-        )
-
-        // 6. Team A side (Left)
-        val teamAX = 32f
-        canvas.drawText(data.teamA.uppercase(), teamAX, midY + 9f, teamANamePaint)
+        // Serve dot A
         if (data.servingTeam == "A") {
-            canvas.drawCircle(teamAX - 14f, midY, 6f, serveDotPaint)
+            val textW = teamNamePaint.measureText(data.teamA.take(10).uppercase())
+            canvas.drawCircle(stripW + 16f * scale + textW, teamAY - 6f * scale, 4f * scale, serveDotPaint)
         }
 
-        // 7. Team B side (Right)
-        val teamBX = overlayWidth - 32f
-        canvas.drawText(data.teamB.uppercase(), teamBX, midY + 9f, teamBNamePaint)
+        // Sets A
+        canvas.drawText("S:${data.setsA}", scoreBoxRight - scoreBoxW - 8f * scale, teamAY, setsTextPaint)
+
+        // Score Box A
+        val boxAY = (rowHeight - scoreBoxH) / 2f
+        scoreBoxARect.set(scoreBoxRight - scoreBoxW, boxAY, scoreBoxRight, boxAY + scoreBoxH)
+        canvas.drawRoundRect(scoreBoxARect, 4f * scale, 4f * scale, scoreBoxPaint)
+        canvas.drawText(data.scoreA.toString(), scoreBoxARect.centerX(), scoreBoxARect.centerY() + 9f * scale, scoreTextPaint)
+
+        // Divider between rows
+        canvas.drawLine(stripW, rowHeight, overlayWidth.toFloat(), rowHeight, rowDividerPaint)
+
+        // 4. Row 2: Team B
+        val row2Top = rowHeight
+        // Strip B
+        stripBRect.set(0f, row2Top, stripW, row2Top + rowHeight)
+        canvas.drawRoundRect(stripBRect, 4f * scale, 4f * scale, accentStripBPaint)
+
+        // Name B
+        val teamBY = row2Top + rowHeight * 0.62f
+        canvas.drawText(data.teamB.take(10).uppercase(), stripW + 10f * scale, teamBY, teamNamePaint)
+
+        // Serve dot B
         if (data.servingTeam == "B") {
-            canvas.drawCircle(teamBX + 14f, midY, 6f, serveDotPaint)
+            val textW = teamNamePaint.measureText(data.teamB.take(10).uppercase())
+            canvas.drawCircle(stripW + 16f * scale + textW, teamBY - 6f * scale, 4f * scale, serveDotPaint)
         }
 
-        // 8. Dynamic Red Event/Toast Banner directly below the scoreboard card
-        val rawBanner = when {
-            data.toastMessage.isNotBlank() -> data.toastMessage.trim()
-            data.eventTag.isNotBlank() -> data.eventTag.trim()
-            else -> ""
-        }
-        val bannerText = if (isDisplayableBanner(rawBanner)) rawBanner else ""
-        if (bannerText.isNotEmpty()) {
-            val bannerW = 280f
-            val bannerH = 32f
-            val bannerY = 118f
-            redBannerRect.set(midX - bannerW / 2f, bannerY, midX + bannerW / 2f, bannerY + bannerH)
-            canvas.drawRoundRect(redBannerRect, 12f, 12f, redBannerPaint)
-            canvas.drawText(bannerText.uppercase(), midX, bannerY + 22f, redBannerTextPaint)
+        // Sets B
+        canvas.drawText("S:${data.setsB}", scoreBoxRight - scoreBoxW - 8f * scale, teamBY, setsTextPaint)
+
+        // Score Box B
+        val boxBY = row2Top + (rowHeight - scoreBoxH) / 2f
+        scoreBoxBRect.set(scoreBoxRight - scoreBoxW, boxBY, scoreBoxRight, boxBY + scoreBoxH)
+        canvas.drawRoundRect(scoreBoxBRect, 4f * scale, 4f * scale, scoreBoxPaint)
+        canvas.drawText(data.scoreB.toString(), scoreBoxBRect.centerX(), scoreBoxBRect.centerY() + 9f * scale, scoreTextPaint)
+
+        // 5. Footer info
+        footerTextPaint.textAlign = Paint.Align.LEFT
+        val footerY = overlayHeight - (footerHeight * 0.32f)
+        canvas.drawText("VOLLEY LIVE", 10f * scale, footerY, footerTextPaint)
+
+        footerTextPaint.textAlign = Paint.Align.CENTER
+        canvas.drawText("SET ${data.currentSet}", overlayWidth / 2f, footerY, footerTextPaint)
+
+        val banner = if (data.toastMessage.isNotBlank()) data.toastMessage else data.eventTag
+        if (banner.isNotBlank() && isDisplayableBanner(banner)) {
+            footerTextPaint.textAlign = Paint.Align.RIGHT
+            canvas.drawText(banner.take(12).uppercase(), overlayWidth - 10f * scale, footerY, footerTextPaint)
         }
 
         return true
