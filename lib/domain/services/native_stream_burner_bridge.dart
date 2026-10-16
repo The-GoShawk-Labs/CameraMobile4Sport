@@ -318,14 +318,20 @@ class NativeStreamBurnerBridge {
     int fps, {
     String? streamKey,
     Map<String, dynamic>? scoreboardData,
+    bool? isPortrait,
   }) async {
     _intentionalStop = false;
     _lastRtmpUrl = rtmpUrl;
     _lastStreamKey = streamKey ?? '';
     _setStatus(NativeStreamStatus.connecting);
 
-    final safeWidth = (width > 0 ? width : 1920) & ~1;
-    final safeHeight = (height > 0 ? height : 1080) & ~1;
+    final bool portrait = isPortrait ?? (width < height);
+    final safeWidth = portrait
+        ? ((width > 0 && height > 0 ? (width < height ? width : height) : 1080) & ~1)
+        : ((width > 0 && height > 0 ? (width > height ? width : height) : 1920) & ~1);
+    final safeHeight = portrait
+        ? ((width > 0 && height > 0 ? (width > height ? width : height) : 1920) & ~1)
+        : ((width > 0 && height > 0 ? (width < height ? width : height) : 1080) & ~1);
     final safeFps = (fps > 0 ? fps : 30).clamp(15, 60);
     final safeBitrate = bitrate > 0 ? bitrate : 4000000;
 
@@ -342,7 +348,8 @@ class NativeStreamBurnerBridge {
         'gopSeconds': 2.0,
         'profile': 'high',
         'bitrateMode': 'CBR',
-        'scoreboard': ?scoreboardData,
+        'isPortrait': portrait,
+        'scoreboard': scoreboardData,
       });
       if (success == true) {
         _setStatus(NativeStreamStatus.streaming);
@@ -434,17 +441,32 @@ class NativeStreamBurnerBridge {
     }
   }
 
+  /// Dynamically updates stream orientation (portrait vs landscape) in native encoder & OpenGL filters.
+  Future<void> updateOrientation({required bool isPortrait}) async {
+    try {
+      await _methodChannel.invokeMethod('updateOrientation', {
+        'isPortrait': isPortrait,
+      });
+    } on PlatformException catch (e) {
+      debugPrint('[NativeStreamBurnerBridge] updateOrientation error: ${e.message}');
+    }
+  }
+
   // ===========================================================================
   // COMPATIBILITY WRAPPERS
   // ===========================================================================
 
-  Future<bool> initializeStream(StreamConfig config) async {
+  Future<bool> initializeStream(StreamConfig config, {bool? isPortrait}) async {
     _lastConfig = config;
     _lastAnchorPosition = config.anchorPosition.name;
     try {
+      final map = config.toMap();
+      if (isPortrait != null) {
+        map['isPortrait'] = isPortrait;
+      }
       final bool? success = await _methodChannel.invokeMethod(
         'initializeStream',
-        config.toMap(),
+        map,
       );
       return success ?? false;
     } on PlatformException catch (_) {
@@ -454,6 +476,7 @@ class NativeStreamBurnerBridge {
         fps: config.fps,
         videoBitrateBps: config.videoBitrate,
         audioBitrateBps: config.audioBitrate,
+        isPortrait: isPortrait,
       );
     }
   }
@@ -464,17 +487,27 @@ class NativeStreamBurnerBridge {
     int fps = 30,
     int videoBitrateBps = 4500000,
     int audioBitrateBps = 128000,
+    bool? isPortrait,
   }) async {
+    final bool portrait = isPortrait ?? (width < height);
+    final safeWidth = portrait
+        ? ((width > 0 && height > 0 ? (width < height ? width : height) : 1080) & ~1)
+        : ((width > 0 && height > 0 ? (width > height ? width : height) : 1920) & ~1);
+    final safeHeight = portrait
+        ? ((width > 0 && height > 0 ? (width > height ? width : height) : 1920) & ~1)
+        : ((width > 0 && height > 0 ? (width < height ? width : height) : 1080) & ~1);
+
     try {
       final bool? success = await _methodChannel.invokeMethod('initialize', {
-        'width': width,
-        'height': height,
+        'width': safeWidth,
+        'height': safeHeight,
         'fps': fps,
         'videoBitrate': videoBitrateBps,
         'audioBitrate': audioBitrateBps,
         'gopSeconds': 2.0,
         'profile': 'high',
         'bitrateMode': 'CBR',
+        'isPortrait': portrait,
       });
       return success ?? false;
     } on PlatformException catch (e) {
@@ -516,6 +549,7 @@ class NativeStreamBurnerBridge {
     int height = 1080,
     int fps = 30,
     int videoBitrateBps = 4500000,
+    bool? isPortrait,
   }) async {
     _lastState = initialState;
     if (config != null) {
@@ -523,11 +557,15 @@ class NativeStreamBurnerBridge {
       _lastAnchorPosition = config.anchorPosition.name;
     }
 
-    final finalWidth =
-        ((config?.width ?? width) > 0 ? (config?.width ?? width) : 1920) & ~1;
-    final finalHeight =
-        ((config?.height ?? height) > 0 ? (config?.height ?? height) : 1080) &
-        ~1;
+    final rawW = config?.width ?? width;
+    final rawH = config?.height ?? height;
+    final bool portrait = isPortrait ?? (rawW < rawH);
+    final finalWidth = portrait
+        ? ((rawW > 0 && rawH > 0 ? (rawW < rawH ? rawW : rawH) : 1080) & ~1)
+        : ((rawW > 0 && rawH > 0 ? (rawW > rawH ? rawW : rawH) : 1920) & ~1);
+    final finalHeight = portrait
+        ? ((rawW > 0 && rawH > 0 ? (rawW > rawH ? rawW : rawH) : 1920) & ~1)
+        : ((rawW > 0 && rawH > 0 ? (rawW < rawH ? rawW : rawH) : 1080) & ~1);
     final finalFps = (config?.fps ?? fps).clamp(15, 60);
     final finalBitrate = config?.videoBitrate ?? videoBitrateBps;
 
@@ -543,6 +581,7 @@ class NativeStreamBurnerBridge {
       finalFps,
       streamKey: streamKey,
       scoreboardData: map,
+      isPortrait: portrait,
     );
   }
 

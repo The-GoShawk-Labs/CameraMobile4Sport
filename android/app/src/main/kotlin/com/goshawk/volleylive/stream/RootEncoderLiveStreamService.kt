@@ -6,10 +6,14 @@ import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.util.Log
+import android.view.OrientationEventListener
+import android.view.Surface
+import android.view.WindowManager
 import com.pedro.common.AudioCodec
 import com.pedro.common.ConnectChecker
 import com.pedro.common.VideoCodec
 import com.pedro.encoder.input.gl.render.filters.`object`.ImageObjectFilterRender
+import com.pedro.encoder.input.video.CameraHelper
 import com.pedro.encoder.utils.CodecUtil
 import com.pedro.library.rtmp.RtmpCamera2
 import com.pedro.library.view.OpenGlView
@@ -24,10 +28,11 @@ import kotlinx.coroutines.withContext
 /**
  * Hardware-accelerated RTMP/RTMPS streaming service powered by pedroSG94/RootEncoder (v2.5.4).
  * - Zero software CPU encoding (strictly hardware MediaCodec H.264 + AAC).
+ * - Full dynamic orientation support (Landscape 16:9 / 1920x1080 and Portrait 9:16 / 1080x1920).
  * - Offscreen / SurfaceTexture OpenGL ES pipeline via RtmpCamera2 (GlStreamInterface).
  * - Hardware OpenGL scoreboard burn-in using ImageObjectFilterRender + VolleyballScoreboardBitmapRenderer.
  * - Texture upload (filter.setImage) triggered EXCLUSIVELY on score change or 1s match clock tick.
- * - 6 broadcast anchor positions (2 rows x 3 columns) with ~3% TV safe margins.
+ * - 6 broadcast anchor positions (2 rows x 3 columns) relative to active video stream canvas.
  */
 class RootEncoderLiveStreamService(
     private val context: Context,
@@ -43,6 +48,10 @@ class RootEncoderLiveStreamService(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var rtmpCamera2: RtmpCamera2? = null
     private var scoreboardFilter: ImageObjectFilterRender? = null
+
+    private var orientationListener: OrientationEventListener? = null
+    @Volatile
+    private var deviceOrientationDegrees = -1
 
     @Volatile
     private var currentWidth = 1920
@@ -80,6 +89,68 @@ class RootEncoderLiveStreamService(
 
     init {
         ensureCameraInstance()
+        initOrientationListener()
+    }
+
+    private fun initOrientationListener() {
+        try {
+            orientationListener = object : OrientationEventListener(context) {
+                override fun onOrientationChanged(orientation: Int) {
+                    if (orientation == ORIENTATION_UNKNOWN) return
+                    val deg = when ((orientation + 45) / 90 * 90 % 360) {
+                        0 -> 90 // Portrait
+                        90 -> 180 // Reverse landscape
+                        180 -> 270 // Reverse portrait
+                        270 -> 0 // Landscape
+                        else -> 90
+                    }
+                    deviceOrientationDegrees = deg
+                }
+            }
+            if (orientationListener?.canDetectOrientation() == true) {
+                orientationListener?.enable()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "OrientationEventListener init ignored: ${e.message}")
+        }
+    }
+
+    fun resolveDeviceRotation(
+        requestedWidth: Int = currentWidth,
+        requestedHeight: Int = currentHeight,
+        isExplicitPortrait: Boolean? = null
+    ): Int {
+        val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        val displayRotation = windowManager?.defaultDisplay?.rotation ?: Surface.ROTATION_0
+        val displayDegrees = when (displayRotation) {
+            Surface.ROTATION_0 -> 90
+            Surface.ROTATION_90 -> 0
+            Surface.ROTATION_180 -> 270
+            Surface.ROTATION_270 -> 180
+            else -> 0
+        }
+
+        val isPortrait = when {
+            isExplicitPortrait != null -> isExplicitPortrait
+            requestedWidth > 0 && requestedHeight > 0 && requestedWidth != requestedHeight -> requestedWidth < requestedHeight
+            deviceOrientationDegrees != -1 -> deviceOrientationDegrees == 90 || deviceOrientationDegrees == 270
+            else -> displayDegrees == 90 || displayDegrees == 270
+        }
+
+        var rotation = if (deviceOrientationDegrees != -1) deviceOrientationDegrees else displayDegrees
+        if (isPortrait && rotation != 90 && rotation != 270) {
+            rotation = 90
+        } else if (!isPortrait && (rotation == 90 || rotation == 270)) {
+            rotation = 0
+        }
+
+        rtmpCamera2?.let { camera ->
+            if (camera.isFrontCamera) {
+                rotation = (360 - rotation) % 360
+            }
+        }
+
+        return rotation
     }
 
     @Synchronized
@@ -106,10 +177,18 @@ class RootEncoderLiveStreamService(
         audioBitrate: Int = 128_000,
         gopSeconds: Float = 2.0f,
         audioSampleRate: Int = 48_000,
-        @Suppress("UNUSED_PARAMETER") audioChannels: Int = 2
+        @Suppress("UNUSED_PARAMETER") audioChannels: Int = 2,
+        isPortrait: Boolean? = null
     ) {
-        val safeWidth = (if (width > 0) width else 1920) and 1.inv()
-        val safeHeight = (if (height > 0) height else 1080) and 1.inv()
+        val rawWidth = if (width > 0) width else 1920
+        val rawHeight = if (height > 0) height else 1080
+        val rotation = resolveDeviceRotation(rawWidth, rawHeight, isPortrait)
+        val portrait = (rotation == 90 || rotation == 270)
+
+        // Landscape: 1920x1080 (or 1280x720)
+        // Portrait: 1080x1920 (or 720x1280)
+        val safeWidth = (if (portrait) minOf(rawWidth, rawHeight) else maxOf(rawWidth, rawHeight)) and 1.inv()
+        val safeHeight = (if (portrait) maxOf(rawWidth, rawHeight) else minOf(rawWidth, rawHeight)) and 1.inv()
         val safeFps = fps.coerceIn(15, 60)
         val normalizedBitrate = normalizeBitrateBps(videoBitrate)
 
@@ -147,6 +226,7 @@ class RootEncoderLiveStreamService(
         height: Int = currentHeight,
         bitrate: Int = currentVideoBitrate,
         fps: Int = currentFps,
+        isPortrait: Boolean? = null,
         onSuccess: () -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
@@ -160,7 +240,8 @@ class RootEncoderLiveStreamService(
             videoBitrate = bitrate,
             audioBitrate = currentAudioBitrate,
             gopSeconds = currentGopSeconds,
-            audioSampleRate = currentAudioSampleRate
+            audioSampleRate = currentAudioSampleRate,
+            isPortrait = isPortrait
         )
 
         val endpoint = buildEndpointUrl(rtmpUrl, streamKey)
@@ -203,38 +284,45 @@ class RootEncoderLiveStreamService(
         camera.setVideoCodec(VideoCodec.H264)
         camera.setAudioCodec(AudioCodec.AAC)
 
+        val rotation = resolveDeviceRotation(currentWidth, currentHeight)
         val iFrameInterval = currentGopSeconds.toInt().coerceAtLeast(1)
+
+        // RootEncoder VideoEncoder expects base dimensions (longer x shorter).
+        // When rotation is 90 or 270, it automatically creates a portrait MediaFormat (height x width)
+        // and configures glInterface encoder size and portrait rendering mode.
+        val baseWidth = maxOf(currentWidth, currentHeight)
+        val baseHeight = minOf(currentWidth, currentHeight)
 
         // Try H.264 High Profile 4.1 first, fallback to Baseline / default hardware profile
         val videoPrepared = camera.prepareVideo(
-            currentWidth,
-            currentHeight,
+            baseWidth,
+            baseHeight,
             currentFps,
             currentVideoBitrate,
             iFrameInterval,
-            0,
+            rotation,
             MediaCodecInfo.CodecProfileLevel.AVCProfileHigh,
             MediaCodecInfo.CodecProfileLevel.AVCLevel41
         ) || camera.prepareVideo(
-            currentWidth,
-            currentHeight,
+            baseWidth,
+            baseHeight,
             currentFps,
             currentVideoBitrate,
             iFrameInterval,
-            0,
+            rotation,
             MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
             MediaCodecInfo.CodecProfileLevel.AVCLevel31
         ) || camera.prepareVideo(
-            currentWidth,
-            currentHeight,
+            baseWidth,
+            baseHeight,
             currentFps,
             currentVideoBitrate,
             iFrameInterval,
-            0
+            rotation
         )
 
         if (!videoPrepared) {
-            throw IllegalStateException("Sprzętowy enkoder MediaCodec H.264 odrzucił konfigurację ${currentWidth}x${currentHeight}@${currentFps}fps")
+            throw IllegalStateException("Sprzętowy enkoder MediaCodec H.264 odrzucił konfigurację ${currentWidth}x${currentHeight}@${currentFps}fps (rot=$rotation)")
         }
 
         // AAC 128 kbps, 48000 Hz stereo from device microphone (fallback to 44100 Hz if needed)
@@ -262,7 +350,7 @@ class RootEncoderLiveStreamService(
         attachAndRefreshScoreboardFilter(camera)
         Log.i(
             TAG,
-            "RootEncoder hardware stream started: ${currentWidth}x${currentHeight}@${currentFps}fps, " +
+            "RootEncoder hardware stream started: ${currentWidth}x${currentHeight}@${currentFps}fps (rot=$rotation), " +
                 "bitrate=${currentVideoBitrate / 1000}kbps, anchor=$currentAnchorPosition"
         )
     }
@@ -323,6 +411,7 @@ class RootEncoderLiveStreamService(
     /**
      * Calculates OpenGL percentage scale and position (0..100%) for the 6 anchor points:
      * topLeft, topCenter, topRight, bottomLeft, bottomCenter, bottomRight.
+     * Scale and position are relative to the active video stream canvas (W_stream x H_stream).
      * Note: setScale() MUST be called before setPosition() in RootEncoder's Sprite.
      */
     private fun applyAnchorPositionAndScale(
@@ -333,6 +422,10 @@ class RootEncoderLiveStreamService(
     ) {
         val frameW = currentWidth.coerceAtLeast(1).toFloat()
         val frameH = currentHeight.coerceAtLeast(1).toFloat()
+        val isPortrait = frameH > frameW
+
+        val marginX = if (isPortrait) 3.5f else SAFE_MARGIN_X_PERCENT
+        val marginY = SAFE_MARGIN_Y_PERCENT
 
         val scaleX = ((customWidth.toFloat() / frameW) * 100f).coerceIn(5f, 90f)
         val scaleY = ((customHeight.toFloat() / frameH) * 100f).coerceIn(4f, 50f)
@@ -340,36 +433,56 @@ class RootEncoderLiveStreamService(
         // 1. Scale first (Sprite.scale adjusts existing translation)
         filter.setScale(scaleX, scaleY)
 
-        // 2. Position in OpenGL screen percentage (0..100) with ~3% broadcast safe margins
+        // 2. Position in OpenGL screen percentage (0..100) with safe margins
         val posX: Float
         val posY: Float
         when (anchor) {
             "topCenter" -> {
                 posX = (100f - scaleX) / 2f
-                posY = SAFE_MARGIN_Y_PERCENT
+                posY = marginY
             }
             "topRight" -> {
-                posX = 100f - scaleX - SAFE_MARGIN_X_PERCENT
-                posY = SAFE_MARGIN_Y_PERCENT
+                posX = 100f - scaleX - marginX
+                posY = marginY
             }
             "bottomLeft" -> {
-                posX = SAFE_MARGIN_X_PERCENT
-                posY = 100f - scaleY - SAFE_MARGIN_Y_PERCENT
+                posX = marginX
+                posY = 100f - scaleY - marginY
             }
             "bottomCenter" -> {
                 posX = (100f - scaleX) / 2f
-                posY = 100f - scaleY - SAFE_MARGIN_Y_PERCENT
+                posY = 100f - scaleY - marginY
             }
             "bottomRight" -> {
-                posX = 100f - scaleX - SAFE_MARGIN_X_PERCENT
-                posY = 100f - scaleY - SAFE_MARGIN_Y_PERCENT
+                posX = 100f - scaleX - marginX
+                posY = 100f - scaleY - marginY
             }
             else -> { // "topLeft"
-                posX = SAFE_MARGIN_X_PERCENT
-                posY = SAFE_MARGIN_Y_PERCENT
+                posX = marginX
+                posY = marginY
             }
         }
         filter.setPosition(posX, posY)
+    }
+
+    /**
+     * Dynamically updates stream orientation & scoreboard geometry when rotating device.
+     */
+    @Synchronized
+    fun updateOrientation(isPortrait: Boolean) {
+        val newW = if (isPortrait) minOf(currentWidth, currentHeight) else maxOf(currentWidth, currentHeight)
+        val newH = if (isPortrait) maxOf(currentWidth, currentHeight) else minOf(currentWidth, currentHeight)
+        if (newW != currentWidth || newH != currentHeight) {
+            currentWidth = newW
+            currentHeight = newH
+            renderer = VolleyballScoreboardBitmapRenderer(currentWidth, currentHeight)
+            renderer.updateData(lastScoreboardData)
+            scoreboardFilter?.let { filter ->
+                val snapshot = renderer.forceRenderAndSnapshot()
+                filter.setImage(snapshot)
+                applyAnchorPositionAndScale(filter, currentAnchorPosition)
+            }
+        }
     }
 
     @Synchronized
@@ -427,6 +540,10 @@ class RootEncoderLiveStreamService(
     }
 
     fun release() {
+        try {
+            orientationListener?.disable()
+            orientationListener = null
+        } catch (_: Exception) {}
         stopStream()
     }
 

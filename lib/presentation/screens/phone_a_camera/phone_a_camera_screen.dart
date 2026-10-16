@@ -581,8 +581,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                 ),
 
               // DEDYKOWANY WIDGET WYPALANIA DO STRUMIENIA WIDEO (NATIVE STREAM BURNER)
-              // Zapewnia stałe proporcje transmisyjne 16:9 (szerokość 720 logical px) oraz pełne renderowanie
-              // niezależnie od tego, czy operator kamery wyłączył widoczność HUD na swoim ekranie (czysty kadr).
+              // Karta tablicy wynikowej o proporcjach ~2.8:1 renderowana do tekstury OpenGL
               Positioned(
                 left: 0,
                 top: 0,
@@ -591,20 +590,16 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                   child: IgnorePointer(
                     child: RepaintBoundary(
                       key: _scoreboardBurnerKey,
-                      child: SizedBox(
-                        width: 720,
-                        child: Center(
-                          child: ScoreboardOverlay(
-                            session: match.session,
-                            style: streamer.scoreboardStyle,
-                            isTimeoutActive: match.isTimeoutActive,
-                            timeoutSeconds: match.timeoutSecondsRemaining,
-                            timeoutTeam: match.timeoutCallingTeam,
-                            showServeIndicator: streamer.showServeIndicator,
-                            activeSpecialEvent: match.activeSpecialEvent,
-                            animate: false,
-                          ),
-                        ),
+                      child: ScoreboardOverlay(
+                        session: match.session,
+                        style: streamer.scoreboardStyle,
+                        isStandaloneCard: true,
+                        isTimeoutActive: match.isTimeoutActive,
+                        timeoutSeconds: match.timeoutSecondsRemaining,
+                        timeoutTeam: match.timeoutCallingTeam,
+                        showServeIndicator: streamer.showServeIndicator,
+                        activeSpecialEvent: match.activeSpecialEvent,
+                        animate: false,
                       ),
                     ),
                   ),
@@ -612,29 +607,24 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
               ),
 
               // 5. TABLICA WYNIKOWA OVERLAY NA ŻYWO NA EKRANIE OPERATORA
+              // Dokładnie dopasowana do aktywnego płótna wideo (16:9 lub 9:16)
               if (camera.settings.isHudVisible)
                 Positioned.fill(
-                  child: Padding(
-                    padding: EdgeInsets.only(
-                      top: isLandscape ? 0 : 88,
-                      bottom: isLandscape ? 0 : 96,
-                    ),
-                    child: IgnorePointer(
-                      child: ScoreboardOverlay(
-                        session: match.session,
-                        style: streamer.scoreboardStyle,
-                        anchorPosition: streamer.scoreboardAnchorPosition,
-                        targetAspectRatio: _resolveCameraAspectRatio(
-                          camera,
-                          isLandscape,
-                        ),
-                        isTimeoutActive: match.isTimeoutActive,
-                        timeoutSeconds: match.timeoutSecondsRemaining,
-                        timeoutTeam: match.timeoutCallingTeam,
-                        showServeIndicator: streamer.showServeIndicator,
-                        activeSpecialEvent: match.activeSpecialEvent,
-                        matchDuration: match.matchDuration,
+                  child: IgnorePointer(
+                    child: ScoreboardOverlay(
+                      session: match.session,
+                      style: streamer.scoreboardStyle,
+                      anchorPosition: streamer.scoreboardAnchorPosition,
+                      targetAspectRatio: _resolveCameraAspectRatio(
+                        camera,
+                        isLandscape,
                       ),
+                      isTimeoutActive: match.isTimeoutActive,
+                      timeoutSeconds: match.timeoutSecondsRemaining,
+                      timeoutTeam: match.timeoutCallingTeam,
+                      showServeIndicator: streamer.showServeIndicator,
+                      activeSpecialEvent: match.activeSpecialEvent,
+                      matchDuration: match.matchDuration,
                     ),
                   ),
                 ),

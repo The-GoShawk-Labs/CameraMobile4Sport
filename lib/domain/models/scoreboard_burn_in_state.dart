@@ -123,6 +123,8 @@ class VolleyballScoreboardState {
   final String? toastMessage;
   final ScoreboardAnchorPosition anchorPosition;
   final String matchClock;
+  final int? colorA;
+  final int? colorB;
 
   const VolleyballScoreboardState({
     required this.teamA,
@@ -137,6 +139,8 @@ class VolleyballScoreboardState {
     this.toastMessage,
     this.anchorPosition = ScoreboardAnchorPosition.topLeft,
     this.matchClock = '',
+    this.colorA,
+    this.colorB,
   });
 
   /// Factory creating state directly from the app's [MatchSession]
@@ -173,6 +177,8 @@ class VolleyballScoreboardState {
       toastMessage: effectiveToast,
       anchorPosition: anchorPosition,
       matchClock: matchClock,
+      colorA: session.teamAColor.toARGB32(),
+      colorB: session.teamBColor.toARGB32(),
     );
   }
 
@@ -191,6 +197,8 @@ class VolleyballScoreboardState {
     'toastMessage': toastMessage ?? eventTag ?? '',
     'anchorPosition': anchorPosition.name,
     'matchClock': matchClock,
+    if (colorA != null) 'colorA': colorA,
+    if (colorB != null) 'colorB': colorB,
   };
 
   @override
@@ -208,7 +216,9 @@ class VolleyballScoreboardState {
           eventTag == other.eventTag &&
           toastMessage == other.toastMessage &&
           anchorPosition == other.anchorPosition &&
-          matchClock == other.matchClock;
+          matchClock == other.matchClock &&
+          colorA == other.colorA &&
+          colorB == other.colorB;
 
   @override
   int get hashCode => Object.hash(
@@ -224,5 +234,7 @@ class VolleyballScoreboardState {
     toastMessage,
     anchorPosition,
     matchClock,
+    colorA,
+    colorB,
   );
 }

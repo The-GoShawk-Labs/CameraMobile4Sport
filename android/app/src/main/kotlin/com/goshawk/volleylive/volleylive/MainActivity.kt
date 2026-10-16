@@ -231,6 +231,7 @@ class MainActivity : FlutterActivity() {
                         val audioSampleRate = call.argument<Int>("audioSampleRate") ?: 48_000
                         val audioChannels = call.argument<Int>("audioChannels") ?: 2
                         val anchorPosition = call.argument<String>("anchorPosition")
+                        val isPortrait = call.argument<Boolean>("isPortrait")
 
                         backgroundScope.launch {
                             streamService?.initialize(
@@ -241,7 +242,8 @@ class MainActivity : FlutterActivity() {
                                 audioBitrate = audioBitrate,
                                 gopSeconds = gopSeconds,
                                 audioSampleRate = audioSampleRate,
-                                audioChannels = audioChannels
+                                audioChannels = audioChannels,
+                                isPortrait = isPortrait
                             )
                             if (!anchorPosition.isNullOrBlank()) {
                                 streamService?.setScoreboardPosition(anchorPosition)
@@ -270,6 +272,7 @@ class MainActivity : FlutterActivity() {
                             ?: call.argument<Int>("videoBitrate")
                             ?: 4_000_000
                         val fps = call.argument<Int>("fps") ?: 30
+                        val isPortrait = call.argument<Boolean>("isPortrait")
                         val scoreboardMap = call.argument<Map<String, Any>>("scoreboard")
 
                         backgroundScope.launch {
@@ -281,6 +284,7 @@ class MainActivity : FlutterActivity() {
                                 height = height,
                                 bitrate = bitrate,
                                 fps = fps,
+                                isPortrait = isPortrait,
                                 onSuccess = {
                                     runOnUiThread { result.success(true) }
                                 },
@@ -354,6 +358,16 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
+                    "updateOrientation" -> {
+                        val isPortrait = call.argument<Boolean>("isPortrait") ?: false
+                        backgroundScope.launch {
+                            streamService?.updateOrientation(isPortrait)
+                            runOnUiThread {
+                                result.success(true)
+                            }
+                        }
+                    }
+
                     else -> result.notImplemented()
                 }
             }
@@ -361,6 +375,8 @@ class MainActivity : FlutterActivity() {
 
     private fun updateScoreboardFromMap(map: Map<String, Any>) {
         val toast = (map["toastMessage"] as? String) ?: (map["eventTag"] as? String) ?: ""
+        val colorA = (map["colorA"] as? Number)?.toInt() ?: 0xFF00B4D8.toInt()
+        val colorB = (map["colorB"] as? Number)?.toInt() ?: 0xFFEF4444.toInt()
         val data = VolleyballScoreboardData(
             teamA = (map["teamA"] as? String) ?: (map["teamAName"] as? String) ?: "TEAM A",
             teamB = (map["teamB"] as? String) ?: (map["teamBName"] as? String) ?: "TEAM B",
@@ -373,7 +389,9 @@ class MainActivity : FlutterActivity() {
             eventTag = map["eventTag"] as? String ?: "",
             toastMessage = toast,
             anchorPosition = (map["anchorPosition"] as? String) ?: "topLeft",
-            matchClock = (map["matchClock"] as? String) ?: ""
+            matchClock = (map["matchClock"] as? String) ?: "",
+            colorA = colorA,
+            colorB = colorB
         )
         streamService?.updateScoreboard(data)
     }

@@ -98,10 +98,15 @@ class ScoreboardOverlay extends StatelessWidget {
         // =====================================================================
         final parentW = constraints.maxWidth;
         final parentH = constraints.maxHeight;
-        final safeAspect =
-            (targetAspectRatio.isFinite && targetAspectRatio > 0)
-            ? targetAspectRatio
-            : (16.0 / 9.0);
+        final isParentPortrait = parentH > parentW;
+        
+        // Automatyczne dopasowanie do orientacji kontenera (9:16 w pionie, 16:9 w poziomie)
+        final effectiveAspect = (targetAspectRatio.isFinite && targetAspectRatio > 0)
+            ? (targetAspectRatio == 16.0 / 9.0 && isParentPortrait
+                ? (9.0 / 16.0)
+                : targetAspectRatio)
+            : (isParentPortrait ? (9.0 / 16.0) : (16.0 / 9.0));
+        final safeAspect = effectiveAspect;
         final isPortraitVideo = safeAspect < 1.0;
 
         double videoW;
@@ -125,7 +130,7 @@ class ScoreboardOverlay extends StatelessWidget {
 
         // Dla strumienia poziomego (16:9) szerokość bazowa FullHD to 1920px (karta ~22.4% szerokości kadru).
         // Dla strumienia pionowego (9:16) szerokość bazowa FullHD to 1080px (karta ~39.8% szerokości pionowego kadru),
-        // dzięki czemu tablica idealnie mieści się wewnątrz pionowego strumienia wideo.
+        // zachowując czytelne proporcje tablicy (~2.8:1) na ekranach smartfonów.
         final referenceStreamWidth = isPortraitVideo ? 1080.0 : 1920.0;
         final rawScale = customScale ?? (videoW / referenceStreamWidth);
         final scale = (rawScale.isFinite && rawScale > 0 ? rawScale : 0.5)
@@ -229,11 +234,15 @@ class ScoreboardOverlay extends StatelessWidget {
       width: 430.0 * scale,
       height: 154.0 * scale,
       decoration: BoxDecoration(
-        color: const Color(0xF2F4F6F9), // 95% opacity #F4F6F9
+        color: const Color(0xF8F8FAFC), // 97% opacity Slate-50 broadcast white
         borderRadius: BorderRadius.circular(10.0 * scale),
+        border: Border.all(
+          color: const Color(0xFFCBD5E1),
+          width: 1.2 * scale,
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.35),
+            color: Colors.black.withValues(alpha: 0.25),
             blurRadius: 12.0 * scale,
             offset: Offset(0, 4.0 * scale),
           ),
@@ -257,7 +266,7 @@ class ScoreboardOverlay extends StatelessWidget {
             ),
 
             // SUBTELNY SEPARATOR
-            Container(height: 1.0 * scale, color: const Color(0xFFE5E7EB)),
+            Container(height: 1.0 * scale, color: const Color(0xFFE2E8F0)),
 
             // WIERSZ 2: GOŚCIE (TEAM B)
             Expanded(
@@ -272,7 +281,7 @@ class ScoreboardOverlay extends StatelessWidget {
               ),
             ),
 
-            // WIERSZ 3: DOLNY PASEK STATUSU / FOOTER (~26% WYSOKOŚCI)
+            // WIERSZ 3: DOLNY PASEK STATUSU / FOOTER (BEZWZGLĘDNIE ROZDZIELONE STREFY)
             _buildSportCamFooter(scale),
           ],
         ),
@@ -291,7 +300,7 @@ class ScoreboardOverlay extends StatelessWidget {
   }) {
     return Container(
       color: Colors.transparent,
-      padding: EdgeInsets.only(right: 6.0 * scale),
+      padding: EdgeInsets.only(right: 8.0 * scale),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -318,32 +327,81 @@ class ScoreboardOverlay extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontFamily: 'Roboto',
-                      fontSize: 16.0 * scale,
+                      fontSize: 16.5 * scale,
                       fontWeight: FontWeight.w900,
-                      letterSpacing: 0.5,
-                      color: const Color(0xFF111827),
+                      letterSpacing: 0.4,
+                      color: const Color(0xFF0F172A),
                     ),
                   ),
                 ),
                 if (showServeIndicator && isServing) ...[
-                  SizedBox(width: 6.0 * scale),
-                  _buildServeBallIndicator(teamColor, size: 8.5 * scale),
+                  SizedBox(width: 8.0 * scale),
+                  _buildServeBallIndicator(teamColor, size: 9.0 * scale),
                 ],
               ],
             ),
           ),
 
-          // Wskaźniki wygranych setów
+          // Wskaźniki wygranych setów (3 kropki best-of-5)
           _buildSetsDots(setsWon, teamColor, scale),
           SizedBox(width: 8.0 * scale),
 
-          // Ciemny boks punktowy (#1E2229)
+          // DEDYKOWANY BOKS WYGRANYCH SETÓW (STAN SETÓW - STANDARD FIVB / PLUSLIGA)
           Container(
-            width: 58.0 * scale,
-            height: 42.0 * scale,
+            width: 36.0 * scale,
+            height: 38.0 * scale,
             decoration: BoxDecoration(
-              color: const Color(0xFF1E2229),
+              color: const Color(0xFFE2E8F0),
               borderRadius: BorderRadius.circular(6.0 * scale),
+              border: Border.all(
+                color: const Color(0xFFCBD5E1),
+                width: 1.0 * scale,
+              ),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  'SET',
+                  style: TextStyle(
+                    fontFamily: 'Roboto',
+                    fontSize: 7.5 * scale,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                    color: const Color(0xFF64748B),
+                    height: 1.0,
+                  ),
+                ),
+                SizedBox(height: 2.0 * scale),
+                Text(
+                  '$setsWon',
+                  style: TextStyle(
+                    fontFamily: 'Roboto',
+                    fontSize: 16.0 * scale,
+                    fontWeight: FontWeight.w900,
+                    color: const Color(0xFF0F172A),
+                    height: 1.0,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(width: 5.0 * scale),
+
+          // GŁÓWNY CIEMNY BOKS PUNKTOWY (#0F172A)
+          Container(
+            width: 54.0 * scale,
+            height: 38.0 * scale,
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A),
+              borderRadius: BorderRadius.circular(6.0 * scale),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.25),
+                  blurRadius: 4.0 * scale,
+                  offset: Offset(0, 1.5 * scale),
+                ),
+              ],
             ),
             alignment: Alignment.center,
             child: _AnimatedScoreDigit(
@@ -359,9 +417,11 @@ class ScoreboardOverlay extends StatelessWidget {
   }
 
   Widget _buildSportCamFooter(double scale) {
-    final footerHeight = 40.0 * scale;
+    final footerHeight = 38.0 * scale;
     final displayTime = _formatMatchTime(matchDuration);
-    final currentSetLabel = 'SET ${session.currentSetNumber}';
+    final currentSetLabel = session.currentSetNumber >= 5
+        ? 'SET 5 • TB'
+        : 'SET ${session.currentSetNumber}';
     final rawBanner = activeSpecialEvent;
     final hasBanner = ScoreTimelineEntry.isDisplayableSpecialBanner(rawBanner);
 
@@ -369,22 +429,24 @@ class ScoreboardOverlay extends StatelessWidget {
       height: footerHeight,
       padding: EdgeInsets.symmetric(horizontal: 10.0 * scale),
       decoration: BoxDecoration(
-        color: const Color(0xFFE5E7EB),
+        color: const Color(0xFFE2E8F0),
         borderRadius: BorderRadius.vertical(bottom: Radius.circular(10.0 * scale)),
+        border: Border(
+          top: BorderSide(color: const Color(0xFFCBD5E1), width: 1.0 * scale),
+        ),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Lewa strona: logo / nazwa aplikacji lub specjalny banner
-          Expanded(
+          // STREFA 1 (LEWA, STAŁA SZEROKOŚĆ ~130px): BRANDING LUB BANER SPECJALNY
+          SizedBox(
+            width: 130.0 * scale,
             child: Align(
               alignment: Alignment.centerLeft,
               child: hasBanner
                   ? Container(
                       padding: EdgeInsets.symmetric(
-                        horizontal: 6.0 * scale,
-                        vertical: 2.0 * scale,
+                        horizontal: 8.0 * scale,
+                        vertical: 3.0 * scale,
                       ),
                       decoration: BoxDecoration(
                         color: const Color(0xFFDC2626),
@@ -410,46 +472,69 @@ class ScoreboardOverlay extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontFamily: 'Roboto',
-                        fontSize: 10.0 * scale,
+                        fontSize: 10.5 * scale,
                         fontWeight: FontWeight.w800,
                         letterSpacing: 0.8,
-                        color: const Color(0xFF4B5563),
+                        color: const Color(0xFF475569),
                       ),
                     ),
             ),
           ),
 
-          // Środek: numer seta
-          Container(
-            padding: EdgeInsets.symmetric(horizontal: 8.0 * scale, vertical: 2.0 * scale),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.65),
-              borderRadius: BorderRadius.circular(4.0 * scale),
-            ),
-            child: Text(
-              currentSetLabel,
-              style: TextStyle(
-                fontFamily: 'Roboto',
-                fontSize: 11.0 * scale,
-                fontWeight: FontWeight.w800,
-                color: const Color(0xFF1F2937),
+          // STREFA 2 (ŚRODEK): NUMER SETA W BIAŁEJ KAPSULE
+          Expanded(
+            child: Center(
+              child: Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: 10.0 * scale,
+                  vertical: 3.5 * scale,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(5.0 * scale),
+                  border: Border.all(
+                    color: const Color(0xFFCBD5E1),
+                    width: 1.0 * scale,
+                  ),
+                ),
+                child: Text(
+                  currentSetLabel,
+                  style: TextStyle(
+                    fontFamily: 'Roboto',
+                    fontSize: 11.5 * scale,
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFF0F172A),
+                  ),
+                ),
               ),
             ),
           ),
 
-          // Prawa strona: czas meczu MM:SS ze stałą szerokością cyfr (tabular figures)
-          Expanded(
+          // STREFA 3 (PRAWA, STAŁA SZEROKOŚĆ ~130px): CZAS MECZU Z IKONĄ STOPERA
+          SizedBox(
+            width: 130.0 * scale,
             child: Align(
               alignment: Alignment.centerRight,
-              child: Text(
-                displayTime,
-                style: TextStyle(
-                  fontFamily: 'Roboto',
-                  fontSize: 11.5 * scale,
-                  fontWeight: FontWeight.w800,
-                  color: const Color(0xFF111827),
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.timer_outlined,
+                    size: 13.0 * scale,
+                    color: const Color(0xFF475569),
+                  ),
+                  SizedBox(width: 4.0 * scale),
+                  Text(
+                    displayTime,
+                    style: TextStyle(
+                      fontFamily: 'Roboto',
+                      fontSize: 11.5 * scale,
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFF0F172A),
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -465,11 +550,15 @@ class ScoreboardOverlay extends StatelessWidget {
         final isWon = idx < setsWon;
         return Container(
           margin: EdgeInsets.symmetric(horizontal: 1.5 * scale),
-          width: 7.0 * scale,
-          height: 7.0 * scale,
+          width: 6.5 * scale,
+          height: 6.5 * scale,
           decoration: BoxDecoration(
             color: isWon ? color : const Color(0xFFCBD5E1),
             shape: BoxShape.circle,
+            border: Border.all(
+              color: isWon ? color.withValues(alpha: 0.8) : const Color(0xFF94A3B8),
+              width: 0.75 * scale,
+            ),
           ),
         );
       }),
@@ -745,17 +834,18 @@ class ScoreboardOverlay extends StatelessWidget {
   // ===========================================================================
   // POMOCNICZE WIDGETY
   // ===========================================================================
-  Widget _buildServeBallIndicator(Color color, {double size = 8}) {
+  Widget _buildServeBallIndicator(Color color, {double size = 9}) {
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: color,
+        color: const Color(0xFFF59E0B), // Illuminated Gold #F59E0B
         shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 1.5),
         boxShadow: [
           BoxShadow(
-            color: color.withValues(alpha: 0.8),
-            blurRadius: 6,
+            color: const Color(0xFFF59E0B).withValues(alpha: 0.7),
+            blurRadius: 5,
             spreadRadius: 1,
           ),
         ],
