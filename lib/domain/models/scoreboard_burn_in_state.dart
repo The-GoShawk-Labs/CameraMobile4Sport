@@ -122,6 +122,7 @@ class VolleyballScoreboardState {
   final String? eventTag; // e.g. "ACE!", "BLOCK!", "TIMEOUT"
   final String? toastMessage;
   final ScoreboardAnchorPosition anchorPosition;
+  final String matchClock;
 
   const VolleyballScoreboardState({
     required this.teamA,
@@ -135,6 +136,7 @@ class VolleyballScoreboardState {
     this.eventTag,
     this.toastMessage,
     this.anchorPosition = ScoreboardAnchorPosition.topLeft,
+    this.matchClock = '',
   });
 
   /// Factory creating state directly from the app's [MatchSession]
@@ -143,6 +145,7 @@ class VolleyballScoreboardState {
     String? eventTag,
     String? toastMessage,
     ScoreboardAnchorPosition anchorPosition = ScoreboardAnchorPosition.topLeft,
+    String matchClock = '',
   }) {
     String serverStr = 'NONE';
     if (session.currentServer == ServingTeam.teamA) {
@@ -169,6 +172,7 @@ class VolleyballScoreboardState {
       eventTag: effectiveToast,
       toastMessage: effectiveToast,
       anchorPosition: anchorPosition,
+      matchClock: matchClock,
     );
   }
 
@@ -186,6 +190,7 @@ class VolleyballScoreboardState {
     'eventTag': eventTag ?? toastMessage ?? '',
     'toastMessage': toastMessage ?? eventTag ?? '',
     'anchorPosition': anchorPosition.name,
+    'matchClock': matchClock,
   };
 
   @override
@@ -202,7 +207,8 @@ class VolleyballScoreboardState {
           servingTeam == other.servingTeam &&
           eventTag == other.eventTag &&
           toastMessage == other.toastMessage &&
-          anchorPosition == other.anchorPosition;
+          anchorPosition == other.anchorPosition &&
+          matchClock == other.matchClock;
 
   @override
   int get hashCode => Object.hash(
@@ -217,5 +223,6 @@ class VolleyballScoreboardState {
     eventTag,
     toastMessage,
     anchorPosition,
+    matchClock,
   );
 }

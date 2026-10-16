@@ -62,11 +62,13 @@ class MatchProvider extends ChangeNotifier {
     if (_isMatchTimerRunning) {
       _matchTimer?.cancel();
       _isMatchTimerRunning = false;
+      _notifyScoreboardBridge();
     } else {
       _isMatchTimerRunning = true;
       _matchTimer?.cancel();
       _matchTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         _matchDuration += const Duration(seconds: 1);
+        _notifyScoreboardBridge();
         notifyListeners();
       });
     }
@@ -77,6 +79,7 @@ class MatchProvider extends ChangeNotifier {
     _matchTimer?.cancel();
     _isMatchTimerRunning = false;
     _matchDuration = Duration.zero;
+    _notifyScoreboardBridge();
     notifyListeners();
   }
 
@@ -98,12 +101,16 @@ class MatchProvider extends ChangeNotifier {
 
   void _notifyScoreboardBridge({String? toastOverride}) {
     final toast = toastOverride ?? _activeSpecialEvent ?? '';
+    final clockText = (_isMatchTimerRunning || _matchDuration > Duration.zero)
+        ? formattedMatchDuration
+        : '';
     _sessionStreamController.add(_currentSession);
     NativeStreamBurnerBridge().updateScoreboard(
       VolleyballScoreboardState.fromMatchSession(
         _currentSession,
         eventTag: toast,
         toastMessage: toast,
+        matchClock: clockText,
       ),
     );
   }

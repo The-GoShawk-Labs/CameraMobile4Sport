@@ -44,9 +44,8 @@ flutter {
 }
 
 dependencies {
-    // StreamPack (ThibaultBee) for RTMP streaming and frame manipulation
-    implementation("io.github.thibaultbee:streampack:2.6.1")
-    implementation("io.github.thibaultbee:streampack-extension-rtmp:2.6.1")
+    // RootEncoder (pedroSG94) for hardware MediaCodec RTMP/RTMPS streaming and OpenGL ES filters
+    implementation("com.github.pedroSG94.RootEncoder:library:2.5.4")
 
     // Kotlin Coroutines & AndroidX Lifecycle
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")

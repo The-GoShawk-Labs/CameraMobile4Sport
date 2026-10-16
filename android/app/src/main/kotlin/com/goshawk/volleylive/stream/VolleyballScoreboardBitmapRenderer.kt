@@ -197,7 +197,12 @@ class VolleyballScoreboardBitmapRenderer(
         // 5. Footer info
         footerTextPaint.textAlign = Paint.Align.LEFT
         val footerY = overlayHeight - (footerHeight * 0.32f)
-        canvas.drawText("VOLLEY LIVE", 10f * scale, footerY, footerTextPaint)
+        val leftLabel = if (data.matchClock.isNotBlank()) {
+            "VOLLEY LIVE • ${data.matchClock}"
+        } else {
+            "VOLLEY LIVE"
+        }
+        canvas.drawText(leftLabel, 10f * scale, footerY, footerTextPaint)
 
         footerTextPaint.textAlign = Paint.Align.CENTER
         canvas.drawText("SET ${data.currentSet}", overlayWidth / 2f, footerY, footerTextPaint)
@@ -209,6 +214,27 @@ class VolleyballScoreboardBitmapRenderer(
         }
 
         return true
+    }
+
+    /**
+     * Redraws the backing Canvas ONLY if scoreboard state or 1s clock changed,
+     * and returns an immutable copy safe for RootEncoder's TextureLoader
+     * (which recycles the passed Bitmap after uploading to GLES20 texture).
+     */
+    @Synchronized
+    fun renderAndSnapshotIfDirty(): Bitmap? {
+        if (!renderIfDirty()) return null
+        return bitmap.copy(Bitmap.Config.ARGB_8888, false)
+    }
+
+    /**
+     * Forces a fresh render of the current state and returns a Bitmap snapshot for initial GL filter binding.
+     */
+    @Synchronized
+    fun forceRenderAndSnapshot(): Bitmap {
+        isDirty.set(true)
+        renderIfDirty()
+        return bitmap.copy(Bitmap.Config.ARGB_8888, false)
     }
 
     companion object {

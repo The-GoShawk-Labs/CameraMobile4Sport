@@ -78,9 +78,9 @@ class StreamEvent {
       'StreamEvent(type: $type, message: $message, telemetry: $telemetry)';
 }
 
-/// Native bridge connecting Flutter match state with platform video rendering engines:
-/// - Android: StreamPack (ThibaultBee) with Surface/OpenGL texture overlay and MediaCodec CBR encoder
-/// - iOS: HaishinKit (HaishinKit.swift) with VideoToolbox H.264 High Profile and VisualEffect
+/// Native bridge connecting Flutter match state with hardware video rendering engines:
+/// - Android: pedroSG94/RootEncoder (RtmpCamera2 + MediaCodec H.264/AAC + OpenGL ImageObjectFilterRender)
+/// - iOS: HaishinKit (HaishinKit.swift) with VideoToolbox H.264 High Profile
 class NativeStreamBurnerBridge {
   static const MethodChannel _methodChannel = MethodChannel(
     'com.goshawk.volleylive/live_stream_bridge',
@@ -108,6 +108,8 @@ class NativeStreamBurnerBridge {
   StreamTelemetry get lastTelemetry => _lastTelemetry;
 
   VolleyballScoreboardState? _lastState;
+  Map<String, dynamic>? _lastDataMap;
+  String _lastAnchorPosition = ScoreboardAnchorPosition.topLeft.name;
   StreamSubscription? _eventSubscription;
 
   // Auto-reconnect retry configuration
@@ -187,7 +189,6 @@ class NativeStreamBurnerBridge {
             ),
           );
         } else {
-          // Unexpected drop -> trigger auto-retry with exponential backoff
           _handleConnectionDrop(details ?? 'Utracono połączenie z serwerem');
         }
         break;
@@ -229,12 +230,10 @@ class NativeStreamBurnerBridge {
   }
 
   void _handleConnectionDrop(String reason) {
-    if (_retryAttempt < _maxRetryAttempts &&
-        _lastRtmpUrl != null &&
-        _lastStreamKey != null) {
+    if (_retryAttempt < _maxRetryAttempts && _lastRtmpUrl != null) {
       _retryAttempt++;
       _setStatus(NativeStreamStatus.reconnecting);
-      final delaySeconds = 2 * _retryAttempt; // 2s, 4s, 6s exponential backoff
+      final delaySeconds = 2 * _retryAttempt;
 
       debugPrint(
         '[NativeStreamBurnerBridge] Network drop detected ($reason). Retrying in $delaySeconds s (Attempt $_retryAttempt/$_maxRetryAttempts)...',
@@ -270,16 +269,29 @@ class NativeStreamBurnerBridge {
 
   Future<void> _executeReconnection() async {
     final url = _lastRtmpUrl;
-    final key = _lastStreamKey;
+    final key = _lastStreamKey ?? '';
     final state = _lastState;
-    if (url != null && key != null && state != null) {
+    if (url != null) {
       try {
-        await startLiveStream(
-          rtmpUrl: url,
-          streamKey: key,
-          initialState: state,
-          config: _lastConfig,
-        );
+        if (state != null) {
+          await startLiveStream(
+            rtmpUrl: url,
+            streamKey: key,
+            initialState: state,
+            config: _lastConfig,
+          );
+        } else {
+          final cfg = _lastConfig ?? const StreamConfig();
+          await startStream(
+            url,
+            cfg.width,
+            cfg.height,
+            cfg.videoBitrate,
+            cfg.fps,
+            streamKey: key,
+            scoreboardData: _lastDataMap,
+          );
+        }
       } catch (e) {
         debugPrint(
           '[NativeStreamBurnerBridge] Reconnection attempt failed: $e',
@@ -293,13 +305,142 @@ class NativeStreamBurnerBridge {
     _statusController.add(status);
   }
 
-  /// Initializes hardware video/audio encoders with YouTube compliance specifications:
-  /// - H.264 High Profile Level 4.1
-  /// - CBR (Constant Bitrate) rate control
-  /// - Strict 2.0s GOP interval
-  /// - AAC-LC Stereo 128 kbps (48 kHz)
+  // ===========================================================================
+  // CORE ROOTENCODER METHOD CHANNEL API
+  // ===========================================================================
+
+  /// Starts hardware-encoded RTMP/RTMPS stream via RootEncoder (RtmpCamera2 + MediaCodec + OpenGL).
+  Future<bool> startStream(
+    String rtmpUrl,
+    int width,
+    int height,
+    int bitrate,
+    int fps, {
+    String? streamKey,
+    Map<String, dynamic>? scoreboardData,
+  }) async {
+    _intentionalStop = false;
+    _lastRtmpUrl = rtmpUrl;
+    _lastStreamKey = streamKey ?? '';
+    _setStatus(NativeStreamStatus.connecting);
+
+    final safeWidth = (width > 0 ? width : 1920) & ~1;
+    final safeHeight = (height > 0 ? height : 1080) & ~1;
+    final safeFps = (fps > 0 ? fps : 30).clamp(15, 60);
+    final safeBitrate = bitrate > 0 ? bitrate : 4000000;
+
+    try {
+      final bool? success = await _methodChannel.invokeMethod('startStream', {
+        'rtmpUrl': rtmpUrl,
+        'streamKey': streamKey ?? '',
+        'width': safeWidth,
+        'height': safeHeight,
+        'bitrate': safeBitrate,
+        'videoBitrate': safeBitrate,
+        'fps': safeFps,
+        'audioBitrate': 128000,
+        'gopSeconds': 2.0,
+        'profile': 'high',
+        'bitrateMode': 'CBR',
+        'scoreboard': ?scoreboardData,
+      });
+      if (success == true) {
+        _setStatus(NativeStreamStatus.streaming);
+        return true;
+      } else {
+        _setStatus(NativeStreamStatus.error);
+        return false;
+      }
+    } on PlatformException catch (e) {
+      debugPrint('[NativeStreamBurnerBridge] startStream failed: ${e.message}');
+      _setStatus(NativeStreamStatus.error);
+      return false;
+    }
+  }
+
+  /// Stops active RootEncoder RTMP/RTMPS broadcast and releases hardware MediaCodec & Camera2.
+  Future<void> stopStream() async {
+    _intentionalStop = true;
+    _reconnectTimer?.cancel();
+    _retryAttempt = 0;
+    try {
+      await _methodChannel.invokeMethod('stopStream');
+      _setStatus(NativeStreamStatus.stopped);
+      _eventController.add(
+        StreamEvent(
+          type: StreamEventType.disconnected,
+          message: 'Transmisja zatrzymana przez użytkownika',
+        ),
+      );
+    } on PlatformException catch (e) {
+      debugPrint('[NativeStreamBurnerBridge] stopStream error: ${e.message}');
+    }
+  }
+
+  /// Pushes updated scoreboard data to native VolleyballScoreboardBitmapRenderer + ImageObjectFilterRender.
+  /// Deduplicates identical payloads so OpenGL texture upload occurs ONLY when score or 1s clock changes.
+  Future<void> updateScoreboardData(
+    Map<String, dynamic> data, {
+    bool force = false,
+  }) async {
+    final merged = Map<String, dynamic>.from(data);
+    merged['anchorPosition'] ??= _lastAnchorPosition;
+
+    if (!force && _lastDataMap != null && mapEquals(_lastDataMap, merged)) {
+      return;
+    }
+    _lastDataMap = Map<String, dynamic>.from(merged);
+
+    try {
+      await _methodChannel.invokeMethod('updateScoreboardData', merged);
+    } on PlatformException catch (e) {
+      debugPrint(
+        '[NativeStreamBurnerBridge] updateScoreboardData error: ${e.message}',
+      );
+    }
+  }
+
+  /// Sets one of the 6 scoreboard anchor positions in OpenGL space:
+  /// topLeft, topCenter, topRight, bottomLeft, bottomCenter, bottomRight.
+  Future<void> setScoreboardPosition(String position) async {
+    final cleanPos = position.trim().isNotEmpty
+        ? position.trim()
+        : ScoreboardAnchorPosition.topLeft.name;
+    _lastAnchorPosition = cleanPos;
+    if (_lastState != null) {
+      _lastState = VolleyballScoreboardState(
+        teamA: _lastState!.teamA,
+        teamB: _lastState!.teamB,
+        scoreA: _lastState!.scoreA,
+        scoreB: _lastState!.scoreB,
+        currentSet: _lastState!.currentSet,
+        setsA: _lastState!.setsA,
+        setsB: _lastState!.setsB,
+        servingTeam: _lastState!.servingTeam,
+        eventTag: _lastState!.eventTag,
+        toastMessage: _lastState!.toastMessage,
+        anchorPosition: ScoreboardAnchorPosition.fromName(cleanPos),
+        matchClock: _lastState!.matchClock,
+      );
+    }
+    try {
+      await _methodChannel.invokeMethod('setScoreboardPosition', {
+        'position': cleanPos,
+      });
+    } on PlatformException catch (e) {
+      debugPrint(
+        '[NativeStreamBurnerBridge] setScoreboardPosition error: ${e.message}',
+      );
+    }
+  }
+
+  // ===========================================================================
+  // COMPATIBILITY WRAPPERS
+  // ===========================================================================
+
   Future<bool> initializeStream(StreamConfig config) async {
     _lastConfig = config;
+    _lastAnchorPosition = config.anchorPosition.name;
     try {
       final bool? success = await _methodChannel.invokeMethod(
         'initializeStream',
@@ -307,7 +448,6 @@ class NativeStreamBurnerBridge {
       );
       return success ?? false;
     } on PlatformException catch (_) {
-      // Fallback to legacy initialize method if older native build is running
       return await initialize(
         width: config.width,
         height: config.height,
@@ -318,7 +458,6 @@ class NativeStreamBurnerBridge {
     }
   }
 
-  /// Legacy initialize method for backwards compatibility
   Future<bool> initialize({
     int width = 1920,
     int height = 1080,
@@ -344,7 +483,6 @@ class NativeStreamBurnerBridge {
     }
   }
 
-  /// Validates hardware encoder capabilities (H.264 High Profile, CBR, resolution limits).
   Future<Map<String, dynamic>> validateEncoderCapabilities() async {
     try {
       final dynamic result = await _methodChannel.invokeMethod(
@@ -358,7 +496,6 @@ class NativeStreamBurnerBridge {
         '[NativeStreamBurnerBridge] validateEncoderCapabilities failed: ${e.message}',
       );
     }
-    // Default safe fallback if platform call is not implemented
     return {
       'isH264Supported': true,
       'isHighProfileSupported': true,
@@ -370,7 +507,6 @@ class NativeStreamBurnerBridge {
     };
   }
 
-  /// Starts live broadcast to an RTMP/RTMPS destination with scoreboard burned into frames.
   Future<bool> startLiveStream({
     required String rtmpUrl,
     required String streamKey,
@@ -381,68 +517,46 @@ class NativeStreamBurnerBridge {
     int fps = 30,
     int videoBitrateBps = 4500000,
   }) async {
-    _intentionalStop = false;
-    _lastRtmpUrl = rtmpUrl;
-    _lastStreamKey = streamKey;
     _lastState = initialState;
-    if (config != null) _lastConfig = config;
+    if (config != null) {
+      _lastConfig = config;
+      _lastAnchorPosition = config.anchorPosition.name;
+    }
 
-    _setStatus(NativeStreamStatus.connecting);
-
-    final finalWidth = ((config?.width ?? width) > 0 ? (config?.width ?? width) : 1920) & ~1;
-    final finalHeight = ((config?.height ?? height) > 0 ? (config?.height ?? height) : 1080) & ~1;
+    final finalWidth =
+        ((config?.width ?? width) > 0 ? (config?.width ?? width) : 1920) & ~1;
+    final finalHeight =
+        ((config?.height ?? height) > 0 ? (config?.height ?? height) : 1080) &
+        ~1;
     final finalFps = (config?.fps ?? fps).clamp(15, 60);
     final finalBitrate = config?.videoBitrate ?? videoBitrateBps;
-    final finalAudioBitrate = config?.audioBitrate ?? 128000;
-    final finalGopSeconds = config?.gopSeconds ?? 2.0;
 
-    try {
-      final bool? success = await _methodChannel.invokeMethod('startStream', {
-        'rtmpUrl': rtmpUrl,
-        'streamKey': streamKey,
-        'width': finalWidth,
-        'height': finalHeight,
-        'fps': finalFps,
-        'videoBitrate': finalBitrate,
-        'audioBitrate': finalAudioBitrate,
-        'gopSeconds': finalGopSeconds,
-        'scoreboard': initialState.toMap(),
-        'profile': 'high',
-        'bitrateMode': 'CBR',
-      });
-      if (success == true) {
-        _setStatus(NativeStreamStatus.streaming);
-        return true;
-      } else {
-        _setStatus(NativeStreamStatus.error);
-        return false;
-      }
-    } on PlatformException catch (e) {
-      debugPrint(
-        '[NativeStreamBurnerBridge] startLiveStream failed: ${e.message}',
-      );
-      _setStatus(NativeStreamStatus.error);
-      return false;
-    }
+    final map = initialState.toMap();
+    map['anchorPosition'] = _lastAnchorPosition;
+    _lastDataMap = Map<String, dynamic>.from(map);
+
+    return startStream(
+      rtmpUrl,
+      finalWidth,
+      finalHeight,
+      finalBitrate,
+      finalFps,
+      streamKey: streamKey,
+      scoreboardData: map,
+    );
   }
 
-  /// Updates scoreboard burned into live video frames.
   Future<void> updateScoreboard(
     VolleyballScoreboardState state, {
     bool force = false,
   }) async {
     if (!force && _lastState == state) return;
     _lastState = state;
-    try {
-      await _methodChannel.invokeMethod('updateScoreboard', state.toMap());
-    } on PlatformException catch (e) {
-      debugPrint(
-        '[NativeStreamBurnerBridge] updateScoreboard error: ${e.message}',
-      );
-    }
+    final map = state.toMap();
+    map['anchorPosition'] = state.anchorPosition.name;
+    await updateScoreboardData(map, force: force);
   }
 
-  /// Transmits the rendered ScoreboardOverlay widget as PNG bytes to native hardware renderers.
   Future<void> updateScoreboardOverlayBitmap({
     required Uint8List bytes,
     required int width,
@@ -455,7 +569,7 @@ class NativeStreamBurnerBridge {
     final safeAnchor =
         (anchorPosition != null && anchorPosition.trim().isNotEmpty)
         ? anchorPosition.trim()
-        : ScoreboardAnchorPosition.topLeft.name;
+        : _lastAnchorPosition;
     try {
       await _methodChannel.invokeMethod('updateScoreboardOverlayBitmap', {
         'bitmapBytes': bytes,
@@ -470,28 +584,8 @@ class NativeStreamBurnerBridge {
     }
   }
 
-  /// Stops current live broadcast with full hardware cleanup.
-  Future<void> stopLiveStream() async {
-    _intentionalStop = true;
-    _reconnectTimer?.cancel();
-    _retryAttempt = 0;
-    try {
-      await _methodChannel.invokeMethod('stopStream');
-      _setStatus(NativeStreamStatus.stopped);
-      _eventController.add(
-        StreamEvent(
-          type: StreamEventType.disconnected,
-          message: 'Transmisja zatrzymana przez użytkownika',
-        ),
-      );
-    } on PlatformException catch (e) {
-      debugPrint(
-        '[NativeStreamBurnerBridge] stopLiveStream error: ${e.message}',
-      );
-    }
-  }
+  Future<void> stopLiveStream() => stopStream();
 
-  /// Switch front/rear camera.
   Future<void> switchCamera() async {
     try {
       await _methodChannel.invokeMethod('switchCamera');

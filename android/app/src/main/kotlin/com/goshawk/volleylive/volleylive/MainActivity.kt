@@ -3,7 +3,7 @@ package com.goshawk.volleylive.volleylive
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
-import com.goshawk.volleylive.stream.StreamPackLiveStreamService
+import com.goshawk.volleylive.stream.RootEncoderLiveStreamService
 import com.goshawk.volleylive.stream.VolleyballScoreboardData
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -12,6 +12,8 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 class MainActivity : FlutterActivity() {
@@ -19,7 +21,8 @@ class MainActivity : FlutterActivity() {
     private val LIVE_STREAM_CHANNEL = "com.goshawk.volleylive/live_stream_bridge"
     private val STREAM_EVENT_CHANNEL = "com.goshawk.volleylive/stream_events"
 
-    private var streamService: StreamPackLiveStreamService? = null
+    private val backgroundScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var streamService: RootEncoderLiveStreamService? = null
     private var eventSink: EventChannel.EventSink? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -192,8 +195,8 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-        // 2. StreamPack Live Stream Engine & Hardware Frame Burn-in
-        streamService = StreamPackLiveStreamService(context = this).apply {
+        // 2. RootEncoder Hardware Live Stream Engine & OpenGL ES Scoreboard Filter
+        streamService = RootEncoderLiveStreamService(context = applicationContext).apply {
             onStatusEvent = { status, details ->
                 runOnUiThread {
                     val payload = mutableMapOf<String, Any>("status" to status)
@@ -216,117 +219,141 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, LIVE_STREAM_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "initializeStream" -> {
+                    "initializeStream", "initialize" -> {
                         val width = call.argument<Int>("width") ?: 1920
                         val height = call.argument<Int>("height") ?: 1080
                         val fps = call.argument<Int>("fps") ?: 30
-                        val videoBitrate = call.argument<Int>("videoBitrate") ?: 4500000
-                        val audioBitrate = call.argument<Int>("audioBitrate") ?: 128000
+                        val videoBitrate = call.argument<Int>("videoBitrate")
+                            ?: call.argument<Int>("bitrate")
+                            ?: 4_000_000
+                        val audioBitrate = call.argument<Int>("audioBitrate") ?: 128_000
                         val gopSeconds = (call.argument<Double>("gopSeconds") ?: 2.0).toFloat()
-                        val audioSampleRate = call.argument<Int>("audioSampleRate") ?: 48000
+                        val audioSampleRate = call.argument<Int>("audioSampleRate") ?: 48_000
                         val audioChannels = call.argument<Int>("audioChannels") ?: 2
+                        val anchorPosition = call.argument<String>("anchorPosition")
 
-                        streamService?.initialize(
-                            width = width,
-                            height = height,
-                            fps = fps,
-                            videoBitrate = videoBitrate,
-                            audioBitrate = audioBitrate,
-                            gopSeconds = gopSeconds,
-                            audioSampleRate = audioSampleRate,
-                            audioChannels = audioChannels
-                        )
-                        result.success(true)
+                        backgroundScope.launch {
+                            streamService?.initialize(
+                                width = width,
+                                height = height,
+                                fps = fps,
+                                videoBitrate = videoBitrate,
+                                audioBitrate = audioBitrate,
+                                gopSeconds = gopSeconds,
+                                audioSampleRate = audioSampleRate,
+                                audioChannels = audioChannels
+                            )
+                            if (!anchorPosition.isNullOrBlank()) {
+                                streamService?.setScoreboardPosition(anchorPosition)
+                            }
+                            runOnUiThread {
+                                result.success(true)
+                            }
+                        }
                     }
-                    "initialize" -> {
-                        val width = call.argument<Int>("width") ?: 1920
-                        val height = call.argument<Int>("height") ?: 1080
-                        val fps = call.argument<Int>("fps") ?: 30
-                        val videoBitrate = call.argument<Int>("videoBitrate") ?: 4500000
-                        val audioBitrate = call.argument<Int>("audioBitrate") ?: 128000
-                        val gopSeconds = (call.argument<Double>("gopSeconds") ?: 2.0).toFloat()
 
-                        streamService?.initialize(
-                            width = width,
-                            height = height,
-                            fps = fps,
-                            videoBitrate = videoBitrate,
-                            audioBitrate = audioBitrate,
-                            gopSeconds = gopSeconds
-                        )
-                        result.success(true)
-                    }
                     "validateEncoderCapabilities" -> {
-                        CoroutineScope(Dispatchers.IO).launch {
+                        backgroundScope.launch {
                             val caps = streamService?.validateEncoderCapabilities() ?: emptyMap<String, Any>()
                             runOnUiThread {
                                 result.success(caps)
                             }
                         }
                     }
+
                     "startStream" -> {
                         val rtmpUrl = call.argument<String>("rtmpUrl") ?: ""
                         val streamKey = call.argument<String>("streamKey") ?: ""
+                        val width = call.argument<Int>("width") ?: 1920
+                        val height = call.argument<Int>("height") ?: 1080
+                        val bitrate = call.argument<Int>("bitrate")
+                            ?: call.argument<Int>("videoBitrate")
+                            ?: 4_000_000
+                        val fps = call.argument<Int>("fps") ?: 30
                         val scoreboardMap = call.argument<Map<String, Any>>("scoreboard")
-                        scoreboardMap?.let { updateScoreboardFromMap(it) }
 
-                        // Check if config overrides width/height/fps/bitrate
-                        val width = call.argument<Int>("width")
-                        val height = call.argument<Int>("height")
-                        val fps = call.argument<Int>("fps")
-                        val videoBitrate = call.argument<Int>("videoBitrate")
-                        val audioBitrate = call.argument<Int>("audioBitrate")
-                        val gopSeconds = (call.argument<Double>("gopSeconds") ?: 2.0).toFloat()
-
-                        if (width != null && height != null && fps != null && videoBitrate != null) {
-                            streamService?.initialize(
+                        backgroundScope.launch {
+                            scoreboardMap?.let { updateScoreboardFromMap(it) }
+                            streamService?.startStream(
+                                rtmpUrl = rtmpUrl,
+                                streamKey = streamKey,
                                 width = width,
                                 height = height,
+                                bitrate = bitrate,
                                 fps = fps,
-                                videoBitrate = videoBitrate,
-                                audioBitrate = audioBitrate ?: 128000,
-                                gopSeconds = gopSeconds
+                                onSuccess = {
+                                    runOnUiThread { result.success(true) }
+                                },
+                                onError = { err ->
+                                    runOnUiThread { result.error("STREAM_FAILED", err, null) }
+                                }
                             )
                         }
-
-                        eventSink?.success(mapOf("status" to "CONNECTING", "details" to "Nawiązywanie połączenia..."))
-                        streamService?.startStream(
-                            rtmpUrl = rtmpUrl,
-                            streamKey = streamKey,
-                            onSuccess = {
-                                result.success(true)
-                            },
-                            onError = { err ->
-                                result.error("STREAM_FAILED", err, null)
-                            }
-                        )
                     }
-                    "updateScoreboard" -> {
-                        @Suppress("UNCHECKED_CAST")
-                        val map = call.arguments as? Map<String, Any>
-                        if (map != null) {
-                            updateScoreboardFromMap(map)
-                            result.success(true)
-                        } else {
-                            result.error("INVALID_ARGS", "Missing scoreboard map", null)
+
+                    "stopStream" -> {
+                        backgroundScope.launch {
+                            streamService?.stopStream()
+                            runOnUiThread {
+                                result.success(true)
+                            }
                         }
                     }
+
+                    "updateScoreboardData", "updateScoreboard" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val map = (call.argument<Map<String, Any>>("data"))
+                            ?: (call.arguments as? Map<String, Any>)
+                        if (map != null) {
+                            backgroundScope.launch {
+                                updateScoreboardFromMap(map)
+                                runOnUiThread {
+                                    result.success(true)
+                                }
+                            }
+                        } else {
+                            result.error("INVALID_ARGS", "Missing scoreboard data map", null)
+                        }
+                    }
+
+                    "setScoreboardPosition" -> {
+                        val position = call.argument<String>("position")
+                            ?: (call.arguments as? String)
+                            ?: "topLeft"
+                        backgroundScope.launch {
+                            streamService?.setScoreboardPosition(position)
+                            runOnUiThread {
+                                result.success(true)
+                            }
+                        }
+                    }
+
                     "updateScoreboardOverlayBitmap" -> {
                         val bytes = call.argument<ByteArray>("bitmapBytes")
                         val width = call.argument<Int>("width") ?: 0
                         val height = call.argument<Int>("height") ?: 0
                         val anchor = call.argument<String>("anchorPosition") ?: "topLeft"
                         if (bytes != null && bytes.isNotEmpty()) {
-                            streamService?.updateScoreboardOverlayBitmap(bytes, width, height, anchor)
-                            result.success(true)
+                            backgroundScope.launch {
+                                streamService?.updateScoreboardOverlayBitmap(bytes, width, height, anchor)
+                                runOnUiThread {
+                                    result.success(true)
+                                }
+                            }
                         } else {
                             result.error("INVALID_ARGS", "Missing bitmap bytes", null)
                         }
                     }
-                    "stopStream" -> {
-                        streamService?.stopStream()
-                        result.success(true)
+
+                    "switchCamera" -> {
+                        backgroundScope.launch {
+                            streamService?.switchCamera()
+                            runOnUiThread {
+                                result.success(true)
+                            }
+                        }
                     }
+
                     else -> result.notImplemented()
                 }
             }
@@ -345,7 +372,8 @@ class MainActivity : FlutterActivity() {
             servingTeam = map["servingTeam"] as? String ?: "NONE",
             eventTag = map["eventTag"] as? String ?: "",
             toastMessage = toast,
-            anchorPosition = (map["anchorPosition"] as? String) ?: "topLeft"
+            anchorPosition = (map["anchorPosition"] as? String) ?: "topLeft",
+            matchClock = (map["matchClock"] as? String) ?: ""
         )
         streamService?.updateScoreboard(data)
     }
@@ -353,5 +381,6 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         super.onDestroy()
         streamService?.release()
+        backgroundScope.cancel()
     }
 }

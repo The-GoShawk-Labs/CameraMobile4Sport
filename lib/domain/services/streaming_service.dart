@@ -32,27 +32,31 @@ abstract class IStreamingService {
   });
 
   Future<void> stopLiveStream();
-  void updateScoreboard(MatchSession matchSession, {String? eventTag, String? toastMessage});
+  void updateScoreboard(
+    MatchSession matchSession, {
+    String? eventTag,
+    String? toastMessage,
+    ScoreboardAnchorPosition? anchorPosition,
+    String matchClock = '',
+  });
+  void setScoreboardPosition(ScoreboardAnchorPosition position);
 }
 
-/// Serwis nadawania RTMP/RTMPS (YouTube Live, Meta, Generic RTMP/RTMPS)
+/// Serwis nadawania RTMP/RTMPS oparty wyłącznie o sprzętowy enkoder RootEncoder
+/// (RtmpCamera2 + MediaCodec H.264/AAC + OpenGL ES ImageObjectFilterRender).
+/// Całkowicie omija programowy enkoder FFmpeg (VideoOverlayBurnerService).
 class StreamingService implements IStreamingService {
   final VideoOverlayBurnerService _burnerService;
   final NativeStreamBurnerBridge _nativeBridge = NativeStreamBurnerBridge();
   final _stateController = StreamController<StreamingState>.broadcast();
   StreamingState _currentState = StreamingState.idle;
   StreamConfig _activeConfig = const StreamConfig();
-  bool _usingNativeHardwareStream = false;
   StreamSubscription? _bridgeEventSub;
   String? _lastErrorMessage;
 
   StreamingService({VideoOverlayBurnerService? burnerService})
     : _burnerService = burnerService ?? VideoOverlayBurnerService() {
     _initBridgeListeners();
-    _burnerService.onStreamError = (error) {
-      _lastErrorMessage = error;
-      _setState(StreamingState.failed);
-    };
   }
 
   void _initBridgeListeners() {
@@ -62,6 +66,7 @@ class StreamingService implements IStreamingService {
           _setState(StreamingState.connecting);
           break;
         case StreamEventType.connected:
+          _lastErrorMessage = null;
           _setState(StreamingState.live);
           break;
         case StreamEventType.disconnected:
@@ -75,10 +80,10 @@ class StreamingService implements IStreamingService {
           _setState(StreamingState.reconnecting);
           break;
         case StreamEventType.error:
+          _lastErrorMessage = event.message;
           _setState(StreamingState.failed);
           break;
         case StreamEventType.bitrateUpdate:
-          // Keep current state, telemetry is emitted via telemetryStream
           break;
       }
     });
@@ -91,7 +96,8 @@ class StreamingService implements IStreamingService {
   StreamingState get currentState => _currentState;
 
   @override
-  StreamingDestination get activeDestination => _activeConfig.toStreamingDestination();
+  StreamingDestination get activeDestination =>
+      _activeConfig.toStreamingDestination();
 
   @override
   StreamConfig get activeConfig => _activeConfig;
@@ -133,15 +139,17 @@ class StreamingService implements IStreamingService {
 
     if (config.serverUrl.trim().isEmpty) {
       debugPrint('[StreamingService] Server URL is empty');
-      _lastErrorMessage = 'Brak adresu serwera RTMP. Skonfiguruj punkt końcowy w Ustawieniach RTMP.';
+      _lastErrorMessage =
+          'Brak adresu serwera RTMP. Skonfiguruj punkt końcowy w Ustawieniach RTMP.';
       _setState(StreamingState.failed);
       return false;
     }
 
-    // Bezpieczne pobranie klucza streamingu z pamięci bezpiecznej Keystore / Keychain
     final resolvedStreamKey = await config.resolveEffectiveStreamKey();
     if (config.requiresStreamKey && resolvedStreamKey.isEmpty) {
-      debugPrint('[StreamingService] Stream key required but could not be resolved');
+      debugPrint(
+        '[StreamingService] Stream key required but could not be resolved',
+      );
       _lastErrorMessage =
           'Wymagany klucz transmisji dla platformy ${config.preset.label}. Wprowadź klucz w Ustawieniach RTMP przed rozpoczęciem LIVE.';
       _setState(StreamingState.failed);
@@ -150,95 +158,74 @@ class StreamingService implements IStreamingService {
 
     _setState(StreamingState.connecting);
 
-    if (inputIsComposedProgramFrames &&
-        inputSource != null &&
-        inputSource.isNotEmpty) {
-      final success = await _burnerService.startLiveBroadcastFromProgramFrames(
-        inputUrl: inputSource,
-        rtmpUrl: config.serverUrl,
-        streamKey: resolvedStreamKey,
-        width: config.width,
-        height: config.height,
-        bitrateKbps: config.videoBitrateKbps,
-        fps: (config.fps > 0 ? config.fps : 24).clamp(15, 30),
-        audioSampleRate: config.audioSampleRate,
-      );
-      if (!success) {
-        _lastErrorMessage = _burnerService.lastErrorMessage ??
-            'Nie udało się uruchomić procesu nadawania strumienia (FFmpeg). Sprawdź czy serwer docelowy RTMP jest osiągalny.';
-        _setState(StreamingState.failed);
-        return false;
-      }
+    // Bezpośrednie uruchomienie sprzętowego potoku RootEncoder (MediaCodec + OpenGL ES)
+    final initialState = matchSession != null
+        ? VolleyballScoreboardState.fromMatchSession(
+            matchSession,
+            anchorPosition: config.anchorPosition,
+          )
+        : VolleyballScoreboardState(
+            teamA: 'TEAM A',
+            teamB: 'TEAM B',
+            scoreA: 0,
+            scoreB: 0,
+            currentSet: 1,
+            setsA: 0,
+            setsB: 0,
+            anchorPosition: config.anchorPosition,
+          );
+
+    await _nativeBridge.setScoreboardPosition(config.anchorPosition.name);
+
+    final fullRtmpUrl = VideoOverlayBurnerService.buildRtmpEndpoint(
+      config.serverUrl,
+      resolvedStreamKey,
+    );
+
+    final hardwareStarted = await _nativeBridge.startStream(
+      fullRtmpUrl,
+      config.width,
+      config.height,
+      config.videoBitrate,
+      config.fps,
+      streamKey: resolvedStreamKey,
+      scoreboardData: initialState.toMap(),
+    );
+
+    if (hardwareStarted) {
       _lastErrorMessage = null;
       _setState(StreamingState.live);
       return true;
     }
 
-    // 1. Priorytet: Bezpośrednie, akcelerowane sprzętowo wypalanie klatek (StreamPack / HaishinKit)
-    if (matchSession != null) {
-      final nativeState =
-          VolleyballScoreboardState.fromMatchSession(matchSession);
-
-      // Inicjalizacja sprzętowego enkodera (MediaCodec CBR / VideoToolbox H.264 High Profile)
-      await _nativeBridge.initializeStream(config);
-
-      final hardwareStarted = await _nativeBridge.startLiveStream(
-        rtmpUrl: config.serverUrl,
-        streamKey: resolvedStreamKey,
-        initialState: nativeState,
-        config: config,
-        width: config.width,
-        height: config.height,
-        fps: config.fps,
-        videoBitrateBps: config.videoBitrate,
-      );
-      if (hardwareStarted) {
-        _usingNativeHardwareStream = true;
-        _setState(StreamingState.live);
-        return true;
-      }
-    }
-
-    // 2. Fallback: Jeśli podano źródło strumienia wideo (plik wideo, rtp, pipe),
-    // uruchom streaming przez FFmpeg z filtrem programowym
-    if (inputSource != null && inputSource.isNotEmpty && matchSession != null) {
-      final success = await _burnerService.startLiveBroadcastWithOverlay(
-        inputSource: inputSource,
-        rtmpUrl: config.serverUrl,
-        streamKey: resolvedStreamKey,
-        timeline: timeline ?? const [],
-        matchSession: matchSession,
-        width: config.width,
-        height: config.height,
-        bitrateKbps: config.videoBitrateKbps,
-        fps: (config.fps > 0 ? config.fps : 15).clamp(10, 30),
-      );
-      if (!success) {
-        _setState(StreamingState.failed);
-        return false;
-      }
-    } else {
-      _setState(StreamingState.failed);
-      return false;
-    }
-
-    _setState(StreamingState.live);
-    return true;
+    _lastErrorMessage =
+        'Nie udało się uruchomić sprzętowego enkodera RootEncoder (MediaCodec). Sprawdź punkt końcowy RTMP i uprawnienia kamery/mikrofonu.';
+    _setState(StreamingState.failed);
+    return false;
   }
 
   @override
-  void updateScoreboard(MatchSession matchSession, {String? eventTag, String? toastMessage}) {
-    if (_currentState == StreamingState.live ||
-        _currentState == StreamingState.connecting ||
-        _currentState == StreamingState.preparing) {
-      _nativeBridge.updateScoreboard(
-        VolleyballScoreboardState.fromMatchSession(
-          matchSession,
-          eventTag: eventTag,
-          toastMessage: toastMessage,
-        ),
-      );
-    }
+  void updateScoreboard(
+    MatchSession matchSession, {
+    String? eventTag,
+    String? toastMessage,
+    ScoreboardAnchorPosition? anchorPosition,
+    String matchClock = '',
+  }) {
+    final state = VolleyballScoreboardState.fromMatchSession(
+      matchSession,
+      eventTag: eventTag,
+      toastMessage: toastMessage,
+      anchorPosition: anchorPosition ?? _activeConfig.anchorPosition,
+      matchClock: matchClock,
+    );
+    _nativeBridge.updateScoreboard(state);
+  }
+
+  @override
+  void setScoreboardPosition(ScoreboardAnchorPosition position) {
+    _activeConfig = _activeConfig.copyWith(anchorPosition: position);
+    _nativeBridge.setScoreboardPosition(position.name);
   }
 
   @override
@@ -250,12 +237,8 @@ class StreamingService implements IStreamingService {
     }
 
     _setState(StreamingState.stopping);
-    if (_usingNativeHardwareStream) {
-      await _nativeBridge.stopLiveStream();
-      _usingNativeHardwareStream = false;
-    }
-    await _burnerService.stopLiveBroadcast();
-    await Future.delayed(const Duration(milliseconds: 300));
+    await _nativeBridge.stopStream();
+    await Future.delayed(const Duration(milliseconds: 150));
     _setState(StreamingState.stopped);
   }
 

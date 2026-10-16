@@ -11,5 +11,6 @@ data class VolleyballScoreboardData(
     val servingTeam: String = "NONE",
     val eventTag: String = "",
     val toastMessage: String = "",
-    val anchorPosition: String = "topLeft"
+    val anchorPosition: String = "topLeft",
+    val matchClock: String = ""
 )

@@ -15,6 +15,7 @@ import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/providers/match_provider.dart';
 import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
 import 'package:volleylive/presentation/providers/streamer_provider.dart';
+import 'package:volleylive/domain/services/native_stream_burner_bridge.dart';
 import 'package:volleylive/domain/services/video_overlay_burner_service.dart';
 import 'package:volleylive/presentation/services/program_widget_capture.dart';
 import 'package:volleylive/presentation/screens/settings/camera_connection_modal.dart';
@@ -130,19 +131,22 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
     StreamerProvider streamer,
     MatchProvider match,
   ) async {
+    final p2p = context.read<P2PConnectionProvider>();
+    final camera = context.read<CameraProvider>();
+
     final isLive =
         streamer.streamingState == StreamingState.live ||
         streamer.streamingState == StreamingState.connecting;
     if (isLive) {
       await streamer.toggleLiveStream(matchSession: match.session);
-      if (streamer.programRecState != RecordingState.recording) {
-        _programCapture.stop();
+      _programCapture.stop();
+      if (p2p.currentRole == DeviceRole.singlePhoneAllInOne &&
+          !camera.isCameraInitialized &&
+          !camera.isSimulationMode) {
+        await camera.initializeCamera();
       }
       return;
     }
-
-    final p2p = context.read<P2PConnectionProvider>();
-    final camera = context.read<CameraProvider>();
 
     // JEŚLI TRANSMISJA NIE JEST SKONFIGUROWANA, NATYCHMIAST OTWÓRZ OKNO KONFIGURACJI RTMP
     final config = streamer.config;
@@ -156,50 +160,30 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
 
     if (!context.mounted) return;
 
-    final hasVideo = p2p.currentRole == DeviceRole.singlePhoneAllInOne
-        ? (camera.isCameraInitialized || camera.isSimulationMode)
-        : (p2p.hasFreshVideoFrame &&
-              p2p.connectionState == CameraConnectionState.connected) ||
-              camera.isCameraInitialized;
-    if (!hasVideo) {
-      if (p2p.currentRole == DeviceRole.singlePhoneAllInOne) {
-        await camera.initializeCamera();
-      }
-      final retryHasVideo = p2p.currentRole == DeviceRole.singlePhoneAllInOne
-          ? (camera.isCameraInitialized || camera.isSimulationMode)
-          : (p2p.hasFreshVideoFrame &&
-                p2p.connectionState == CameraConnectionState.connected) ||
-                camera.isCameraInitialized;
-      if (!retryHasVideo) {
-        if (!context.mounted) return;
-        _showRecordingErrorNotice(
-          context,
-          'Brak aktywnego obrazu z kamery. Połącz lub uruchom kamerę przed rozpoczęciem LIVE.',
-        );
-        return;
-      }
+    // Zatrzymaj całkowicie przechwytywanie PNG na CPU oraz zwolnij sensor Camera2 dla natywnego RootEncoder
+    _programCapture.stop();
+    if (camera.isCameraInitialized) {
+      await camera.releaseCameraForExternalStreamer();
     }
-    final initialFrame = await _ensureProgramCapture(
-      framesPerSecond: (streamer.config.fps > 0 ? streamer.config.fps : 24).clamp(15, 30),
-      targetWidth: streamer.config.width,
-      targetHeight: streamer.config.height,
+
+    // Prześlij aktualny stan wyniku i pozycję tablicy do natywnego mostka przed startem
+    await NativeStreamBurnerBridge().setScoreboardPosition(
+      streamer.scoreboardAnchorPosition.name,
     );
-    if (initialFrame == null) {
-      if (!context.mounted) return;
-      _showRecordingErrorNotice(
-        context,
-        'Nie można przechwycić widocznej kompozycji programu.',
-      );
-      return;
-    }
+    streamer.updateMatchSession(match.session);
+
     final started = await streamer.toggleLiveStream(
       matchSession: match.session,
-      composedFrameStream: _programCapture.frameStream,
-      initialProgramFrame: initialFrame,
     );
     if (!started && context.mounted) {
+      if (p2p.currentRole == DeviceRole.singlePhoneAllInOne &&
+          !camera.isCameraInitialized &&
+          !camera.isSimulationMode) {
+        await camera.initializeCamera();
+      }
+      if (!context.mounted) return;
       final errorMsg = streamer.streamingErrorMessage ??
-          'Nie udało się rozpocząć strumieniowania skomponowanego obrazu. Sprawdź ustawienia RTMP i klucz transmisji.';
+          'Nie udało się uruchomić sprzętowego strumieniowania RTMP (RootEncoder). Sprawdź ustawienia RTMP i klucz transmisji.';
       _showRecordingErrorNotice(
         context,
         errorMsg,
@@ -209,9 +193,6 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
           errorMsg.toLowerCase().contains('ustawieniach') ||
           errorMsg.toLowerCase().contains('brak adresu')) {
         _openStreamSettings(context);
-      }
-      if (streamer.programRecState != RecordingState.recording) {
-        _programCapture.stop();
       }
     }
   }

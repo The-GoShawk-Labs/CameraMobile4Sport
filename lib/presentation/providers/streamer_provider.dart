@@ -10,7 +10,6 @@ import 'package:volleylive/domain/models/score_event.dart';
 import 'package:volleylive/domain/models/streaming_config.dart';
 import 'package:volleylive/domain/services/native_stream_burner_bridge.dart';
 import 'package:volleylive/domain/services/recording_service.dart';
-import 'package:volleylive/domain/services/program_frame_server.dart';
 import 'package:volleylive/domain/services/streaming_service.dart';
 import 'package:volleylive/domain/services/video_transport_service.dart';
 
@@ -171,6 +170,7 @@ class StreamerProvider extends ChangeNotifier {
   void setScoreboardAnchorPosition(ScoreboardAnchorPosition position) {
     _config = _config.copyWith(anchorPosition: position);
     unawaited(_config.saveToPreferences());
+    _streamingService.setScoreboardPosition(position);
     notifyListeners();
   }
 
@@ -187,7 +187,6 @@ class StreamerProvider extends ChangeNotifier {
   MatchSession? _currentSession;
   StreamSubscription? _scoreEventsSub;
   StreamSubscription? _matchSessionSub;
-  ProgramFrameServer? _liveFrameServer;
 
   MatchSession? get currentSession => _currentSession;
 
@@ -216,7 +215,10 @@ class StreamerProvider extends ChangeNotifier {
     _scoreEventsSub = eventsStream.listen((event) {
       if (sessionStream == null) {
         if (_streamingState == StreamingState.live && _currentSession != null) {
-          _streamingService.updateScoreboard(_currentSession!);
+          _streamingService.updateScoreboard(
+            _currentSession!,
+            anchorPosition: _config.anchorPosition,
+          );
         }
         if (_programRecState == RecordingState.recording && _currentSession != null) {
           _recordingService.recordTimelineEvent(
@@ -235,6 +237,7 @@ class StreamerProvider extends ChangeNotifier {
         session,
         eventTag: eventTag,
         toastMessage: eventTag,
+        anchorPosition: _config.anchorPosition,
       );
     }
   }
@@ -253,42 +256,21 @@ class StreamerProvider extends ChangeNotifier {
         _streamingState == StreamingState.connecting ||
         _streamingState == StreamingState.reconnecting) {
       await _streamingService.stopLiveStream();
-      await _liveFrameServer?.stop();
-      _liveFrameServer = null;
       notifyListeners();
       return false;
     } else {
-      if (composedFrameStream == null || initialProgramFrame == null) {
-        _streamingOverrideError =
-            'Brak przechwyconych klatek programu (obrazu z tablicą) do transmisji.';
-        notifyListeners();
-        return false;
-      }
-      final frameServer = ProgramFrameServer();
-      _liveFrameServer = frameServer;
       try {
-        final frameUrl = await frameServer.start(
-          composedFrameStream,
-          initialProgramFrame,
-        );
         final started = await _streamingService.startLiveStreamWithConfig(
           _config,
-          inputSource: frameUrl,
-          inputIsComposedProgramFrames: true,
+          inputSource: inputSource ?? '',
           timeline: _recordingService.sessionTimeline,
           matchSession: matchSession ?? _currentSession,
         );
-        if (!started) {
-          await frameServer.stop();
-          _liveFrameServer = null;
-        }
         notifyListeners();
         return started;
       } catch (e) {
         _streamingOverrideError =
-            'Błąd inicjalizacji lokalnego serwera klatek: $e';
-        await frameServer.stop();
-        _liveFrameServer = null;
+            'Błąd inicjalizacji natywnego enkodera sprzętowego: $e';
         notifyListeners();
         return false;
       }
@@ -375,8 +357,6 @@ class StreamerProvider extends ChangeNotifier {
     _transportService.dispose();
     _streamingService.dispose();
     _recordingService.dispose();
-    final server = _liveFrameServer;
-    if (server != null) unawaited(server.stop());
     super.dispose();
   }
 }
