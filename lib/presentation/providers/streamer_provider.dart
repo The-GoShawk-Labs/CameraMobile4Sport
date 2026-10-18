@@ -28,6 +28,7 @@ class StreamerProvider extends ChangeNotifier {
   StreamConfig _config = const StreamConfig();
   StreamingDestination _destination = const StreamingDestination();
   ScoreboardThemeStyle _scoreboardStyle = ScoreboardThemeStyle.tvProBroadcast;
+  bool _useThreeLetterAcronyms = false;
   bool _showServeIndicator = true;
   bool _showTimeoutCountdown = true;
   String _maskedStreamKey = 'Brak klucza';
@@ -60,6 +61,7 @@ class StreamerProvider extends ChangeNotifier {
   StreamingDestination get destination => _destination;
   ScoreboardThemeStyle get scoreboardStyle => _scoreboardStyle;
   ScoreboardAnchorPosition get scoreboardAnchorPosition => _config.anchorPosition;
+  bool get useThreeLetterAcronyms => _useThreeLetterAcronyms;
   bool get showServeIndicator => _showServeIndicator;
   bool get showTimeoutCountdown => _showTimeoutCountdown;
   String get maskedStreamKey => _maskedStreamKey;
@@ -184,6 +186,14 @@ class StreamerProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void toggleThreeLetterAcronyms(bool value) {
+    _useThreeLetterAcronyms = value;
+    if (_currentSession != null) {
+      updateMatchSession(_currentSession!);
+    }
+    notifyListeners();
+  }
+
   MatchSession? _currentSession;
   StreamSubscription? _scoreEventsSub;
   StreamSubscription? _matchSessionSub;
@@ -218,6 +228,7 @@ class StreamerProvider extends ChangeNotifier {
           _streamingService.updateScoreboard(
             _currentSession!,
             anchorPosition: _config.anchorPosition,
+            useShortNames: _useThreeLetterAcronyms,
           );
         }
         if (_programRecState == RecordingState.recording && _currentSession != null) {
@@ -238,6 +249,7 @@ class StreamerProvider extends ChangeNotifier {
         eventTag: eventTag,
         toastMessage: eventTag,
         anchorPosition: _config.anchorPosition,
+        useShortNames: _useThreeLetterAcronyms,
       );
     }
   }

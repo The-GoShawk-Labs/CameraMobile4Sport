@@ -50,6 +50,7 @@ dependencies:
   path_provider: ^2.1.6
   ffmpeg_kit_flutter_new: ^4.6.2
   apivideo_live_stream: ^1.2.0
+  flutter_svg: ^2.3.0
 
 dev_dependencies:
   flutter_test:
@@ -76,6 +77,7 @@ flutter:
 
   assets:
     - assets/images/
+    - assets/icons/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

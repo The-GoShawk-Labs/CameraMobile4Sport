@@ -249,6 +249,8 @@ class ScoreUpdatePayload {
   final int setsB;
   final String teamA;
   final String teamB;
+  final String? teamAShort;
+  final String? teamBShort;
   final String servingTeam; // 'A' | 'B'
   final int setNumber;
   final int timeoutsA;
@@ -262,6 +264,8 @@ class ScoreUpdatePayload {
     required this.setsB,
     required this.teamA,
     required this.teamB,
+    this.teamAShort,
+    this.teamBShort,
     required this.servingTeam,
     required this.setNumber,
     this.timeoutsA = 0,
@@ -277,6 +281,8 @@ class ScoreUpdatePayload {
       'setsB': setsB,
       'teamA': teamA,
       'teamB': teamB,
+      'teamAShort': teamAShort,
+      'teamBShort': teamBShort,
       'servingTeam': servingTeam,
       'setNumber': setNumber,
       'timeoutsA': timeoutsA,
@@ -293,6 +299,8 @@ class ScoreUpdatePayload {
       setsB: map['setsB'] as int? ?? 0,
       teamA: map['teamA'] as String? ?? 'DRUŻYNA A',
       teamB: map['teamB'] as String? ?? 'DRUŻYNA B',
+      teamAShort: map['teamAShort'] as String?,
+      teamBShort: map['teamBShort'] as String?,
       servingTeam: map['servingTeam'] as String? ?? 'A',
       setNumber: map['setNumber'] as int? ?? 1,
       timeoutsA: map['timeoutsA'] as int? ?? 0,

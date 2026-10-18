@@ -14,5 +14,8 @@ data class VolleyballScoreboardData(
     val anchorPosition: String = "topLeft",
     val matchClock: String = "",
     val colorA: Int = 0xFF00B4D8.toInt(),
-    val colorB: Int = 0xFFEF4444.toInt()
+    val colorB: Int = 0xFFEF4444.toInt(),
+    val teamAShort: String = "",
+    val teamBShort: String = "",
+    val useShortNames: Boolean = false
 )

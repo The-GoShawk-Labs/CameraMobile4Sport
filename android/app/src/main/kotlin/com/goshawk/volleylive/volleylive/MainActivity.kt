@@ -377,6 +377,9 @@ class MainActivity : FlutterActivity() {
         val toast = (map["toastMessage"] as? String) ?: (map["eventTag"] as? String) ?: ""
         val colorA = (map["colorA"] as? Number)?.toInt() ?: 0xFF00B4D8.toInt()
         val colorB = (map["colorB"] as? Number)?.toInt() ?: 0xFFEF4444.toInt()
+        val teamAShort = (map["teamAShort"] as? String) ?: ""
+        val teamBShort = (map["teamBShort"] as? String) ?: ""
+        val useShortNames = (map["useShortNames"] as? Boolean) ?: false
         val data = VolleyballScoreboardData(
             teamA = (map["teamA"] as? String) ?: (map["teamAName"] as? String) ?: "TEAM A",
             teamB = (map["teamB"] as? String) ?: (map["teamBName"] as? String) ?: "TEAM B",
@@ -391,7 +394,10 @@ class MainActivity : FlutterActivity() {
             anchorPosition = (map["anchorPosition"] as? String) ?: "topLeft",
             matchClock = (map["matchClock"] as? String) ?: "",
             colorA = colorA,
-            colorB = colorB
+            colorB = colorB,
+            teamAShort = teamAShort,
+            teamBShort = teamBShort,
+            useShortNames = useShortNames
         )
         streamService?.updateScoreboard(data)
     }

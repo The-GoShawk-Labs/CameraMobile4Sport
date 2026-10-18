@@ -91,6 +91,8 @@ class MatchProvider extends ChangeNotifier {
       setsB: _currentSession.setsB,
       teamA: _currentSession.teamA,
       teamB: _currentSession.teamB,
+      teamAShort: _currentSession.teamAShort,
+      teamBShort: _currentSession.teamBShort,
       servingTeam: _currentSession.currentServer == ServingTeam.teamA ? 'A' : (_currentSession.currentServer == ServingTeam.teamB ? 'B' : 'NONE'),
       setNumber: _currentSession.currentSetNumber,
       timeoutsA: _currentSession.timeoutsA,
@@ -119,6 +121,8 @@ class MatchProvider extends ChangeNotifier {
     _currentSession = _currentSession.copyWith(
       teamA: payload.teamA,
       teamB: payload.teamB,
+      teamAShort: payload.teamAShort ?? _currentSession.teamAShort,
+      teamBShort: payload.teamBShort ?? _currentSession.teamBShort,
       currentSetPointsA: payload.pointsA,
       currentSetPointsB: payload.pointsB,
       setsA: payload.setsA,
@@ -141,6 +145,8 @@ class MatchProvider extends ChangeNotifier {
       createdAt: DateTime.now(),
       teamA: 'AZS KRAKÓW',
       teamB: 'LEGIA WARSZAWA',
+      teamAShort: 'AZS',
+      teamBShort: 'LEG',
       teamAColor: const Color(0xFF00E5FF),
       teamBColor: const Color(0xFFFFAB00),
       pairingCode: 'VL-8492',
@@ -173,6 +179,8 @@ class MatchProvider extends ChangeNotifier {
   void startNewMatch({
     required String teamA,
     required String teamB,
+    String? teamAShort,
+    String? teamBShort,
     Color teamAColor = const Color(0xFF00E5FF),
     Color teamBColor = const Color(0xFFFFAB00),
     MatchSport sport = MatchSport.volleyball,
@@ -186,6 +194,12 @@ class MatchProvider extends ChangeNotifier {
       sport: sport,
       teamA: teamA.trim().isEmpty ? 'DRUŻYNA A' : teamA.trim().toUpperCase(),
       teamB: teamB.trim().isEmpty ? 'DRUŻYNA B' : teamB.trim().toUpperCase(),
+      teamAShort: teamAShort?.trim().isNotEmpty == true
+          ? teamAShort!.trim().toUpperCase()
+          : null,
+      teamBShort: teamBShort?.trim().isNotEmpty == true
+          ? teamBShort!.trim().toUpperCase()
+          : null,
       teamAColor: teamAColor,
       teamBColor: teamBColor,
       pairingCode: pairingCode ?? 'VL-${(1000 + DateTime.now().millisecond % 9000)}',
@@ -207,6 +221,32 @@ class MatchProvider extends ChangeNotifier {
     _currentSession = _currentSession.copyWith(
       teamAColor: colorA,
       teamBColor: colorB,
+    );
+    _notifyScoreboardBridge();
+    notifyListeners();
+  }
+
+  void updateTeamsInfo({
+    String? teamA,
+    String? teamB,
+    String? teamAShort,
+    String? teamBShort,
+    String? tournamentName,
+  }) {
+    _currentSession = _currentSession.copyWith(
+      teamA: teamA != null
+          ? (teamA.trim().isEmpty ? 'DRUŻYNA A' : teamA.trim().toUpperCase())
+          : _currentSession.teamA,
+      teamB: teamB != null
+          ? (teamB.trim().isEmpty ? 'DRUŻYNA B' : teamB.trim().toUpperCase())
+          : _currentSession.teamB,
+      teamAShort: teamAShort != null
+          ? (teamAShort.trim().isEmpty ? null : teamAShort.trim().toUpperCase())
+          : _currentSession.teamAShort,
+      teamBShort: teamBShort != null
+          ? (teamBShort.trim().isEmpty ? null : teamBShort.trim().toUpperCase())
+          : _currentSession.teamBShort,
+      tournamentName: tournamentName ?? _currentSession.tournamentName,
     );
     _notifyScoreboardBridge();
     notifyListeners();

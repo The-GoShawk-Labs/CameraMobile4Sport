@@ -38,6 +38,7 @@ abstract class IStreamingService {
     String? toastMessage,
     ScoreboardAnchorPosition? anchorPosition,
     String matchClock = '',
+    bool useShortNames = false,
   });
   void setScoreboardPosition(ScoreboardAnchorPosition position);
 }
@@ -211,6 +212,7 @@ class StreamingService implements IStreamingService {
     String? toastMessage,
     ScoreboardAnchorPosition? anchorPosition,
     String matchClock = '',
+    bool useShortNames = false,
   }) {
     final state = VolleyballScoreboardState.fromMatchSession(
       matchSession,
@@ -218,6 +220,7 @@ class StreamingService implements IStreamingService {
       toastMessage: toastMessage,
       anchorPosition: anchorPosition ?? _activeConfig.anchorPosition,
       matchClock: matchClock,
+      useShortNames: useShortNames,
     );
     _nativeBridge.updateScoreboard(state);
   }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:volleylive/core/theme/app_theme.dart';
 import 'package:volleylive/domain/models/match_recording_metadata.dart';
 import 'package:volleylive/domain/models/match_session.dart';
@@ -27,6 +28,7 @@ class ScoreboardOverlay extends StatelessWidget {
   final Duration? matchDuration;
   final bool animate;
   final bool isStandaloneCard;
+  final bool useThreeLetterAcronyms;
 
   const ScoreboardOverlay({
     super.key,
@@ -43,6 +45,7 @@ class ScoreboardOverlay extends StatelessWidget {
     this.matchDuration,
     this.animate = true,
     this.isStandaloneCard = false,
+    this.useThreeLetterAcronyms = false,
   });
 
   String _formatMatchTime(Duration? duration) {
@@ -255,7 +258,8 @@ class ScoreboardOverlay extends StatelessWidget {
             // WIERSZ 1: GOSPODARZE (TEAM A)
             Expanded(
               child: _buildSportCamTeamRow(
-                teamName: session.teamA,
+                teamName: useThreeLetterAcronyms ? session.teamAShortCode : session.teamA,
+                isShortName: useThreeLetterAcronyms,
                 teamColor: session.teamAColor,
                 score: session.currentSetPointsA,
                 setsWon: session.setsA,
@@ -271,7 +275,8 @@ class ScoreboardOverlay extends StatelessWidget {
             // WIERSZ 2: GOŚCIE (TEAM B)
             Expanded(
               child: _buildSportCamTeamRow(
-                teamName: session.teamB,
+                teamName: useThreeLetterAcronyms ? session.teamBShortCode : session.teamB,
+                isShortName: useThreeLetterAcronyms,
                 teamColor: session.teamBColor,
                 score: session.currentSetPointsB,
                 setsWon: session.setsB,
@@ -291,6 +296,7 @@ class ScoreboardOverlay extends StatelessWidget {
 
   Widget _buildSportCamTeamRow({
     required String teamName,
+    bool isShortName = false,
     required Color teamColor,
     required int score,
     required int setsWon,
@@ -316,7 +322,7 @@ class ScoreboardOverlay extends StatelessWidget {
           ),
           SizedBox(width: 10.0 * scale),
 
-          // Nazwa drużyny i wskaźnik serwisu
+          // Nazwa drużyny (lub 3-literowy skrót) i wskaźnik serwisu
           Expanded(
             child: Row(
               children: [
@@ -327,9 +333,9 @@ class ScoreboardOverlay extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontFamily: 'Roboto',
-                      fontSize: 16.5 * scale,
+                      fontSize: (isShortName ? 20.0 : 16.5) * scale,
                       fontWeight: FontWeight.w900,
-                      letterSpacing: 0.4,
+                      letterSpacing: isShortName ? 0.8 : 0.4,
                       color: const Color(0xFF0F172A),
                     ),
                   ),
@@ -342,21 +348,17 @@ class ScoreboardOverlay extends StatelessWidget {
             ),
           ),
 
-          // Wskaźniki wygranych setów (3 kropki best-of-5)
-          _buildSetsDots(setsWon, teamColor, scale),
+          // Wskaźniki wygranych setów (pionowe grube kreski best-of-5)
+          _buildSetsTallyBars(setsWon, teamColor, scale),
           SizedBox(width: 8.0 * scale),
 
-          // DEDYKOWANY BOKS WYGRANYCH SETÓW (STAN SETÓW - STANDARD FIVB / PLUSLIGA)
+          // DEDYKOWANY CIEMNY BOKS WYGRANYCH SETÓW (#1E293B)
           Container(
             width: 36.0 * scale,
             height: 38.0 * scale,
             decoration: BoxDecoration(
-              color: const Color(0xFFE2E8F0),
+              color: const Color(0xFF1E293B),
               borderRadius: BorderRadius.circular(6.0 * scale),
-              border: Border.all(
-                color: const Color(0xFFCBD5E1),
-                width: 1.0 * scale,
-              ),
             ),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -368,7 +370,7 @@ class ScoreboardOverlay extends StatelessWidget {
                     fontSize: 7.5 * scale,
                     fontWeight: FontWeight.bold,
                     letterSpacing: 0.5,
-                    color: const Color(0xFF64748B),
+                    color: const Color(0xFF94A3B8),
                     height: 1.0,
                   ),
                 ),
@@ -377,9 +379,9 @@ class ScoreboardOverlay extends StatelessWidget {
                   '$setsWon',
                   style: TextStyle(
                     fontFamily: 'Roboto',
-                    fontSize: 16.0 * scale,
+                    fontSize: 17.0 * scale,
                     fontWeight: FontWeight.w900,
-                    color: const Color(0xFF0F172A),
+                    color: Colors.white,
                     height: 1.0,
                   ),
                 ),
@@ -388,16 +390,20 @@ class ScoreboardOverlay extends StatelessWidget {
           ),
           SizedBox(width: 5.0 * scale),
 
-          // GŁÓWNY CIEMNY BOKS PUNKTOWY (#0F172A)
+          // WYSOKOKONTRASTOWY JASNY BOKS PUNKTOWY (Biały boks z czarną cyfrą - wzorzec telewizyjny)
           Container(
             width: 54.0 * scale,
             height: 38.0 * scale,
             decoration: BoxDecoration(
-              color: const Color(0xFF0F172A),
+              color: Colors.white,
               borderRadius: BorderRadius.circular(6.0 * scale),
+              border: Border.all(
+                color: const Color(0xFFCBD5E1),
+                width: 1.2 * scale,
+              ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.25),
+                  color: Colors.black.withValues(alpha: 0.15),
                   blurRadius: 4.0 * scale,
                   offset: Offset(0, 1.5 * scale),
                 ),
@@ -406,8 +412,8 @@ class ScoreboardOverlay extends StatelessWidget {
             alignment: Alignment.center,
             child: _AnimatedScoreDigit(
               score: score,
-              color: Colors.white,
-              fontSize: 24.0 * scale,
+              color: const Color(0xFF0F172A),
+              fontSize: 25.0 * scale,
               animate: animate,
             ),
           ),
@@ -464,19 +470,35 @@ class ScoreboardOverlay extends StatelessWidget {
                         ),
                       ),
                     )
-                  : Text(
-                      session.sport.shortName.isNotEmpty
-                          ? '${session.sport.shortName} LIVE'
-                          : 'VOLLEY LIVE',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontFamily: 'Roboto',
-                        fontSize: 10.5 * scale,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.8,
-                        color: const Color(0xFF475569),
-                      ),
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(3.0 * scale),
+                          child: SvgPicture.asset(
+                            'assets/icons/app_icon.svg',
+                            width: 14.0 * scale,
+                            height: 14.0 * scale,
+                          ),
+                        ),
+                        SizedBox(width: 4.0 * scale),
+                        Flexible(
+                          child: Text(
+                            session.sport.shortName.isNotEmpty
+                                ? '${session.sport.shortName} • GOGOSHAWK'
+                                : 'GOGOSHAWK LIVE',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontFamily: 'Roboto',
+                              fontSize: 9.5 * scale,
+                              fontWeight: FontWeight.w900,
+                              color: const Color(0xFF334155),
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
             ),
           ),
@@ -510,31 +532,45 @@ class ScoreboardOverlay extends StatelessWidget {
             ),
           ),
 
-          // STREFA 3 (PRAWA, STAŁA SZEROKOŚĆ ~130px): CZAS MECZU Z IKONĄ STOPERA
+          // STREFA 3 (PRAWA, STAŁA SZEROKOŚĆ ~130px): MOBILNY POWIĘKSZONY CZAS MECZU W KAPSULE
           SizedBox(
             width: 130.0 * scale,
             child: Align(
               alignment: Alignment.centerRight,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.timer_outlined,
-                    size: 13.0 * scale,
-                    color: const Color(0xFF475569),
+              child: Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: 8.0 * scale,
+                  vertical: 3.0 * scale,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(5.0 * scale),
+                  border: Border.all(
+                    color: const Color(0xFFCBD5E1),
+                    width: 1.0 * scale,
                   ),
-                  SizedBox(width: 4.0 * scale),
-                  Text(
-                    displayTime,
-                    style: TextStyle(
-                      fontFamily: 'Roboto',
-                      fontSize: 11.5 * scale,
-                      fontWeight: FontWeight.w800,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.timer_outlined,
+                      size: 13.0 * scale,
                       color: const Color(0xFF0F172A),
-                      fontFeatures: const [FontFeature.tabularFigures()],
                     ),
-                  ),
-                ],
+                    SizedBox(width: 4.0 * scale),
+                    Text(
+                      displayTime,
+                      style: TextStyle(
+                        fontFamily: 'Roboto',
+                        fontSize: 13.0 * scale,
+                        fontWeight: FontWeight.w900,
+                        color: const Color(0xFF0F172A),
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -543,18 +579,19 @@ class ScoreboardOverlay extends StatelessWidget {
     );
   }
 
-  Widget _buildSetsDots(int setsWon, Color color, double scale) {
+  /// Wskaźnik wygranych setów w postaci pionowych grubych kresek (Tally Bars)
+  Widget _buildSetsTallyBars(int setsWon, Color color, double scale) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: List.generate(3, (idx) {
         final isWon = idx < setsWon;
         return Container(
           margin: EdgeInsets.symmetric(horizontal: 1.5 * scale),
-          width: 6.5 * scale,
-          height: 6.5 * scale,
+          width: 4.5 * scale,
+          height: 20.0 * scale,
           decoration: BoxDecoration(
             color: isWon ? color : const Color(0xFFCBD5E1),
-            shape: BoxShape.circle,
+            borderRadius: BorderRadius.circular(2.0 * scale),
             border: Border.all(
               color: isWon ? color.withValues(alpha: 0.8) : const Color(0xFF94A3B8),
               width: 0.75 * scale,

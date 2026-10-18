@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:volleylive/core/router/app_router.dart';
@@ -49,14 +50,15 @@ class ModeSelectScreen extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         IconButton(
-                          padding: const EdgeInsets.all(4),
-                          constraints: const BoxConstraints(),
-                          icon: const Icon(Icons.style_outlined, color: AppTheme.cyanAccent, size: 20),
-                          tooltip: 'Scoreboard Studio',
+                          padding: const EdgeInsets.all(6),
+                          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+                          icon: const Icon(Icons.palette_outlined, color: AppTheme.cyanAccent, size: 20),
+                          tooltip: 'Scoreboard Studio (Tablica)',
                           onPressed: () => showModalBottomSheet(
                             context: context,
                             backgroundColor: Colors.transparent,
                             isScrollControlled: true,
+                            useRootNavigator: true,
                             builder: (_) => const ScoreboardCustomizerModal(),
                           ),
                         ),
@@ -88,36 +90,113 @@ class ModeSelectScreen extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Container(
-                        padding: const EdgeInsets.all(12),
+                        width: 58,
+                        height: 58,
                         decoration: BoxDecoration(
-                          color: AppTheme.cyanAccent.withValues(alpha: 0.15),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: AppTheme.cyanAccent, width: 2),
-                          boxShadow: AppTheme.cyanGlow(blur: 16, opacity: 0.3),
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFFFF6B35).withValues(alpha: 0.35),
+                              blurRadius: 16,
+                              spreadRadius: 1,
+                            ),
+                          ],
                         ),
-                        child: const Icon(Icons.videocam, color: AppTheme.cyanAccent, size: 30),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: SvgPicture.asset(
+                            'assets/icons/app_icon.svg',
+                            fit: BoxFit.cover,
+                          ),
+                        ),
                       ),
                       const SizedBox(width: 14),
-                      const Column(
+                      Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            'VolleyLive Pro',
-                            style: TextStyle(
-                              fontSize: 26,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 1.2,
-                              color: Colors.white,
-                            ),
+                          Row(
+                            children: [
+                              RichText(
+                                text: const TextSpan(
+                                  children: [
+                                    TextSpan(
+                                      text: 'CameraMobile',
+                                      style: TextStyle(
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.w900,
+                                        letterSpacing: 0.8,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                    TextSpan(
+                                      text: '4Sport',
+                                      style: TextStyle(
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.w900,
+                                        letterSpacing: 0.8,
+                                        color: Color(0xFFFF6B35),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE63946).withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: const Color(0xFFE63946), width: 1),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.fiber_manual_record, color: Color(0xFFE63946), size: 8),
+                                    SizedBox(width: 4),
+                                    Text(
+                                      'REC',
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w900,
+                                        color: Color(0xFFE63946),
+                                        letterSpacing: 0.8,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
-                          Text(
-                            'DUAL-DEVICE BROADCAST & SCORING SUITE',
-                            style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 1.5,
-                              color: AppTheme.cyanAccent,
-                            ),
+                          const SizedBox(height: 2),
+                          const Row(
+                            children: [
+                              Text(
+                                'GOGOSHAWK • SIATKARSKA MOC',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 1.5,
+                                  color: Color(0xFFF7C04A),
+                                ),
+                              ),
+                              SizedBox(width: 4),
+                              Text(
+                                '• ',
+                                style: TextStyle(
+                                  fontSize: 8.5,
+                                  color: AppTheme.textSecondary,
+                                ),
+                              ),
+                              Text(
+                                'VolleyLive Pro',
+                                style: TextStyle(
+                                  fontSize: 8.5,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.8,
+                                  color: AppTheme.cyanAccent,
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),

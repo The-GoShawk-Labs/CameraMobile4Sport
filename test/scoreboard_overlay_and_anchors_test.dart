@@ -201,7 +201,91 @@ void main() {
       expect(find.text('15'), findsOneWidget);
       expect(find.text('SET 2'), findsOneWidget);
       expect(find.text('12:34'), findsOneWidget);
-      expect(find.text('VOLLEY LIVE'), findsOneWidget);
+      expect(find.text('VOLLEY • GOGOSHAWK'), findsOneWidget);
+    });
+
+    testWidgets('Renders 3-letter acronyms (TLA) and stopwatch badge when useThreeLetterAcronyms is true', (tester) async {
+      final session = MatchSession(
+        id: 'test-session-tla',
+        createdAt: DateTime.now(),
+        teamA: 'Jastrzębski Węgiel',
+        teamB: 'Kęczanin Kęty',
+        teamAShort: 'JAS',
+        teamBShort: 'KET',
+        currentSetPointsA: 25,
+        currentSetPointsB: 23,
+        setsA: 2,
+        setsB: 1,
+        currentSetNumber: 4,
+        pairingCode: '654321',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 800,
+              height: 400,
+              child: ScoreboardOverlay(
+                session: session,
+                anchorPosition: ScoreboardAnchorPosition.topLeft,
+                useThreeLetterAcronyms: true,
+                matchDuration: const Duration(minutes: 48, seconds: 12),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      expect(find.text('JAS'), findsOneWidget);
+      expect(find.text('KET'), findsOneWidget);
+      expect(find.text('25'), findsOneWidget);
+      expect(find.text('23'), findsOneWidget);
+      expect(find.text('48:12'), findsOneWidget);
+    });
+
+    test('deriveShortCode handles single-word and multi-word team names correctly', () {
+      expect(MatchSession.deriveShortCode('Jastrzębie'), 'JAS');
+      expect(MatchSession.deriveShortCode('AZS'), 'AZS');
+      expect(MatchSession.deriveShortCode('Kęty'), 'KĘT');
+      expect(MatchSession.deriveShortCode('AZS Kraków'), 'AZS');
+      expect(MatchSession.deriveShortCode('PGE Projekt Warszawa'), 'PGE');
+      expect(MatchSession.deriveShortCode('Trefl Gdańsk'), 'GDA');
+    });
+
+    test('VolleyballScoreboardState supports useShortNames and team short codes', () {
+      final session = MatchSession(
+        id: 'session-state',
+        createdAt: DateTime.now(),
+        teamA: 'Jastrzębski Węgiel',
+        teamB: 'Kęczanin Kęty',
+        teamAShort: 'JAS',
+        teamBShort: 'KET',
+        pairingCode: '999999',
+      );
+
+      final state = VolleyballScoreboardState.fromMatchSession(
+        session,
+        useShortNames: true,
+        matchClock: '35:20',
+      );
+
+      expect(state.useShortNames, isTrue);
+      expect(state.teamAShort, 'JAS');
+      expect(state.teamBShort, 'KET');
+      expect(state.matchClock, '35:20');
+
+      final map = state.toMap();
+      expect(map['useShortNames'], isTrue);
+      expect(map['teamAShort'], 'JAS');
+      expect(map['teamBShort'], 'KET');
+
+      final deserialized = VolleyballScoreboardState.fromMap(map);
+      expect(deserialized.useShortNames, isTrue);
+      expect(deserialized.teamAShort, 'JAS');
+      expect(deserialized.teamBShort, 'KET');
     });
   });
 }

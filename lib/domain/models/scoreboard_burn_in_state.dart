@@ -125,6 +125,9 @@ class VolleyballScoreboardState {
   final String matchClock;
   final int? colorA;
   final int? colorB;
+  final String? teamAShort;
+  final String? teamBShort;
+  final bool useShortNames;
 
   const VolleyballScoreboardState({
     required this.teamA,
@@ -141,6 +144,9 @@ class VolleyballScoreboardState {
     this.matchClock = '',
     this.colorA,
     this.colorB,
+    this.teamAShort,
+    this.teamBShort,
+    this.useShortNames = false,
   });
 
   /// Factory creating state directly from the app's [MatchSession]
@@ -150,6 +156,7 @@ class VolleyballScoreboardState {
     String? toastMessage,
     ScoreboardAnchorPosition anchorPosition = ScoreboardAnchorPosition.topLeft,
     String matchClock = '',
+    bool useShortNames = false,
   }) {
     String serverStr = 'NONE';
     if (session.currentServer == ServingTeam.teamA) {
@@ -179,6 +186,9 @@ class VolleyballScoreboardState {
       matchClock: matchClock,
       colorA: session.teamAColor.toARGB32(),
       colorB: session.teamBColor.toARGB32(),
+      teamAShort: session.teamAShortCode,
+      teamBShort: session.teamBShortCode,
+      useShortNames: useShortNames,
     );
   }
 
@@ -187,6 +197,9 @@ class VolleyballScoreboardState {
     'teamB': teamB,
     'teamAName': teamA,
     'teamBName': teamB,
+    'teamAShort': teamAShort ?? '',
+    'teamBShort': teamBShort ?? '',
+    'useShortNames': useShortNames,
     'scoreA': scoreA,
     'scoreB': scoreB,
     'currentSet': currentSet,
@@ -200,6 +213,39 @@ class VolleyballScoreboardState {
     if (colorA != null) 'colorA': colorA,
     if (colorB != null) 'colorB': colorB,
   };
+
+  factory VolleyballScoreboardState.fromMap(Map<String, dynamic> map) {
+    ScoreboardAnchorPosition anchor = ScoreboardAnchorPosition.topLeft;
+    final anchorStr = map['anchorPosition'] as String?;
+    if (anchorStr != null) {
+      for (final p in ScoreboardAnchorPosition.values) {
+        if (p.name == anchorStr) {
+          anchor = p;
+          break;
+        }
+      }
+    }
+
+    return VolleyballScoreboardState(
+      teamA: map['teamA'] as String? ?? (map['teamAName'] as String? ?? 'DRUŻYNA A'),
+      teamB: map['teamB'] as String? ?? (map['teamBName'] as String? ?? 'DRUŻYNA B'),
+      scoreA: map['scoreA'] as int? ?? 0,
+      scoreB: map['scoreB'] as int? ?? 0,
+      currentSet: map['currentSet'] as int? ?? 1,
+      setsA: map['setsA'] as int? ?? 0,
+      setsB: map['setsB'] as int? ?? 0,
+      servingTeam: map['servingTeam'] as String? ?? 'NONE',
+      eventTag: (map['eventTag'] as String?)?.isNotEmpty == true ? map['eventTag'] as String : null,
+      toastMessage: (map['toastMessage'] as String?)?.isNotEmpty == true ? map['toastMessage'] as String : null,
+      anchorPosition: anchor,
+      matchClock: map['matchClock'] as String? ?? '',
+      colorA: map['colorA'] as int?,
+      colorB: map['colorB'] as int?,
+      teamAShort: (map['teamAShort'] as String?)?.isNotEmpty == true ? map['teamAShort'] as String : null,
+      teamBShort: (map['teamBShort'] as String?)?.isNotEmpty == true ? map['teamBShort'] as String : null,
+      useShortNames: map['useShortNames'] as bool? ?? false,
+    );
+  }
 
   @override
   bool operator ==(Object other) =>
@@ -218,7 +264,10 @@ class VolleyballScoreboardState {
           anchorPosition == other.anchorPosition &&
           matchClock == other.matchClock &&
           colorA == other.colorA &&
-          colorB == other.colorB;
+          colorB == other.colorB &&
+          teamAShort == other.teamAShort &&
+          teamBShort == other.teamBShort &&
+          useShortNames == other.useShortNames;
 
   @override
   int get hashCode => Object.hash(
@@ -236,5 +285,8 @@ class VolleyballScoreboardState {
     matchClock,
     colorA,
     colorB,
+    teamAShort,
+    teamBShort,
+    useShortNames,
   );
 }

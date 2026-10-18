@@ -11,6 +11,8 @@ import 'package:volleylive/domain/models/streaming_config.dart';
 import 'package:volleylive/presentation/providers/match_provider.dart';
 import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
 import 'package:volleylive/presentation/providers/streamer_provider.dart';
+import 'package:volleylive/presentation/screens/settings/scoreboard_customizer_modal.dart';
+import 'package:volleylive/presentation/widgets/scoreboard_overlay.dart';
 import 'package:volleylive/presentation/widgets/sports_ui_components.dart';
 
 class PhoneBMatchSetupScreen extends StatefulWidget {
@@ -23,7 +25,9 @@ class PhoneBMatchSetupScreen extends StatefulWidget {
 class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
   final _tournamentController = TextEditingController(text: 'LIGA MISTRZÓW MVP');
   final _teamAController = TextEditingController(text: 'AZS KRAKÓW');
+  final _teamAShortController = TextEditingController(text: 'AZS');
   final _teamBController = TextEditingController(text: 'LEGIA WARSZAWA');
+  final _teamBShortController = TextEditingController(text: 'LEG');
   final _cameraIpController = TextEditingController(text: '192.168.68.51');
   Color _colorA = const Color(0xFF00E5FF);
   Color _colorB = const Color(0xFFFFAB00);
@@ -43,11 +47,49 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
     const Color(0xFF2979FF),
   ];
 
+  void _openScoreboardStudio(
+    BuildContext context,
+    MatchProvider matchProvider,
+    StreamerProvider streamerProvider,
+  ) {
+    matchProvider.updateTeamsInfo(
+      teamA: _teamAController.text,
+      teamB: _teamBController.text,
+      teamAShort: _teamAShortController.text,
+      teamBShort: _teamBShortController.text,
+      tournamentName: _tournamentController.text,
+    );
+    matchProvider.updateTeamColors(colorA: _colorA, colorB: _colorB);
+    matchProvider.setSport(_selectedSport);
+    streamerProvider.setScoreboardStyle(_selectedStyle);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useRootNavigator: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const ScoreboardCustomizerModal(),
+    ).then((_) {
+      if (!mounted) return;
+      setState(() {
+        _teamAController.text = matchProvider.session.teamA;
+        _teamBController.text = matchProvider.session.teamB;
+        _teamAShortController.text = matchProvider.session.teamAShortCode;
+        _teamBShortController.text = matchProvider.session.teamBShortCode;
+        _colorA = matchProvider.session.teamAColor;
+        _colorB = matchProvider.session.teamBColor;
+        _selectedStyle = streamerProvider.scoreboardStyle;
+      });
+    });
+  }
+
   @override
   void dispose() {
     _tournamentController.dispose();
     _teamAController.dispose();
+    _teamAShortController.dispose();
     _teamBController.dispose();
+    _teamBShortController.dispose();
     _cameraIpController.dispose();
     super.dispose();
   }
@@ -72,6 +114,21 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
             }
           },
         ),
+        actions: [
+          TextButton.icon(
+            onPressed: () => _openScoreboardStudio(context, matchProvider, streamerProvider),
+            icon: const Icon(Icons.palette_outlined, color: AppTheme.cyanAccent, size: 18),
+            label: const Text(
+              'TABLICA',
+              style: TextStyle(
+                color: AppTheme.cyanAccent,
+                fontSize: 11,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+        ],
       ),
       body: Container(
         decoration: const BoxDecoration(
@@ -115,6 +172,7 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
                         const SizedBox(height: 8),
                         TextField(
                           controller: _tournamentController,
+                          onChanged: (_) => setState(() {}),
                           style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 13),
                           decoration: InputDecoration(
                             hintText: 'np. Finał Pucharu Polski, Turniej U-18',
@@ -156,23 +214,59 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
                           ],
                         ),
                         const SizedBox(height: 8),
-                        TextField(
-                          controller: _teamAController,
-                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
-                          decoration: InputDecoration(
-                            hintText: 'Nazwa drużyny gospodarzy',
-                            hintStyle: const TextStyle(color: Colors.white38),
-                            filled: true,
-                            fillColor: const Color(0xFF0D131F),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: _colorA.withValues(alpha: 0.6)),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: TextField(
+                                controller: _teamAController,
+                                onChanged: (_) => setState(() {}),
+                                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                                decoration: InputDecoration(
+                                  hintText: 'Nazwa gospodarzy',
+                                  hintStyle: const TextStyle(color: Colors.white38),
+                                  filled: true,
+                                  fillColor: const Color(0xFF0D131F),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide(color: _colorA.withValues(alpha: 0.6)),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide(color: _colorA, width: 2),
+                                  ),
+                                ),
+                              ),
                             ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: _colorA, width: 2),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              flex: 1,
+                              child: TextField(
+                                controller: _teamAShortController,
+                                onChanged: (_) => setState(() {}),
+                                maxLength: 3,
+                                textCapitalization: TextCapitalization.characters,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 1),
+                                decoration: InputDecoration(
+                                  counterText: '',
+                                  hintText: 'SKRÓT',
+                                  hintStyle: const TextStyle(color: Colors.white30, fontSize: 11),
+                                  filled: true,
+                                  fillColor: const Color(0xFF0D131F),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide(color: _colorA.withValues(alpha: 0.6)),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide(color: _colorA, width: 2),
+                                  ),
+                                ),
+                              ),
                             ),
-                          ),
+                          ],
                         ),
                         const SizedBox(height: 8),
                         _buildColorPickerRow(_colorA, (c) => setState(() => _colorA = c)),
@@ -204,23 +298,59 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
                           ],
                         ),
                         const SizedBox(height: 8),
-                        TextField(
-                          controller: _teamBController,
-                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
-                          decoration: InputDecoration(
-                            hintText: 'Nazwa drużyny gości',
-                            hintStyle: const TextStyle(color: Colors.white38),
-                            filled: true,
-                            fillColor: const Color(0xFF0D131F),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: _colorB.withValues(alpha: 0.6)),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: TextField(
+                                controller: _teamBController,
+                                onChanged: (_) => setState(() {}),
+                                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                                decoration: InputDecoration(
+                                  hintText: 'Nazwa gości',
+                                  hintStyle: const TextStyle(color: Colors.white38),
+                                  filled: true,
+                                  fillColor: const Color(0xFF0D131F),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide(color: _colorB.withValues(alpha: 0.6)),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide(color: _colorB, width: 2),
+                                  ),
+                                ),
+                              ),
                             ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: _colorB, width: 2),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              flex: 1,
+                              child: TextField(
+                                controller: _teamBShortController,
+                                onChanged: (_) => setState(() {}),
+                                maxLength: 3,
+                                textCapitalization: TextCapitalization.characters,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 1),
+                                decoration: InputDecoration(
+                                  counterText: '',
+                                  hintText: 'SKRÓT',
+                                  hintStyle: const TextStyle(color: Colors.white30, fontSize: 11),
+                                  filled: true,
+                                  fillColor: const Color(0xFF0D131F),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide(color: _colorB.withValues(alpha: 0.6)),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide(color: _colorB, width: 2),
+                                  ),
+                                ),
+                              ),
                             ),
-                          ),
+                          ],
                         ),
                         const SizedBox(height: 8),
                         _buildColorPickerRow(_colorB, (c) => setState(() => _colorB = c)),
@@ -230,8 +360,8 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
 
                   const SizedBox(height: 16),
 
-                  // 3. WYBÓR STYLU GRAFICZNEGO TABLICY WYNIKÓW
-                  _buildThemeSelector(),
+                  // 3. WYBÓR STYLU GRAFICZNEGO TABLICY WYNIKÓW + PODGLĄD NA ŻYWO WYSIWYG
+                  _buildThemeSelector(context, matchProvider, streamerProvider),
 
                   const SizedBox(height: 20),
 
@@ -285,6 +415,8 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
                             matchProvider.startNewMatch(
                               teamA: _teamAController.text,
                               teamB: _teamBController.text,
+                              teamAShort: _teamAShortController.text.trim(),
+                              teamBShort: _teamBShortController.text.trim(),
                               teamAColor: _colorA,
                               teamBColor: _colorB,
                               sport: _selectedSport,
@@ -341,6 +473,8 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
                             matchProvider.startNewMatch(
                               teamA: _teamAController.text,
                               teamB: _teamBController.text,
+                              teamAShort: _teamAShortController.text.trim(),
+                              teamBShort: _teamBShortController.text.trim(),
                               teamAColor: _colorA,
                               teamBColor: _colorB,
                               sport: _selectedSport,
@@ -712,7 +846,11 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
     );
   }
 
-  Widget _buildThemeSelector() {
+  Widget _buildThemeSelector(
+    BuildContext context,
+    MatchProvider matchProvider,
+    StreamerProvider streamerProvider,
+  ) {
     final styles = [
       {'style': ScoreboardThemeStyle.tvProBroadcast, 'label': 'TV Pro Broadcast'},
       {'style': ScoreboardThemeStyle.cyberGlow, 'label': 'Cyber Glow'},
@@ -720,17 +858,36 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
       {'style': ScoreboardThemeStyle.beachVolley, 'label': 'Beach / Stadium'},
     ];
 
+    final previewSession = matchProvider.session.copyWith(
+      sport: _selectedSport,
+      teamA: _teamAController.text.trim().isEmpty
+          ? 'GOSPODARZE'
+          : _teamAController.text.trim().toUpperCase(),
+      teamB: _teamBController.text.trim().isEmpty
+          ? 'GOŚCIE'
+          : _teamBController.text.trim().toUpperCase(),
+      teamAShort: _teamAShortController.text.trim().isEmpty
+          ? null
+          : _teamAShortController.text.trim().toUpperCase(),
+      teamBShort: _teamBShortController.text.trim().isEmpty
+          ? null
+          : _teamBShortController.text.trim().toUpperCase(),
+      teamAColor: _colorA,
+      teamBColor: _colorB,
+      tournamentName: _tournamentController.text.trim(),
+    );
+
     return GlassCard(
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.palette_outlined, color: AppTheme.purpleAccent, size: 16),
-              SizedBox(width: 8),
-              Expanded(
+              const Icon(Icons.palette_outlined, color: AppTheme.purpleAccent, size: 16),
+              const SizedBox(width: 8),
+              const Expanded(
                 child: Text(
-                  'MOTYW GRAFICZNY TRANSMISJI (SCOREBOARD OVERLAY)',
+                  'PODGLĄD NA ŻYWO WYSIWYG & MOTYW TRANSMISJI',
                   style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w900,
@@ -739,29 +896,106 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
                   ),
                 ),
               ),
+              TextButton.icon(
+                onPressed: () => _openScoreboardStudio(context, matchProvider, streamerProvider),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  minimumSize: const Size(48, 36),
+                ),
+                icon: const Icon(Icons.tune, size: 14, color: AppTheme.cyanAccent),
+                label: const Text(
+                  'STUDIO TABLICY',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    color: AppTheme.cyanAccent,
+                  ),
+                ),
+              ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
+
+          // LIVE WYSIWYG 16:9 PREVIEW W FORMULARZU KONFIGURACJI
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF090D14),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white12),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: AspectRatio(
+              aspectRatio: 16 / 9,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFF101929), Color(0xFF090D14)],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 6,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Text(
+                        'LIVE WYSIWYG 16:9',
+                        style: TextStyle(
+                          fontSize: 8,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.cyanAccent,
+                        ),
+                      ),
+                    ),
+                  ),
+                  ScoreboardOverlay(
+                    session: previewSession,
+                    style: _selectedStyle,
+                    anchorPosition: streamerProvider.scoreboardAnchorPosition,
+                    showServeIndicator: streamerProvider.showServeIndicator,
+                    useThreeLetterAcronyms: streamerProvider.useThreeLetterAcronyms,
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 12),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: styles.map((item) {
               final style = item['style'] as ScoreboardThemeStyle;
               final isSelected = _selectedStyle == style;
-              return ChoiceChip(
-                label: Text(item['label'] as String),
-                selected: isSelected,
-                selectedColor: AppTheme.purpleAccent.withValues(alpha: 0.3),
-                backgroundColor: const Color(0xFF0D131F),
-                labelStyle: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  color: isSelected ? Colors.white : Colors.white60,
+              return SizedBox(
+                height: 44,
+                child: ChoiceChip(
+                  label: Text(item['label'] as String),
+                  selected: isSelected,
+                  selectedColor: AppTheme.purpleAccent.withValues(alpha: 0.3),
+                  backgroundColor: const Color(0xFF0D131F),
+                  labelStyle: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: isSelected ? Colors.white : Colors.white60,
+                  ),
+                  side: BorderSide(
+                    color: isSelected ? AppTheme.purpleAccent : Colors.white12,
+                  ),
+                  onSelected: (_) {
+                    setState(() => _selectedStyle = style);
+                    streamerProvider.setScoreboardStyle(style);
+                  },
                 ),
-                side: BorderSide(
-                  color: isSelected ? AppTheme.purpleAccent : Colors.white12,
-                ),
-                onSelected: (_) => setState(() => _selectedStyle = style),
               );
             }).toList(),
           ),
@@ -776,18 +1010,27 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
       children: _palette.map((color) {
         final isSel = color.toARGB32() == selectedColor.toARGB32();
         return GestureDetector(
+          behavior: HitTestBehavior.opaque,
           onTap: () => onSelect(color),
-          child: Container(
-            width: 26,
-            height: 26,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: isSel ? Colors.white : Colors.transparent,
-                width: isSel ? 2.5 : 1,
+          child: SizedBox(
+            width: 40,
+            height: 44,
+            child: Center(
+              child: Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: isSel ? Colors.white : Colors.transparent,
+                    width: isSel ? 2.5 : 1,
+                  ),
+                  boxShadow: isSel
+                      ? [BoxShadow(color: color.withValues(alpha: 0.6), blurRadius: 8)]
+                      : null,
+                ),
               ),
-              boxShadow: isSel ? [BoxShadow(color: color.withValues(alpha: 0.6), blurRadius: 8)] : null,
             ),
           ),
         );

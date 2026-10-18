@@ -6,11 +6,14 @@ import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Broadcast-grade, zero-allocation 2D Canvas renderer for Volleyball scoreboard (Scorebug).
- * Follows professional TV standards (PlusLiga / FIVB / CEV / SportCam).
- * Allocates Bitmaps, Paints, and geometry ONCE during construction.
- * Renders to the backing Bitmap ONLY when state updates (`isDirty == true`),
- * preventing garbage collection thrashing at 60 FPS.
- * Proportional to stream resolution (SportCam style ~2.8:1 ratio, base 430x154 px).
+ * Follows professional TV broadcast standards (PlusLiga / Polish 2. Liga / FIVB / CEV / SportCam).
+ *
+ * Features:
+ * - 3-Letter Acronym (TLA) support (e.g. JAS vs KET) or full team names.
+ * - Vertical thick tally bars (pionowe grube kreski) instead of dots for sets won.
+ * - High-contrast TV cell layout: dark sets box (white text) & white points box (black text).
+ * - Mobile-optimized, high-visibility stopwatch badge (no clipping/overlap).
+ * - Allocates Bitmaps, Paints, and geometry ONCE during construction for 60 FPS zero-GC.
  */
 class VolleyballScoreboardBitmapRenderer(
     val frameWidth: Int = 1920,
@@ -65,69 +68,76 @@ class VolleyballScoreboardBitmapRenderer(
         style = Paint.Style.FILL
     }
 
-    // Points Box: Solid Deep Slate (#0F172A)
-    private val scoreBoxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(15, 23, 42)
+    // Points Box: Pure White Box (#FFFFFF) with Slate-300 border for maximum pop
+    private val scoreBoxBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
         style = Paint.Style.FILL
     }
 
-    // Points Digits: High-contrast pure white
+    private val scoreBoxBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(203, 213, 225)
+        style = Paint.Style.STROKE
+        strokeWidth = 1.2f * scale
+    }
+
+    // Points Digits: Deep Slate-900 (#0F172A)
     private val scoreTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        textSize = 24f * scale
+        color = Color.rgb(15, 23, 42)
+        textSize = 25f * scale
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
 
-    // Sets Box Background: Slate-200 (#E2E8F0)
+    // Sets Box Background: Dark Slate-800 (#1E293B)
     private val setsBoxBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(226, 232, 240)
+        color = Color.rgb(30, 41, 59)
         style = Paint.Style.FILL
     }
 
-    // Sets Box Border: Slate-300 (#CBD5E1)
-    private val setsBoxBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(203, 213, 225)
-        style = Paint.Style.STROKE
-        strokeWidth = 1f * scale
-    }
-
-    // Sets Micro-label "SET": Slate-500 (#64748B)
+    // Sets Micro-label "SET": Slate-400 (#94A3B8)
     private val setsLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(100, 116, 139)
+        color = Color.rgb(148, 163, 184)
         textSize = 7.5f * scale
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
 
-    // Sets Won Digits: Slate-900 (#0F172A)
+    // Sets Won Digits: Pure White
     private val setsCountPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(15, 23, 42)
-        textSize = 16f * scale
+        color = Color.WHITE
+        textSize = 17f * scale
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
 
-    // Set Tally Dots (Best of 5): Inactive (#CBD5E1) & Active
-    private val setDotInactivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(203, 213, 225)
+    // Set Tally Vertical Bars (Best of 5): Pionowe grube kreski
+    private val setBarInactivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(203, 213, 225) // Slate-300
         style = Paint.Style.FILL
     }
 
-    private val setDotActivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val setBarActivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
 
-    private val setDotBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val setBarBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(148, 163, 184) // Slate-400
         style = Paint.Style.STROKE
         strokeWidth = 0.75f * scale
     }
 
-    // Team Name: Slate-900 (#0F172A), heavy bold typography
+    // Team Full Name: Slate-900 (#0F172A), heavy bold typography
     private val teamNamePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(15, 23, 42)
         textSize = 16.5f * scale
+        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        textAlign = Paint.Align.LEFT
+    }
+
+    // Team 3-Letter Acronym (TLA): Larger bold font
+    private val teamShortNamePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(15, 23, 42)
+        textSize = 21f * scale
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         textAlign = Paint.Align.LEFT
     }
@@ -188,12 +198,23 @@ class VolleyballScoreboardBitmapRenderer(
         textAlign = Paint.Align.CENTER
     }
 
-    // Footer Right Clock: Slate-900 (#0F172A)
-    private val footerClockPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    // Mobile-optimized Stopwatch Badge
+    private val footerClockPillBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.FILL
+    }
+
+    private val footerClockPillBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(203, 213, 225)
+        style = Paint.Style.STROKE
+        strokeWidth = 1f * scale
+    }
+
+    private val footerClockTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(15, 23, 42)
-        textSize = 11.5f * scale
+        textSize = 13.0f * scale
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-        textAlign = Paint.Align.RIGHT
+        textAlign = Paint.Align.CENTER
     }
 
     // Special Event Banner (Red/Crimson #DC2626)
@@ -216,6 +237,8 @@ class VolleyballScoreboardBitmapRenderer(
     private val setsBoxRect = RectF()
     private val bannerPillRect = RectF()
     private val setPillRect = RectF()
+    private val clockPillRect = RectF()
+    private val setBarRect = RectF()
 
     fun updateData(newData: VolleyballScoreboardData) {
         val prev = currentState.get()
@@ -269,6 +292,8 @@ class VolleyballScoreboardBitmapRenderer(
             rowTop = 0f,
             rowHeight = rowHeight,
             teamName = data.teamA,
+            shortName = data.teamAShort,
+            useShortNames = data.useShortNames,
             teamColor = data.colorA,
             accentPaint = accentStripAPaint,
             score = data.scoreA,
@@ -286,6 +311,8 @@ class VolleyballScoreboardBitmapRenderer(
             rowTop = rowHeight,
             rowHeight = rowHeight,
             teamName = data.teamB,
+            shortName = data.teamBShort,
+            useShortNames = data.useShortNames,
             teamColor = data.colorB,
             accentPaint = accentStripBPaint,
             score = data.scoreB,
@@ -300,7 +327,7 @@ class VolleyballScoreboardBitmapRenderer(
         // FOOTER: 3 NON-OVERLAPPING STRICT ZONES
         // Zone 1 (Left 0..135): Brand or Special Event Banner
         // Zone 2 (Center 145..285): Current Set Pill Badge
-        // Zone 3 (Right 295..420): Match Stopwatch Clock
+        // Zone 3 (Right 295..420): Mobile-optimized Match Stopwatch Clock
         // =====================================================================
         val footerCenterY = footerTop + (footerHeight / 2f)
 
@@ -354,14 +381,24 @@ class VolleyballScoreboardBitmapRenderer(
             footerSetTextPaint
         )
 
-        // Zone 3: Right (Stopwatch Clock)
+        // Zone 3: Right (Stopwatch Clock - Mobile High Visibility Badge)
         val clockText = if (data.matchClock.isNotBlank()) data.matchClock else "00:00"
         val displayTime = "⏱ $clockText"
+        val clockW = (footerClockTextPaint.measureText(displayTime) + 16f * scale).coerceAtLeast(80f * scale)
+        val clockRight = overlayWidth - 10f * scale
+        clockPillRect.set(
+            clockRight - clockW,
+            footerCenterY - 12f * scale,
+            clockRight,
+            footerCenterY + 12f * scale
+        )
+        canvas.drawRoundRect(clockPillRect, 5f * scale, 5f * scale, footerClockPillBgPaint)
+        canvas.drawRoundRect(clockPillRect, 5f * scale, 5f * scale, footerClockPillBorderPaint)
         canvas.drawText(
             displayTime,
-            overlayWidth - 12f * scale,
-            footerCenterY + 4f * scale,
-            footerClockPaint
+            clockPillRect.centerX(),
+            footerCenterY + 4.5f * scale,
+            footerClockTextPaint
         )
 
         return true
@@ -371,6 +408,8 @@ class VolleyballScoreboardBitmapRenderer(
         rowTop: Float,
         rowHeight: Float,
         teamName: String,
+        shortName: String,
+        useShortNames: Boolean,
         teamColor: Int,
         accentPaint: Paint,
         score: Int,
@@ -394,12 +433,13 @@ class VolleyballScoreboardBitmapRenderer(
         val boxH = 38f * scale
         val boxTop = rowTop + (rowHeight - boxH) / 2f
 
-        // Points Box (54 x 38 px)
+        // Points Box (54 x 38 px) - High-contrast White box with Black text
         val scoreBoxW = 54f * scale
         val scoreBoxRight = overlayWidth - 8f * scale
         val scoreBoxLeft = scoreBoxRight - scoreBoxW
         scoreBoxRect.set(scoreBoxLeft, boxTop, scoreBoxRight, boxTop + boxH)
-        canvas.drawRoundRect(scoreBoxRect, 6f * scale, 6f * scale, scoreBoxPaint)
+        canvas.drawRoundRect(scoreBoxRect, 6f * scale, 6f * scale, scoreBoxBgPaint)
+        canvas.drawRoundRect(scoreBoxRect, 6f * scale, 6f * scale, scoreBoxBorderPaint)
         canvas.drawText(
             score.toString(),
             scoreBoxRect.centerX(),
@@ -407,13 +447,12 @@ class VolleyballScoreboardBitmapRenderer(
             scoreTextPaint
         )
 
-        // Sets Box (36 x 38 px)
+        // Sets Box (36 x 38 px) - High-contrast Dark box with White text
         val setsBoxW = 36f * scale
         val setsBoxRight = scoreBoxLeft - 5f * scale
         val setsBoxLeft = setsBoxRight - setsBoxW
         setsBoxRect.set(setsBoxLeft, boxTop, setsBoxRight, boxTop + boxH)
         canvas.drawRoundRect(setsBoxRect, 6f * scale, 6f * scale, setsBoxBgPaint)
-        canvas.drawRoundRect(setsBoxRect, 6f * scale, 6f * scale, setsBoxBorderPaint)
         canvas.drawText(
             "SET",
             setsBoxRect.centerX(),
@@ -427,47 +466,54 @@ class VolleyballScoreboardBitmapRenderer(
             setsCountPaint
         )
 
-        // 3. Best-of-5 Set Tally Dots (3 dots)
-        val dotRadius = 3.25f * scale
-        val dotGap = 8.5f * scale
-        val rightDotCenter = setsBoxLeft - 10f * scale
-        val midDotCenter = rightDotCenter - dotGap
-        val leftDotCenter = midDotCenter - dotGap
-        val dotY = rowTop + rowHeight / 2f
+        // 3. Best-of-5 Set Tally Vertical Bars (Pionowe grube kreski - Huge space saving & Mobile clarity)
+        val barW = 4.5f * scale
+        val barH = 20.0f * scale
+        val barGap = 3.5f * scale
+        val barR = 2.0f * scale
+        val barTop = rowTop + (rowHeight - barH) / 2f
+        val rightBarRight = setsBoxLeft - 8f * scale
+        val rightBarLeft = rightBarRight - barW
+        val midBarLeft = rightBarLeft - barGap - barW
+        val leftBarLeft = midBarLeft - barGap - barW
+        val barLefts = floatArrayOf(leftBarLeft, midBarLeft, rightBarLeft)
 
-        val dotCenters = floatArrayOf(leftDotCenter, midDotCenter, rightDotCenter)
-        setDotActivePaint.color = teamColor
+        setBarActivePaint.color = teamColor
 
         for (i in 0 until 3) {
-            val cx = dotCenters[i]
+            val bx = barLefts[i]
+            setBarRect.set(bx, barTop, bx + barW, barTop + barH)
             if (i < setsWon) {
-                canvas.drawCircle(cx, dotY, dotRadius, setDotActivePaint)
-                canvas.drawCircle(cx, dotY, dotRadius, setDotBorderPaint)
+                canvas.drawRoundRect(setBarRect, barR, barR, setBarActivePaint)
+                canvas.drawRoundRect(setBarRect, barR, barR, setBarBorderPaint)
             } else {
-                canvas.drawCircle(cx, dotY, dotRadius, setDotInactivePaint)
-                canvas.drawCircle(cx, dotY, dotRadius, setDotBorderPaint)
+                canvas.drawRoundRect(setBarRect, barR, barR, setBarInactivePaint)
+                canvas.drawRoundRect(setBarRect, barR, barR, setBarBorderPaint)
             }
         }
 
-        // 4. Team Name & Serve Indicator
+        // 4. Team Name (3-Letter Acronym or Full Name) & Serve Indicator
         val nameLeft = stripW + 10f * scale
-        val nameRightLimit = leftDotCenter - 10f * scale
+        val nameRightLimit = leftBarLeft - 8f * scale
         val availableW = nameRightLimit - nameLeft - (if (isServing) 22f * scale else 0f)
 
-        var displayName = teamName.trim().uppercase()
-        if (teamNamePaint.measureText(displayName) > availableW) {
-            while (displayName.isNotEmpty() && teamNamePaint.measureText("$displayName…") > availableW) {
+        val isUsingShort = useShortNames && shortName.isNotBlank()
+        val textPaint = if (isUsingShort) teamShortNamePaint else teamNamePaint
+
+        var displayName = (if (isUsingShort) shortName else teamName).trim().uppercase()
+        if (textPaint.measureText(displayName) > availableW) {
+            while (displayName.isNotEmpty() && textPaint.measureText("$displayName…") > availableW) {
                 displayName = displayName.dropLast(1)
             }
             displayName = "$displayName…"
         }
 
-        val textY = rowTop + rowHeight / 2f + 5.5f * scale
-        canvas.drawText(displayName, nameLeft, textY, teamNamePaint)
+        val textY = rowTop + rowHeight / 2f + (if (isUsingShort) 7.0f * scale else 5.5f * scale)
+        canvas.drawText(displayName, nameLeft, textY, textPaint)
 
         // Serve Indicator: Illuminated Gold Volleyball Ball
         if (isServing) {
-            val nameW = teamNamePaint.measureText(displayName)
+            val nameW = textPaint.measureText(displayName)
             val ballX = nameLeft + nameW + 11f * scale
             val ballY = rowTop + rowHeight / 2f
             canvas.drawCircle(ballX, ballY, 5.5f * scale, serveBallBorderPaint)

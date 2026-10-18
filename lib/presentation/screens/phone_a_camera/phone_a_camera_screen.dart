@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:volleylive/core/router/app_router.dart';
@@ -9,6 +10,7 @@ import 'package:volleylive/core/services/wakelock_service.dart';
 import 'package:volleylive/core/theme/app_theme.dart';
 import 'package:volleylive/domain/models/camera_config.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
+import 'package:volleylive/domain/models/match_session.dart';
 import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/providers/match_provider.dart';
@@ -599,6 +601,8 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                         timeoutTeam: match.timeoutCallingTeam,
                         showServeIndicator: streamer.showServeIndicator,
                         activeSpecialEvent: match.activeSpecialEvent,
+                        matchDuration: match.matchDuration,
+                        useThreeLetterAcronyms: streamer.useThreeLetterAcronyms,
                         animate: false,
                       ),
                     ),
@@ -625,68 +629,98 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                       showServeIndicator: streamer.showServeIndicator,
                       activeSpecialEvent: match.activeSpecialEvent,
                       matchDuration: match.matchDuration,
+                      useThreeLetterAcronyms: streamer.useThreeLetterAcronyms,
                     ),
                   ),
                 ),
 
-              // PŁYWAJĄCY PRZYCISK: EDYTUJ STYL TABLICY
-              if (camera.settings.isHudVisible)
-                Positioned(
-                  top: isLandscape ? 48 : 92,
-                  left: 0,
-                  right: 0,
-                  child: Center(
-                    child: InkWell(
-                      onTap: () {
-                        HapticFeedback.selectionClick();
-                        showModalBottomSheet(
-                          context: context,
-                          isScrollControlled: true,
-                          backgroundColor: Colors.transparent,
-                          builder: (_) => const ScoreboardCustomizerModal(),
-                        );
-                      },
-                      borderRadius: BorderRadius.circular(20),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.65),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: Colors.white24, width: 1),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Colors.black45,
-                              blurRadius: 8,
-                              offset: Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.edit_outlined, size: 14, color: AppTheme.cyanAccent),
-                            SizedBox(width: 6),
-                            Text(
-                              'Edytuj styl',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 0.4,
-                              ),
-                            ),
-                          ],
-                        ),
+              // DYSKRETNY WATERMARK / BADGE MARKI (CameraMobile4Sport • GoGoShawk)
+              Positioned(
+                bottom: isLandscape ? 16 : 88,
+                left: 16,
+                child: SafeArea(
+                  child: IgnorePointer(
+                    child: Opacity(
+                      opacity: 0.82,
+                      child: SvgPicture.asset(
+                        'assets/icons/camera_overlay_badge.svg',
+                        width: isLandscape ? 170 : 150,
                       ),
                     ),
                   ),
                 ),
+              ),
 
               // 6. KONTROLKI STEROWANIA KAMERĄ (ZOOM, EV, FOCUS, CZYSTY KADR)
               CameraControlsOverlay(
                 camera: camera,
                 isLandscape: isLandscape,
               ),
+
+              // 6B. TRYB SOLO: MINIMALISTYCZNA NAKŁADKA HUD PUNKTACJI W STREFACH KCIUKA
+              // (Swipe UP = +1 pkt, Swipe DOWN = -1 pkt, Tap = +1 pkt; środek kadru wolny dla Tap-to-Focus)
+              if (camera.settings.isHudVisible &&
+                  (p2p.currentRole == DeviceRole.singlePhoneAllInOne ||
+                      camera.connectionState != CameraConnectionState.connected))
+                _buildSoloScoreHudOverlay(context, match, isLandscape),
+
+              // 6C. PŁYWAJĄCY PRZYCISK: EDYTUJ STYL TABLICY (NA WIERZCHU WARSTW KONTROLEK)
+              if (camera.settings.isHudVisible)
+                Positioned(
+                  top: isLandscape ? 48 : 92,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          showModalBottomSheet(
+                            context: context,
+                            isScrollControlled: true,
+                            useRootNavigator: true,
+                            backgroundColor: Colors.transparent,
+                            builder: (_) => const ScoreboardCustomizerModal(),
+                          );
+                        },
+                        borderRadius: BorderRadius.circular(20),
+                        child: Container(
+                          constraints: const BoxConstraints(minHeight: 38),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.72),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.5), width: 1),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Colors.black45,
+                                blurRadius: 8,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.palette_outlined, size: 15, color: AppTheme.cyanAccent),
+                              SizedBox(width: 6),
+                              Text(
+                                'Tablica Studio',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.4,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
 
               // 7. DOLNY PASEK STEROWANIA I PRZYCISK TRANSMISJI
               if (camera.settings.isHudVisible)
@@ -1622,13 +1656,14 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
 
                 // SCOREBOARD STUDIO
                 _buildQuickIconButton(
-                  icon: Icons.style_outlined,
-                  color: Colors.white70,
+                  icon: Icons.palette_outlined,
+                  color: AppTheme.cyanAccent,
                   tooltip: 'Scoreboard Studio',
                   onTap: () => showModalBottomSheet(
                     context: context,
                     backgroundColor: Colors.transparent,
                     isScrollControlled: true,
+                    useRootNavigator: true,
                     builder: (_) => const ScoreboardCustomizerModal(),
                   ),
                 ),
@@ -1775,19 +1810,21 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
               context: context,
               backgroundColor: Colors.transparent,
               isScrollControlled: true,
+              useRootNavigator: true,
               builder: (_) => const VideoSettingsModal(),
             ),
           ),
           const SizedBox(width: 6),
 
           _buildQuickIconButton(
-            icon: Icons.style_outlined,
-            color: Colors.white70,
+            icon: Icons.palette_outlined,
+            color: AppTheme.cyanAccent,
             tooltip: 'Scoreboard Studio',
             onTap: () => showModalBottomSheet(
               context: context,
               backgroundColor: Colors.transparent,
               isScrollControlled: true,
+              useRootNavigator: true,
               builder: (_) => const ScoreboardCustomizerModal(),
             ),
           ),
@@ -1820,6 +1857,156 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Minimalistyczna nakładka HUD dla Trybu Solo (strefy kciuka na krawędziach kadru)
+  Widget _buildSoloScoreHudOverlay(
+    BuildContext context,
+    MatchProvider match,
+    bool isLandscape,
+  ) {
+    final session = match.session;
+    return Positioned(
+      bottom: isLandscape ? 78 : 148,
+      left: 14,
+      right: isLandscape ? 82 : 76, // Zostawia miejsce na boczny pasek CameraControlsOverlay po prawej
+      child: SafeArea(
+        top: false,
+        bottom: false,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            // Lewa strefa kciuka: Team A
+            _buildSoloThumbZoneCard(
+              label: session.teamAShortCode,
+              points: session.currentSetPointsA,
+              color: session.teamAColor,
+              isServing: session.currentServer == ServingTeam.teamA,
+              onAddPoint: () {
+                HapticFeedback.lightImpact();
+                match.addPointA(points: 1);
+                _scoreboardBurner.captureAndPush(force: true);
+              },
+              onSubtractPoint: () {
+                HapticFeedback.mediumImpact();
+                match.subtractPointA();
+                _scoreboardBurner.captureAndPush(force: true);
+              },
+              onToggleServe: () {
+                HapticFeedback.selectionClick();
+                match.toggleRotation();
+                _scoreboardBurner.captureAndPush(force: true);
+              },
+            ),
+
+            // Prawa strefa kciuka: Team B
+            _buildSoloThumbZoneCard(
+              label: session.teamBShortCode,
+              points: session.currentSetPointsB,
+              color: session.teamBColor,
+              isServing: session.currentServer == ServingTeam.teamB,
+              onAddPoint: () {
+                HapticFeedback.lightImpact();
+                match.addPointB(points: 1);
+                _scoreboardBurner.captureAndPush(force: true);
+              },
+              onSubtractPoint: () {
+                HapticFeedback.mediumImpact();
+                match.subtractPointB();
+                _scoreboardBurner.captureAndPush(force: true);
+              },
+              onToggleServe: () {
+                HapticFeedback.selectionClick();
+                match.toggleRotation();
+                _scoreboardBurner.captureAndPush(force: true);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSoloThumbZoneCard({
+    required String label,
+    required int points,
+    required Color color,
+    required bool isServing,
+    required VoidCallback onAddPoint,
+    required VoidCallback onSubtractPoint,
+    required VoidCallback onToggleServe,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onAddPoint,
+      onLongPress: onToggleServe,
+      onVerticalDragEnd: (details) {
+        final velocity = details.primaryVelocity ?? 0;
+        if (velocity < -150) {
+          onAddPoint(); // Swipe UP = +1 pkt
+        } else if (velocity > 150) {
+          onSubtractPoint(); // Swipe DOWN = -1 pkt
+        }
+      },
+      child: Container(
+        constraints: const BoxConstraints(minWidth: 74, minHeight: 68),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.52),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isServing ? color : color.withValues(alpha: 0.45),
+            width: isServing ? 2.0 : 1.2,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (isServing) ...[
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                  ),
+                  const SizedBox(width: 4),
+                ],
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    color: color,
+                    letterSpacing: 0.6,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              '$points',
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w900,
+                color: Colors.white,
+                height: 1.05,
+              ),
+            ),
+            const SizedBox(height: 2),
+            const Text(
+              '▲+1  ▼-1',
+              style: TextStyle(
+                fontSize: 8,
+                fontWeight: FontWeight.bold,
+                color: Colors.white54,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

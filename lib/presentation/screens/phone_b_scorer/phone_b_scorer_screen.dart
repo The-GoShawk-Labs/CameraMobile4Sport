@@ -677,7 +677,6 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                                       match,
                                       isOutdoor,
                                     ),
-                                    _buildBottomModernNavBar(context, streamer),
                                   ],
                                 ),
                               ),
@@ -695,6 +694,9 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                         ],
                       ),
                     ),
+
+                    // 5. STAŁY DOK DOLNY (ZAWSZE DOSTĘPNY W PORTRAIT, NIEZALEŻNIE OD SCROLLA)
+                    _buildBottomModernNavBar(context, streamer),
                   ],
                 )
               else
@@ -1904,6 +1906,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                         showServeIndicator: streamer.showServeIndicator,
                         activeSpecialEvent: match.activeSpecialEvent,
                         matchDuration: match.matchDuration,
+                        useThreeLetterAcronyms: streamer.useThreeLetterAcronyms,
                       ),
                     ),
                   ],
@@ -3451,13 +3454,56 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
             ),
           ),
 
-          // 4. Wskaźnik baterii
-          const Row(
+          // 4. Przycisk TABLICA STUDIO (w układzie poziomym)
+          InkWell(
+            onTap: () {
+              HapticFeedback.selectionClick();
+              _openScoreboardStudio(context);
+            },
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: AppTheme.cyanAccent.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.6)),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.palette_outlined, size: 14, color: AppTheme.cyanAccent),
+                  SizedBox(width: 5),
+                  Text(
+                    'TABLICA',
+                    style: TextStyle(
+                      color: AppTheme.cyanAccent,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // 5. Wskaźnik baterii i P2P Sync
+          Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.battery_5_bar, size: 14, color: AppTheme.greenLive),
-              SizedBox(width: 3),
-              Text(
+              Icon(
+                p2p.connectionState == CameraConnectionState.connected
+                    ? Icons.sync_rounded
+                    : Icons.sync_disabled_rounded,
+                size: 13,
+                color: p2p.connectionState == CameraConnectionState.connected
+                    ? AppTheme.cyanAccent
+                    : Colors.white38,
+              ),
+              const SizedBox(width: 6),
+              const Icon(Icons.battery_5_bar, size: 14, color: AppTheme.greenLive),
+              const SizedBox(width: 3),
+              const Text(
                 '85%',
                 style: TextStyle(fontSize: 10, color: Colors.white70, fontWeight: FontWeight.bold),
               ),
@@ -3607,6 +3653,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
+      useRootNavigator: true,
       builder: (_) => const CameraConnectionModal(),
     );
   }
@@ -3626,7 +3673,18 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
+      useRootNavigator: true,
       builder: (_) => const VideoSettingsModal(),
+    );
+  }
+
+  void _openScoreboardStudio(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      useRootNavigator: true,
+      builder: (_) => const ScoreboardCustomizerModal(),
     );
   }
 
@@ -3644,8 +3702,8 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
     ];
 
     return Container(
-      height: 48,
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: 6),
       decoration: const BoxDecoration(
         color: Color(0xFF090D15),
         border: Border(top: BorderSide(color: Colors.white12)),
@@ -3656,52 +3714,60 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
           final item = items[index];
           final isSelected = _selectedNavIndex == index;
 
-          return InkWell(
-            onTap: () {
-              setState(() {
-                _selectedNavIndex = index;
-              });
+          return Expanded(
+            child: InkWell(
+              onTap: () {
+                HapticFeedback.selectionClick();
+                setState(() {
+                  _selectedNavIndex = index;
+                });
 
-              if (index == 1) {
-                // PRZEJDŹ DO PEŁNEJ KAMERY
-                context.push(AppRouter.cameraRoute);
-              } else if (index == 2) {
-                // STATS
-                context.push(AppRouter.statisticianRoute);
-              } else if (index == 3) {
-                // PARAMETRY WIDEO
-                _openVideoSettings(context);
-              } else if (index == 4) {
-                // STREAM MODAL
-                _openStreamSettings(context);
-              } else if (index == 5) {
-                // SCOREBOARD STUDIO
-                showModalBottomSheet(
-                  context: context,
-                  backgroundColor: Colors.transparent,
-                  builder: (_) => const ScoreboardCustomizerModal(),
-                );
-              }
-            },
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  item['icon'] as IconData,
-                  size: 16,
-                  color: isSelected ? AppTheme.cyanAccent : Colors.white54,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  item['label'] as String,
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.5,
-                    color: isSelected ? Colors.white : AppTheme.textMuted,
+                if (index == 1) {
+                  // PRZEJDŹ DO PEŁNEJ KAMERY
+                  context.push(AppRouter.cameraRoute);
+                } else if (index == 2) {
+                  // STATS
+                  context.push(AppRouter.statisticianRoute);
+                } else if (index == 3) {
+                  // PARAMETRY WIDEO
+                  _openVideoSettings(context);
+                } else if (index == 4) {
+                  // STREAM MODAL
+                  _openStreamSettings(context);
+                } else if (index == 5) {
+                  // SCOREBOARD STUDIO
+                  _openScoreboardStudio(context);
+                }
+              },
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    item['icon'] as IconData,
+                    size: 16,
+                    color: isSelected ? AppTheme.cyanAccent : Colors.white54,
                   ),
-                ),
-              ],
+                  const SizedBox(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        item['label'] as String,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.3,
+                          color: isSelected ? Colors.white : AppTheme.textMuted,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           );
         }),

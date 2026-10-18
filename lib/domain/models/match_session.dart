@@ -117,6 +117,8 @@ class MatchSession {
   final MatchSport sport;
   final String teamA;
   final String teamB;
+  final String? teamAShort;
+  final String? teamBShort;
   final Color teamAColor;
   final Color teamBColor;
   final int setsA;
@@ -143,6 +145,8 @@ class MatchSession {
     this.sport = MatchSport.volleyball,
     required this.teamA,
     required this.teamB,
+    this.teamAShort,
+    this.teamBShort,
     this.teamAColor = const Color(0xFF00E5FF),
     this.teamBColor = const Color(0xFFFFAB00),
     this.setsA = 0,
@@ -166,12 +170,41 @@ class MatchSession {
 
   String get periodDisplay => '${sport.periodLabel} $currentSetNumber';
 
+  String get teamAShortCode {
+    if (teamAShort != null && teamAShort!.trim().isNotEmpty) {
+      return teamAShort!.trim().toUpperCase();
+    }
+    return deriveShortCode(teamA);
+  }
+
+  String get teamBShortCode {
+    if (teamBShort != null && teamBShort!.trim().isNotEmpty) {
+      return teamBShort!.trim().toUpperCase();
+    }
+    return deriveShortCode(teamB);
+  }
+
+  static String deriveShortCode(String name) {
+    final clean = name.trim().toUpperCase();
+    if (clean.isEmpty) return '---';
+    final words = clean.split(RegExp(r'\s+'));
+    if (words.length >= 2) {
+      if (words[0].length == 3) return words[0];
+      if (words[1].length >= 3) return words[1].substring(0, 3);
+      final initials = words.map((w) => w.isNotEmpty ? w[0] : '').join();
+      if (initials.length >= 3) return initials.substring(0, 3);
+    }
+    return clean.length <= 3 ? clean : clean.substring(0, 3);
+  }
+
   MatchSession copyWith({
     String? id,
     DateTime? createdAt,
     MatchSport? sport,
     String? teamA,
     String? teamB,
+    String? teamAShort,
+    String? teamBShort,
     Color? teamAColor,
     Color? teamBColor,
     int? setsA,
@@ -198,6 +231,8 @@ class MatchSession {
       sport: sport ?? this.sport,
       teamA: teamA ?? this.teamA,
       teamB: teamB ?? this.teamB,
+      teamAShort: teamAShort ?? this.teamAShort,
+      teamBShort: teamBShort ?? this.teamBShort,
       teamAColor: teamAColor ?? this.teamAColor,
       teamBColor: teamBColor ?? this.teamBColor,
       setsA: setsA ?? this.setsA,
@@ -226,6 +261,8 @@ class MatchSession {
     'sport': sport.name,
     'teamA': teamA,
     'teamB': teamB,
+    if (teamAShort != null) 'teamAShort': teamAShort,
+    if (teamBShort != null) 'teamBShort': teamBShort,
     'teamAColor': teamAColor.toARGB32(),
     'teamBColor': teamBColor.toARGB32(),
     'setsA': setsA,
@@ -253,6 +290,8 @@ class MatchSession {
     sport: MatchSport.values.firstWhere((e) => e.name == json['sport'], orElse: () => MatchSport.volleyball),
     teamA: json['teamA'] as String,
     teamB: json['teamB'] as String,
+    teamAShort: json['teamAShort'] as String?,
+    teamBShort: json['teamBShort'] as String?,
     teamAColor: Color(json['teamAColor'] as int),
     teamBColor: Color(json['teamBColor'] as int),
     setsA: json['setsA'] as int,
