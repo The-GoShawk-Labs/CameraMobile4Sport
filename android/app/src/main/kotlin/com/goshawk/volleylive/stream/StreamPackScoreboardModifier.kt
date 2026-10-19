@@ -35,7 +35,7 @@ class StreamPackScoreboardModifier(
 
     @Volatile
     private var anchorPosition = "topLeft"
-    private var currentAspectRatio = 2.8f
+    private var currentAspectRatio = 4.74f
 
     // Telemetria wydajnościowa klatki
     private var frameCount = 0L
@@ -117,7 +117,7 @@ class StreamPackScoreboardModifier(
         GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, renderer.bitmap, 0)
         allocatedTexWidth = renderer.bitmap.width
         allocatedTexHeight = renderer.bitmap.height
-        val ratio = if (renderer.overlayHeight > 0) renderer.overlayWidth.toFloat() / renderer.overlayHeight.toFloat() else 2.8f
+        val ratio = if (renderer.overlayHeight > 0) renderer.overlayWidth.toFloat() / renderer.overlayHeight.toFloat() else 4.74f
         updateQuadGeometry(ratio)
     }
 
@@ -153,7 +153,7 @@ class StreamPackScoreboardModifier(
 
     private fun updateQuadGeometry(
         aspectRatio: Float,
-        targetWidthFraction: Float = 0.224f // ~22.4% of frame width (430 / 1920)
+        targetWidthFraction: Float = 0.1875f // ~18.75% of frame width (360 / 1920)
     ) {
         currentAspectRatio = aspectRatio
         val frameAspect = frameWidth.toFloat() / frameHeight.toFloat()
@@ -243,7 +243,7 @@ class StreamPackScoreboardModifier(
                 allocatedTexWidth = bmp.width
                 allocatedTexHeight = bmp.height
             }
-            val ratio = if (bmp.height > 0) bmp.width.toFloat() / bmp.height.toFloat() else 2.8f
+            val ratio = if (bmp.height > 0) bmp.width.toFloat() / bmp.height.toFloat() else 4.74f
             updateQuadGeometry(ratio)
         } else if (renderer.renderIfDirty()) {
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)

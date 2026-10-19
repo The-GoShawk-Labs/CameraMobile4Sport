@@ -111,6 +111,26 @@ class MatchSet {
   );
 }
 
+/// Model drużyny z polem shortCode i automatyczną generacją 3-literowego skrótu.
+class MatchTeam {
+  final String name;
+  final String? _shortCode;
+  final Color color;
+
+  const MatchTeam({
+    required this.name,
+    String? shortCode,
+    this.color = const Color(0xFF00B4D8),
+  }) : _shortCode = shortCode;
+
+  String get shortCode {
+    if (_shortCode != null && _shortCode.trim().isNotEmpty) {
+      return _shortCode.trim().toUpperCase();
+    }
+    return MatchSession.deriveShortCode(name);
+  }
+}
+
 class MatchSession {
   final String id;
   final DateTime createdAt;
@@ -170,19 +190,11 @@ class MatchSession {
 
   String get periodDisplay => '${sport.periodLabel} $currentSetNumber';
 
-  String get teamAShortCode {
-    if (teamAShort != null && teamAShort!.trim().isNotEmpty) {
-      return teamAShort!.trim().toUpperCase();
-    }
-    return deriveShortCode(teamA);
-  }
+  MatchTeam get teamAInfo => MatchTeam(name: teamA, shortCode: teamAShort, color: teamAColor);
+  MatchTeam get teamBInfo => MatchTeam(name: teamB, shortCode: teamBShort, color: teamBColor);
 
-  String get teamBShortCode {
-    if (teamBShort != null && teamBShort!.trim().isNotEmpty) {
-      return teamBShort!.trim().toUpperCase();
-    }
-    return deriveShortCode(teamB);
-  }
+  String get teamAShortCode => teamAInfo.shortCode;
+  String get teamBShortCode => teamBInfo.shortCode;
 
   static String deriveShortCode(String name) {
     final clean = name.trim().toUpperCase();

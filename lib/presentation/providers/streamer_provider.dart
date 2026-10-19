@@ -103,6 +103,7 @@ class StreamerProvider extends ChangeNotifier {
       final loaded = await StreamConfig.loadFromPreferences();
       _config = loaded;
       _destination = loaded.toStreamingDestination();
+      _scoreboardStyle = loaded.scoreboardStyle;
       if (_config.credentialReference.isNotEmpty) {
         _maskedStreamKey = SecureStorageService.maskCredential(
           _config.credentialReference,
@@ -166,6 +167,12 @@ class StreamerProvider extends ChangeNotifier {
 
   void setScoreboardStyle(ScoreboardThemeStyle style) {
     _scoreboardStyle = style;
+    _config = _config.copyWith(scoreboardStyle: style);
+    unawaited(_config.saveToPreferences());
+    _streamingService.setScoreboardStyle(style);
+    if (_currentSession != null) {
+      updateMatchSession(_currentSession!);
+    }
     notifyListeners();
   }
 
@@ -228,7 +235,9 @@ class StreamerProvider extends ChangeNotifier {
           _streamingService.updateScoreboard(
             _currentSession!,
             anchorPosition: _config.anchorPosition,
+            matchClock: _lastMatchClock,
             useShortNames: _useThreeLetterAcronyms,
+            style: _scoreboardStyle,
           );
         }
         if (_programRecState == RecordingState.recording && _currentSession != null) {
@@ -241,15 +250,26 @@ class StreamerProvider extends ChangeNotifier {
     });
   }
 
-  void updateMatchSession(MatchSession session, {String? eventTag}) {
+  String _lastMatchClock = '';
+
+  void updateMatchSession(
+    MatchSession session, {
+    String? eventTag,
+    String? matchClock,
+  }) {
     _currentSession = session;
+    if (matchClock != null && matchClock.isNotEmpty) {
+      _lastMatchClock = matchClock;
+    }
     if (_streamingState == StreamingState.live || _streamingState == StreamingState.connecting) {
       _streamingService.updateScoreboard(
         session,
         eventTag: eventTag,
         toastMessage: eventTag,
         anchorPosition: _config.anchorPosition,
+        matchClock: _lastMatchClock,
         useShortNames: _useThreeLetterAcronyms,
+        style: _scoreboardStyle,
       );
     }
   }

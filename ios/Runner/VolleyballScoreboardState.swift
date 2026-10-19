@@ -11,6 +11,7 @@ struct VolleyballScoreboardState: Equatable {
     let servingTeam: String
     let eventTag: String
     let toastMessage: String
+    let style: String
 
     static let empty = VolleyballScoreboardState(
         teamA: "TEAM A",
@@ -22,6 +23,7 @@ struct VolleyballScoreboardState: Equatable {
         setsB: 0,
         servingTeam: "NONE",
         eventTag: "",
-        toastMessage: ""
+        toastMessage: "",
+        style: "tvProBroadcast"
     )
 }

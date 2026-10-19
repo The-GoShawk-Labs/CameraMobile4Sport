@@ -69,6 +69,8 @@ class RootEncoderLiveStreamService(
     private var currentGopSeconds = 2.0f
     @Volatile
     private var currentAnchorPosition = "topLeft"
+    @Volatile
+    private var currentScoreboardStyle = "tvProBroadcast"
 
     private var renderer = VolleyballScoreboardBitmapRenderer(1920, 1080)
     private var lastScoreboardData = VolleyballScoreboardData()
@@ -378,17 +380,47 @@ class RootEncoderLiveStreamService(
             currentAnchorPosition = resolvedAnchor
         }
 
-        val normalizedData = data.copy(anchorPosition = currentAnchorPosition)
+        val resolvedStyle = if (data.style.isNotBlank()) data.style else currentScoreboardStyle
+        val styleChanged = resolvedStyle != currentScoreboardStyle
+        if (styleChanged) {
+            currentScoreboardStyle = resolvedStyle
+        }
+
+        val resolvedClock = if (data.matchClock.isNotBlank()) data.matchClock else lastScoreboardData.matchClock
+        val normalizedData = data.copy(
+            anchorPosition = currentAnchorPosition,
+            style = currentScoreboardStyle,
+            matchClock = resolvedClock
+        )
         lastScoreboardData = normalizedData
         renderer.updateData(normalizedData)
 
         val filter = scoreboardFilter ?: return
-        val dirtySnapshot = renderer.renderAndSnapshotIfDirty()
+        val dirtySnapshot = if (styleChanged) renderer.forceRenderAndSnapshot() else renderer.renderAndSnapshotIfDirty()
         if (dirtySnapshot != null) {
             filter.setImage(dirtySnapshot)
             applyAnchorPositionAndScale(filter, currentAnchorPosition)
         } else if (anchorChanged) {
             applyAnchorPositionAndScale(filter, currentAnchorPosition)
+        }
+    }
+
+    /**
+     * Dynamically updates the scoreboard theme style and refreshes the OpenGL texture in-flight
+     * without interrupting RTMP streaming.
+     */
+    @Synchronized
+    fun setScoreboardStyle(style: String) {
+        val cleanStyle = style.trim().ifEmpty { "tvProBroadcast" }
+        if (cleanStyle != currentScoreboardStyle) {
+            currentScoreboardStyle = cleanStyle
+            lastScoreboardData = lastScoreboardData.copy(style = cleanStyle)
+            renderer.updateData(lastScoreboardData)
+            scoreboardFilter?.let { filter ->
+                val snapshot = renderer.forceRenderAndSnapshot()
+                filter.setImage(snapshot)
+                applyAnchorPositionAndScale(filter, currentAnchorPosition)
+            }
         }
     }
 

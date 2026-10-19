@@ -110,6 +110,9 @@ class NativeStreamBurnerBridge {
   VolleyballScoreboardState? _lastState;
   Map<String, dynamic>? _lastDataMap;
   String _lastAnchorPosition = ScoreboardAnchorPosition.topLeft.name;
+  String _lastStyle = ScoreboardThemeStyle.tvProBroadcast.name;
+  String get lastStyle => _lastStyle;
+  String _lastMatchClock = '';
   StreamSubscription? _eventSubscription;
 
   // Auto-reconnect retry configuration
@@ -392,6 +395,13 @@ class NativeStreamBurnerBridge {
   }) async {
     final merged = Map<String, dynamic>.from(data);
     merged['anchorPosition'] ??= _lastAnchorPosition;
+    merged['style'] ??= _lastStyle;
+    merged['scoreboardStyle'] ??= _lastStyle;
+    if (merged['matchClock'] != null && (merged['matchClock'] as String).isNotEmpty) {
+      _lastMatchClock = merged['matchClock'] as String;
+    } else if (_lastMatchClock.isNotEmpty) {
+      merged['matchClock'] = _lastMatchClock;
+    }
 
     if (!force && _lastDataMap != null && mapEquals(_lastDataMap, merged)) {
       return;
@@ -415,19 +425,8 @@ class NativeStreamBurnerBridge {
         : ScoreboardAnchorPosition.topLeft.name;
     _lastAnchorPosition = cleanPos;
     if (_lastState != null) {
-      _lastState = VolleyballScoreboardState(
-        teamA: _lastState!.teamA,
-        teamB: _lastState!.teamB,
-        scoreA: _lastState!.scoreA,
-        scoreB: _lastState!.scoreB,
-        currentSet: _lastState!.currentSet,
-        setsA: _lastState!.setsA,
-        setsB: _lastState!.setsB,
-        servingTeam: _lastState!.servingTeam,
-        eventTag: _lastState!.eventTag,
-        toastMessage: _lastState!.toastMessage,
+      _lastState = _lastState!.copyWith(
         anchorPosition: ScoreboardAnchorPosition.fromName(cleanPos),
-        matchClock: _lastState!.matchClock,
       );
     }
     try {
@@ -438,6 +437,33 @@ class NativeStreamBurnerBridge {
       debugPrint(
         '[NativeStreamBurnerBridge] setScoreboardPosition error: ${e.message}',
       );
+    }
+  }
+
+  /// Sets active scoreboard theme style in native OpenGL overlay without interrupting stream
+  Future<void> setScoreboardStyle(String style) async {
+    final cleanStyle = style.trim().isNotEmpty
+        ? style.trim()
+        : ScoreboardThemeStyle.tvProBroadcast.name;
+    _lastStyle = cleanStyle;
+    final resolvedEnum = ScoreboardThemeStyle.values.firstWhere(
+      (e) => e.name == cleanStyle,
+      orElse: () => ScoreboardThemeStyle.tvProBroadcast,
+    );
+    if (_lastState != null) {
+      _lastState = _lastState!.copyWith(style: resolvedEnum);
+      await updateScoreboard(_lastState!, force: true);
+    } else if (_lastDataMap != null) {
+      _lastDataMap!['style'] = cleanStyle;
+      _lastDataMap!['scoreboardStyle'] = cleanStyle;
+      await updateScoreboardData(_lastDataMap!, force: true);
+    }
+    try {
+      await _methodChannel.invokeMethod('setScoreboardStyle', {
+        'style': cleanStyle,
+      });
+    } on PlatformException catch (e) {
+      debugPrint('[NativeStreamBurnerBridge] setScoreboardStyle error: ${e.message}');
     }
   }
 
@@ -569,8 +595,19 @@ class NativeStreamBurnerBridge {
     final finalFps = (config?.fps ?? fps).clamp(15, 60);
     final finalBitrate = config?.videoBitrate ?? videoBitrateBps;
 
+    final effectiveStyle = initialState.style.name != ScoreboardThemeStyle.tvProBroadcast.name
+        ? initialState.style
+        : (config != null
+            ? config.scoreboardStyle
+            : ScoreboardThemeStyle.values.firstWhere(
+                (s) => s.name == _lastStyle,
+                orElse: () => ScoreboardThemeStyle.tvProBroadcast,
+              ));
+    _lastStyle = effectiveStyle.name;
     final map = initialState.toMap();
     map['anchorPosition'] = _lastAnchorPosition;
+    map['style'] = effectiveStyle.name;
+    map['scoreboardStyle'] = effectiveStyle.name;
     _lastDataMap = Map<String, dynamic>.from(map);
 
     return startStream(
@@ -589,10 +626,33 @@ class NativeStreamBurnerBridge {
     VolleyballScoreboardState state, {
     bool force = false,
   }) async {
-    if (!force && _lastState == state) return;
-    _lastState = state;
-    final map = state.toMap();
-    map['anchorPosition'] = state.anchorPosition.name;
+    String effectiveClock = state.matchClock;
+    if (effectiveClock.isNotEmpty) {
+      _lastMatchClock = effectiveClock;
+    } else if (_lastMatchClock.isNotEmpty) {
+      effectiveClock = _lastMatchClock;
+    }
+
+    final effectiveStyle = state.style.name != ScoreboardThemeStyle.tvProBroadcast.name
+        ? state.style
+        : ScoreboardThemeStyle.values.firstWhere(
+            (s) => s.name == _lastStyle,
+            orElse: () => ScoreboardThemeStyle.tvProBroadcast,
+          );
+    var effectiveState = state.style == effectiveStyle
+        ? state
+        : state.copyWith(style: effectiveStyle);
+    if (effectiveState.matchClock != effectiveClock) {
+      effectiveState = effectiveState.copyWith(matchClock: effectiveClock);
+    }
+
+    if (!force && _lastState == effectiveState) return;
+    _lastState = effectiveState;
+    _lastStyle = effectiveStyle.name;
+    final map = effectiveState.toMap();
+    map['anchorPosition'] = effectiveState.anchorPosition.name;
+    map['style'] = effectiveStyle.name;
+    map['scoreboardStyle'] = effectiveStyle.name;
     await updateScoreboardData(map, force: force);
   }
 
@@ -603,8 +663,8 @@ class NativeStreamBurnerBridge {
     String? anchorPosition,
   }) async {
     if (bytes.isEmpty) return;
-    final safeWidth = width > 0 ? width : 430;
-    final safeHeight = height > 0 ? height : 154;
+    final safeWidth = width > 0 ? width : 360;
+    final safeHeight = height > 0 ? height : 76;
     final safeAnchor =
         (anchorPosition != null && anchorPosition.trim().isNotEmpty)
         ? anchorPosition.trim()

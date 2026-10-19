@@ -39,8 +39,10 @@ abstract class IStreamingService {
     ScoreboardAnchorPosition? anchorPosition,
     String matchClock = '',
     bool useShortNames = false,
+    ScoreboardThemeStyle? style,
   });
   void setScoreboardPosition(ScoreboardAnchorPosition position);
+  void setScoreboardStyle(ScoreboardThemeStyle style);
 }
 
 /// Serwis nadawania RTMP/RTMPS oparty wyłącznie o sprzętowy enkoder RootEncoder
@@ -164,6 +166,7 @@ class StreamingService implements IStreamingService {
         ? VolleyballScoreboardState.fromMatchSession(
             matchSession,
             anchorPosition: config.anchorPosition,
+            style: config.scoreboardStyle,
           )
         : VolleyballScoreboardState(
             teamA: 'TEAM A',
@@ -174,9 +177,11 @@ class StreamingService implements IStreamingService {
             setsA: 0,
             setsB: 0,
             anchorPosition: config.anchorPosition,
+            style: config.scoreboardStyle,
           );
 
     await _nativeBridge.setScoreboardPosition(config.anchorPosition.name);
+    await _nativeBridge.setScoreboardStyle(config.scoreboardStyle.name);
 
     final fullRtmpUrl = VideoOverlayBurnerService.buildRtmpEndpoint(
       config.serverUrl,
@@ -205,6 +210,8 @@ class StreamingService implements IStreamingService {
     return false;
   }
 
+  String _lastMatchClock = '';
+
   @override
   void updateScoreboard(
     MatchSession matchSession, {
@@ -213,7 +220,13 @@ class StreamingService implements IStreamingService {
     ScoreboardAnchorPosition? anchorPosition,
     String matchClock = '',
     bool useShortNames = false,
+    ScoreboardThemeStyle? style,
   }) {
+    if (matchClock.isNotEmpty) {
+      _lastMatchClock = matchClock;
+    } else if (_lastMatchClock.isNotEmpty) {
+      matchClock = _lastMatchClock;
+    }
     final state = VolleyballScoreboardState.fromMatchSession(
       matchSession,
       eventTag: eventTag,
@@ -221,6 +234,7 @@ class StreamingService implements IStreamingService {
       anchorPosition: anchorPosition ?? _activeConfig.anchorPosition,
       matchClock: matchClock,
       useShortNames: useShortNames,
+      style: style ?? _activeConfig.scoreboardStyle,
     );
     _nativeBridge.updateScoreboard(state);
   }
@@ -229,6 +243,12 @@ class StreamingService implements IStreamingService {
   void setScoreboardPosition(ScoreboardAnchorPosition position) {
     _activeConfig = _activeConfig.copyWith(anchorPosition: position);
     _nativeBridge.setScoreboardPosition(position.name);
+  }
+
+  @override
+  void setScoreboardStyle(ScoreboardThemeStyle style) {
+    _activeConfig = _activeConfig.copyWith(scoreboardStyle: style);
+    _nativeBridge.setScoreboardStyle(style.name);
   }
 
   @override

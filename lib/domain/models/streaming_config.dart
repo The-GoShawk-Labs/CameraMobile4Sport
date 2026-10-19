@@ -17,6 +17,7 @@ enum StreamingPlatformType {
 
 enum ScoreboardThemeStyle {
   tvProBroadcast('TV Pro Broadcast'),
+  broadcastCompact3Letter('Broadcast Pro Compact (3-letter)'),
   cyberGlow('Cyber Glow Neon'),
   minimalist('Minimalist Clean'),
   beachVolley('Beach Volley 2v2');
@@ -147,6 +148,7 @@ class StreamConfig {
   static const String prefKeyLocalRecording = 'stream_config_local_recording';
   static const String prefKeyDirectStreamKey = 'stream_config_direct_stream_key';
   static const String prefKeyScoreboardAnchor = 'stream_config_scoreboard_anchor';
+  static const String prefKeyScoreboardStyle = 'stream_config_scoreboard_style';
 
   final String serverUrl;
   final String streamKey;
@@ -162,6 +164,7 @@ class StreamConfig {
   final int audioChannels; // 2 (Stereo)
   final bool isLocalProgramRecordingEnabled;
   final ScoreboardAnchorPosition anchorPosition;
+  final ScoreboardThemeStyle scoreboardStyle;
 
   const StreamConfig({
     this.serverUrl = 'rtmps://a.rtmps.youtube.com/live2',
@@ -178,6 +181,7 @@ class StreamConfig {
     this.audioChannels = 2,
     this.isLocalProgramRecordingEnabled = true,
     this.anchorPosition = ScoreboardAnchorPosition.topLeft,
+    this.scoreboardStyle = ScoreboardThemeStyle.tvProBroadcast,
   });
 
   /// Factory creating configuration directly from preset defaults
@@ -189,6 +193,7 @@ class StreamConfig {
     bool isLocalProgramRecordingEnabled = true,
     int? customVideoBitrateKbps,
     ScoreboardAnchorPosition anchorPosition = ScoreboardAnchorPosition.topLeft,
+    ScoreboardThemeStyle scoreboardStyle = ScoreboardThemeStyle.tvProBroadcast,
   }) {
     final vBitrate = (customVideoBitrateKbps ?? preset.videoBitrateKbps) * 1000;
     return StreamConfig(
@@ -206,6 +211,7 @@ class StreamConfig {
       audioChannels: 2,
       isLocalProgramRecordingEnabled: isLocalProgramRecordingEnabled,
       anchorPosition: anchorPosition,
+      scoreboardStyle: scoreboardStyle,
     );
   }
 
@@ -250,6 +256,7 @@ class StreamConfig {
     int? audioChannels,
     bool? isLocalProgramRecordingEnabled,
     ScoreboardAnchorPosition? anchorPosition,
+    ScoreboardThemeStyle? scoreboardStyle,
   }) {
     return StreamConfig(
       serverUrl: serverUrl ?? this.serverUrl,
@@ -267,6 +274,7 @@ class StreamConfig {
       isLocalProgramRecordingEnabled:
           isLocalProgramRecordingEnabled ?? this.isLocalProgramRecordingEnabled,
       anchorPosition: anchorPosition ?? this.anchorPosition,
+      scoreboardStyle: scoreboardStyle ?? this.scoreboardStyle,
     );
   }
 
@@ -322,11 +330,23 @@ class StreamConfig {
     'audioChannels': audioChannels,
     'isLocalProgramRecordingEnabled': isLocalProgramRecordingEnabled,
     'anchorPosition': anchorPosition.name,
+    'scoreboardStyle': scoreboardStyle.name,
     'profile': 'high', // AVCProfileHigh
     'bitrateMode': 'CBR',
   };
 
   factory StreamConfig.fromMap(Map<String, dynamic> map) {
+    ScoreboardThemeStyle style = ScoreboardThemeStyle.tvProBroadcast;
+    final styleStr = (map['scoreboardStyle'] as String?) ?? (map['style'] as String?);
+    if (styleStr != null) {
+      for (final s in ScoreboardThemeStyle.values) {
+        if (s.name == styleStr) {
+          style = s;
+          break;
+        }
+      }
+    }
+
     return StreamConfig(
       serverUrl: (map['serverUrl'] as String?) ?? 'rtmps://a.rtmps.youtube.com/live2',
       streamKey: (map['streamKey'] as String?) ?? '',
@@ -343,6 +363,7 @@ class StreamConfig {
       isLocalProgramRecordingEnabled:
           (map['isLocalProgramRecordingEnabled'] as bool?) ?? true,
       anchorPosition: ScoreboardAnchorPosition.fromName(map['anchorPosition'] as String?),
+      scoreboardStyle: style,
     );
   }
 
@@ -366,6 +387,7 @@ class StreamConfig {
     await prefs.setInt(prefKeyAudioSampleRate, audioSampleRate);
     await prefs.setBool(prefKeyLocalRecording, isLocalProgramRecordingEnabled);
     await prefs.setString(prefKeyScoreboardAnchor, anchorPosition.name);
+    await prefs.setString(prefKeyScoreboardStyle, scoreboardStyle.name);
   }
 
   /// Restores configuration from SharedPreferences
@@ -387,6 +409,13 @@ class StreamConfig {
     final localRec = prefs.getBool(prefKeyLocalRecording) ?? true;
     final anchorStr = prefs.getString(prefKeyScoreboardAnchor);
     final anchorPos = ScoreboardAnchorPosition.fromName(anchorStr);
+    final styleStr = prefs.getString(prefKeyScoreboardStyle);
+    final style = styleStr != null
+        ? ScoreboardThemeStyle.values.firstWhere(
+            (s) => s.name == styleStr,
+            orElse: () => ScoreboardThemeStyle.tvProBroadcast,
+          )
+        : ScoreboardThemeStyle.tvProBroadcast;
 
     return StreamConfig(
       serverUrl: serverUrl,
@@ -403,6 +432,7 @@ class StreamConfig {
       audioChannels: 2,
       isLocalProgramRecordingEnabled: localRec,
       anchorPosition: anchorPos,
+      scoreboardStyle: style,
     );
   }
 

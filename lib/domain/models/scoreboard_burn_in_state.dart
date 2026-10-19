@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:volleylive/domain/models/match_recording_metadata.dart';
 import 'package:volleylive/domain/models/match_session.dart';
+import 'package:volleylive/domain/models/streaming_config.dart';
 
 /// Siatka 6 pozycji kotwiczenia tablicy wyników wewnątrz aktywnego kadru meczu.
 enum ScoreboardAnchorPosition {
@@ -128,6 +129,7 @@ class VolleyballScoreboardState {
   final String? teamAShort;
   final String? teamBShort;
   final bool useShortNames;
+  final ScoreboardThemeStyle style;
 
   const VolleyballScoreboardState({
     required this.teamA,
@@ -147,7 +149,60 @@ class VolleyballScoreboardState {
     this.teamAShort,
     this.teamBShort,
     this.useShortNames = false,
+    this.style = ScoreboardThemeStyle.tvProBroadcast,
   });
+
+  String get teamAShortCode =>
+      (teamAShort != null && teamAShort!.trim().isNotEmpty)
+          ? teamAShort!.trim().toUpperCase()
+          : MatchSession.deriveShortCode(teamA);
+
+  String get teamBShortCode =>
+      (teamBShort != null && teamBShort!.trim().isNotEmpty)
+          ? teamBShort!.trim().toUpperCase()
+          : MatchSession.deriveShortCode(teamB);
+
+  VolleyballScoreboardState copyWith({
+    String? teamA,
+    String? teamB,
+    int? scoreA,
+    int? scoreB,
+    int? currentSet,
+    int? setsA,
+    int? setsB,
+    String? servingTeam,
+    String? eventTag,
+    String? toastMessage,
+    ScoreboardAnchorPosition? anchorPosition,
+    String? matchClock,
+    int? colorA,
+    int? colorB,
+    String? teamAShort,
+    String? teamBShort,
+    bool? useShortNames,
+    ScoreboardThemeStyle? style,
+  }) {
+    return VolleyballScoreboardState(
+      teamA: teamA ?? this.teamA,
+      teamB: teamB ?? this.teamB,
+      scoreA: scoreA ?? this.scoreA,
+      scoreB: scoreB ?? this.scoreB,
+      currentSet: currentSet ?? this.currentSet,
+      setsA: setsA ?? this.setsA,
+      setsB: setsB ?? this.setsB,
+      servingTeam: servingTeam ?? this.servingTeam,
+      eventTag: eventTag ?? this.eventTag,
+      toastMessage: toastMessage ?? this.toastMessage,
+      anchorPosition: anchorPosition ?? this.anchorPosition,
+      matchClock: matchClock ?? this.matchClock,
+      colorA: colorA ?? this.colorA,
+      colorB: colorB ?? this.colorB,
+      teamAShort: teamAShort ?? this.teamAShort,
+      teamBShort: teamBShort ?? this.teamBShort,
+      useShortNames: useShortNames ?? this.useShortNames,
+      style: style ?? this.style,
+    );
+  }
 
   /// Factory creating state directly from the app's [MatchSession]
   factory VolleyballScoreboardState.fromMatchSession(
@@ -157,6 +212,7 @@ class VolleyballScoreboardState {
     ScoreboardAnchorPosition anchorPosition = ScoreboardAnchorPosition.topLeft,
     String matchClock = '',
     bool useShortNames = false,
+    ScoreboardThemeStyle style = ScoreboardThemeStyle.tvProBroadcast,
   }) {
     String serverStr = 'NONE';
     if (session.currentServer == ServingTeam.teamA) {
@@ -189,6 +245,7 @@ class VolleyballScoreboardState {
       teamAShort: session.teamAShortCode,
       teamBShort: session.teamBShortCode,
       useShortNames: useShortNames,
+      style: style,
     );
   }
 
@@ -210,6 +267,8 @@ class VolleyballScoreboardState {
     'toastMessage': toastMessage ?? eventTag ?? '',
     'anchorPosition': anchorPosition.name,
     'matchClock': matchClock,
+    'style': style.name,
+    'scoreboardStyle': style.name,
     if (colorA != null) 'colorA': colorA,
     if (colorB != null) 'colorB': colorB,
   };
@@ -221,6 +280,17 @@ class VolleyballScoreboardState {
       for (final p in ScoreboardAnchorPosition.values) {
         if (p.name == anchorStr) {
           anchor = p;
+          break;
+        }
+      }
+    }
+
+    ScoreboardThemeStyle themeStyle = ScoreboardThemeStyle.tvProBroadcast;
+    final styleStr = (map['style'] as String?) ?? (map['scoreboardStyle'] as String?);
+    if (styleStr != null) {
+      for (final s in ScoreboardThemeStyle.values) {
+        if (s.name == styleStr) {
+          themeStyle = s;
           break;
         }
       }
@@ -244,6 +314,7 @@ class VolleyballScoreboardState {
       teamAShort: (map['teamAShort'] as String?)?.isNotEmpty == true ? map['teamAShort'] as String : null,
       teamBShort: (map['teamBShort'] as String?)?.isNotEmpty == true ? map['teamBShort'] as String : null,
       useShortNames: map['useShortNames'] as bool? ?? false,
+      style: themeStyle,
     );
   }
 
@@ -267,7 +338,8 @@ class VolleyballScoreboardState {
           colorB == other.colorB &&
           teamAShort == other.teamAShort &&
           teamBShort == other.teamBShort &&
-          useShortNames == other.useShortNames;
+          useShortNames == other.useShortNames &&
+          style == other.style;
 
   @override
   int get hashCode => Object.hash(
@@ -288,5 +360,6 @@ class VolleyballScoreboardState {
     teamAShort,
     teamBShort,
     useShortNames,
+    style,
   );
 }

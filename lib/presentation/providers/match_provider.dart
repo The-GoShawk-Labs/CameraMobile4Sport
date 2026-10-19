@@ -27,9 +27,10 @@ class MatchProvider extends ChangeNotifier {
   String? _activeSpecialEvent;
   bool _isOutdoorModeEnabled = false;
   bool _isScreenLocked = false;
-  Duration _matchDuration = Duration.zero;
+  final Stopwatch _stopwatch = Stopwatch();
+  Duration _accumulatedDuration = Duration.zero;
   bool _isMatchTimerRunning = false;
-  Timer? _matchTimer;
+  Timer? _tickerTimer;
 
   MatchProvider() {
     _initDefaultSession();
@@ -45,14 +46,16 @@ class MatchProvider extends ChangeNotifier {
   String? get activeSpecialEvent => _activeSpecialEvent;
   bool get isOutdoorModeEnabled => _isOutdoorModeEnabled;
   bool get isScreenLocked => _isScreenLocked;
-  Duration get matchDuration => _matchDuration;
+  Duration get matchDuration =>
+      _accumulatedDuration + (_stopwatch.isRunning ? _stopwatch.elapsed : Duration.zero);
   bool get isMatchTimerRunning => _isMatchTimerRunning;
 
   String get formattedMatchDuration {
-    final minutes = _matchDuration.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = _matchDuration.inSeconds.remainder(60).toString().padLeft(2, '0');
-    if (_matchDuration.inHours > 0) {
-      final hours = _matchDuration.inHours.toString().padLeft(2, '0');
+    final dur = matchDuration;
+    final minutes = dur.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = dur.inSeconds.remainder(60).toString().padLeft(2, '0');
+    if (dur.inHours > 0) {
+      final hours = dur.inHours.toString().padLeft(2, '0');
       return '$hours:$minutes:$seconds';
     }
     return '$minutes:$seconds';
@@ -60,14 +63,17 @@ class MatchProvider extends ChangeNotifier {
 
   void toggleMatchTimer() {
     if (_isMatchTimerRunning) {
-      _matchTimer?.cancel();
+      _tickerTimer?.cancel();
+      _accumulatedDuration += _stopwatch.elapsed;
+      _stopwatch.reset();
+      _stopwatch.stop();
       _isMatchTimerRunning = false;
       _notifyScoreboardBridge();
     } else {
       _isMatchTimerRunning = true;
-      _matchTimer?.cancel();
-      _matchTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-        _matchDuration += const Duration(seconds: 1);
+      _stopwatch.start();
+      _tickerTimer?.cancel();
+      _tickerTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         _notifyScoreboardBridge();
         notifyListeners();
       });
@@ -76,9 +82,11 @@ class MatchProvider extends ChangeNotifier {
   }
 
   void resetMatchTimer() {
-    _matchTimer?.cancel();
+    _tickerTimer?.cancel();
+    _stopwatch.reset();
+    _stopwatch.stop();
     _isMatchTimerRunning = false;
-    _matchDuration = Duration.zero;
+    _accumulatedDuration = Duration.zero;
     _notifyScoreboardBridge();
     notifyListeners();
   }
@@ -103,9 +111,7 @@ class MatchProvider extends ChangeNotifier {
 
   void _notifyScoreboardBridge({String? toastOverride}) {
     final toast = toastOverride ?? _activeSpecialEvent ?? '';
-    final clockText = (_isMatchTimerRunning || _matchDuration > Duration.zero)
-        ? formattedMatchDuration
-        : '';
+    final clockText = formattedMatchDuration;
     _sessionStreamController.add(_currentSession);
     NativeStreamBurnerBridge().updateScoreboard(
       VolleyballScoreboardState.fromMatchSession(
@@ -407,7 +413,7 @@ class MatchProvider extends ChangeNotifier {
 
   @override
   void dispose() {
-    _matchTimer?.cancel();
+    _tickerTimer?.cancel();
     _timeoutTimer?.cancel();
     _specialEventTimer?.cancel();
     _scoreEventsController.close();

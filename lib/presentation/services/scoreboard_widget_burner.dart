@@ -221,6 +221,10 @@ class ScoreboardWidgetBurner {
         bgColor = const Color(0xF00D111A);
         borderColor = const Color(0xFF2E3A52);
         break;
+      case ScoreboardThemeStyle.broadcastCompact3Letter:
+        bgColor = const Color(0xF01A1E2E);
+        borderColor = const Color(0xFFE6007E);
+        break;
     }
 
     final bgPaint = Paint()..color = bgColor;

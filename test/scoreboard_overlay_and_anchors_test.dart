@@ -1,8 +1,10 @@
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:volleylive/domain/models/match_session.dart';
 import 'package:volleylive/domain/models/scoreboard_burn_in_state.dart';
+import 'package:volleylive/domain/models/streaming_config.dart';
+import 'package:volleylive/domain/services/native_stream_burner_bridge.dart';
 import 'package:volleylive/domain/services/video_overlay_burner_service.dart';
 import 'package:volleylive/presentation/services/program_widget_capture.dart';
 import 'package:volleylive/presentation/widgets/scoreboard_overlay.dart';
@@ -286,6 +288,221 @@ void main() {
       expect(deserialized.useShortNames, isTrue);
       expect(deserialized.teamAShort, 'JAS');
       expect(deserialized.teamBShort, 'KET');
+    });
+  });
+
+  group('Broadcast Pro Compact (3-letter) and Style Switching Tests', () {
+    testWidgets('Renders Broadcast Pro Compact (3-letter) with 2 rows, LIGA badge and dynamic banner', (tester) async {
+      final session = MatchSession(
+        id: 'test-b3',
+        createdAt: DateTime.now(),
+        teamA: 'Ślepsk Malow Suwałki',
+        teamB: 'Jastrzębski Węgiel',
+        teamAShort: 'SUW',
+        teamBShort: 'JAS',
+        currentSetPointsA: 25,
+        currentSetPointsB: 23,
+        setsA: 2,
+        setsB: 1,
+        currentSetNumber: 4,
+        currentServer: ServingTeam.teamA,
+        pairingCode: '123456',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 800,
+              height: 400,
+              child: ScoreboardOverlay(
+                session: session,
+                style: ScoreboardThemeStyle.broadcastCompact3Letter,
+                showServeIndicator: true,
+                matchDuration: const Duration(minutes: 52, seconds: 10),
+                activeSpecialEvent: 'CHALLENGE W TOKU',
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      expect(find.text('L\nI\nG\nA'), findsOneWidget);
+      expect(find.text('SUW'), findsOneWidget);
+      expect(find.text('JAS'), findsOneWidget);
+      expect(find.text('25'), findsOneWidget);
+      expect(find.text('23'), findsOneWidget);
+      expect(find.text('CHALLENGE W TOKU'), findsOneWidget);
+    });
+
+    test('VolleyballScoreboardState preserves style and serializes correctly', () {
+      final session = MatchSession(
+        id: 'session-style',
+        createdAt: DateTime.now(),
+        teamA: 'Projekt Warszawa',
+        teamB: 'ZAKSA',
+        pairingCode: '777888',
+      );
+
+      final state = VolleyballScoreboardState.fromMatchSession(
+        session,
+        style: ScoreboardThemeStyle.broadcastCompact3Letter,
+      );
+
+      expect(state.style, ScoreboardThemeStyle.broadcastCompact3Letter);
+      final map = state.toMap();
+      expect(map['style'], 'broadcastCompact3Letter');
+      expect(map['scoreboardStyle'], 'broadcastCompact3Letter');
+
+      final deserialized = VolleyballScoreboardState.fromMap(map);
+      expect(deserialized.style, ScoreboardThemeStyle.broadcastCompact3Letter);
+    });
+
+    test('NativeStreamBurnerBridge setScoreboardStyle sends style update to native channel and retains style', () async {
+      final bridge = NativeStreamBurnerBridge();
+      final List<MethodCall> calls = [];
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('com.goshawk.volleylive/live_stream_bridge'),
+            (call) async {
+              calls.add(call);
+              return true;
+            },
+          );
+
+      await bridge.setScoreboardStyle('broadcastCompact3Letter');
+
+      expect(bridge.lastStyle, 'broadcastCompact3Letter');
+      expect(
+        calls.any((c) => c.method == 'setScoreboardStyle' && (c.arguments['style'] == 'broadcastCompact3Letter' || c.arguments == 'broadcastCompact3Letter')),
+        isTrue,
+      );
+    });
+
+    testWidgets('ScoreboardOverlay renders all 5 ScoreboardThemeStyle options cleanly', (tester) async {
+      final session = MatchSession(
+        id: 'session-all-styles',
+        createdAt: DateTime.now(),
+        teamA: 'Aluron CMC',
+        teamB: 'Jastrzębski Węgiel',
+        teamAShort: 'WAR',
+        teamBShort: 'JAS',
+        currentSetPointsA: 19,
+        currentSetPointsB: 17,
+        setsA: 1,
+        setsB: 1,
+        currentSetNumber: 3,
+        currentServer: ServingTeam.teamB,
+        pairingCode: '111222',
+      );
+
+      for (final style in ScoreboardThemeStyle.values) {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 800,
+                height: 400,
+                child: ScoreboardOverlay(
+                  session: session,
+                  style: style,
+                  showServeIndicator: true,
+                  matchDuration: const Duration(minutes: 42, seconds: 15),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull, reason: 'Style ${style.name} must render cleanly without exception');
+      }
+    });
+
+    testWidgets('ScoreboardOverlay handles system accessibility font scaling (e.g. 1.35x) without RenderFlex overflow', (tester) async {
+      final session = MatchSession(
+        id: 'session-text-scaler',
+        createdAt: DateTime.now(),
+        teamA: 'Aluron CMC',
+        teamB: 'Jastrzębski Węgiel',
+        teamAShort: 'ALU',
+        teamBShort: 'JAS',
+        currentSetPointsA: 24,
+        currentSetPointsB: 23,
+        setsA: 2,
+        setsB: 1,
+        currentSetNumber: 4,
+        currentServer: ServingTeam.teamA,
+        pairingCode: '111222',
+      );
+
+      for (final style in ScoreboardThemeStyle.values) {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: MediaQuery(
+              data: const MediaQueryData().copyWith(
+                textScaler: const TextScaler.linear(1.35),
+              ),
+              child: Scaffold(
+                body: SizedBox(
+                  width: 800,
+                  height: 400,
+                  child: ScoreboardOverlay(
+                    session: session,
+                    style: style,
+                    showServeIndicator: true,
+                    matchDuration: const Duration(minutes: 55, seconds: 12),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull, reason: 'Style ${style.name} must not overflow under 1.35x text scale');
+      }
+    });
+
+    test('NativeStreamBurnerBridge preserves matchClock across state updates with empty clock', () async {
+      final bridge = NativeStreamBurnerBridge();
+      final List<Map<String, dynamic>> receivedMaps = [];
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('com.goshawk.volleylive/live_stream_bridge'),
+            (call) async {
+              if (call.method == 'updateScoreboardData') {
+                receivedMaps.add(Map<String, dynamic>.from(call.arguments as Map));
+              }
+              return true;
+            },
+          );
+
+      final session = MatchSession(
+        id: 'session-clock',
+        createdAt: DateTime.now(),
+        teamA: 'Team 1',
+        teamB: 'Team 2',
+        pairingCode: '555666',
+      );
+
+      // 1. Initial push with clock "15:30"
+      final state1 = VolleyballScoreboardState.fromMatchSession(
+        session,
+        matchClock: '15:30',
+      );
+      await bridge.updateScoreboard(state1, force: true);
+      expect(receivedMaps.last['matchClock'], '15:30');
+
+      // 2. Score update with empty clock ""
+      final state2 = VolleyballScoreboardState.fromMatchSession(
+        session.copyWith(currentSetPointsA: 1),
+        matchClock: '',
+      );
+      await bridge.updateScoreboard(state2, force: true);
+      expect(receivedMaps.last['matchClock'], '15:30', reason: 'Clock must not be wiped back to empty/00:00');
     });
   });
 }

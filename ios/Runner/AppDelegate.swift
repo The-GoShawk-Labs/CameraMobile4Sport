@@ -141,6 +141,12 @@ import HaishinKit
                 self.updateScoreboard(from: args)
                 result(true)
 
+            case "setScoreboardStyle":
+                result(true)
+
+            case "setScoreboardPosition":
+                result(true)
+
             case "updateScoreboardOverlayBitmap":
                 guard let args = call.arguments as? [String: Any],
                       let typedData = args["bitmapBytes"] as? FlutterStandardTypedData else {
@@ -318,6 +324,7 @@ import HaishinKit
 
     private func updateScoreboard(from dict: [String: Any]) {
         let toast = (dict["toastMessage"] as? String) ?? (dict["eventTag"] as? String) ?? ""
+        let style = (dict["style"] as? String) ?? (dict["scoreboardStyle"] as? String) ?? "tvProBroadcast"
         let state = VolleyballScoreboardState(
             teamA: (dict["teamA"] as? String) ?? (dict["teamAName"] as? String) ?? "TEAM A",
             teamB: (dict["teamB"] as? String) ?? (dict["teamBName"] as? String) ?? "TEAM B",
@@ -328,7 +335,8 @@ import HaishinKit
             setsB: dict["setsB"] as? Int ?? 0,
             servingTeam: dict["servingTeam"] as? String ?? "NONE",
             eventTag: dict["eventTag"] as? String ?? "",
-            toastMessage: toast
+            toastMessage: toast,
+            style: style
         )
         scoreboardEffect.updateState(state)
     }

@@ -332,6 +332,18 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
+                    "setScoreboardStyle" -> {
+                        val style = call.argument<String>("style")
+                            ?: (call.arguments as? String)
+                            ?: "tvProBroadcast"
+                        backgroundScope.launch {
+                            streamService?.setScoreboardStyle(style)
+                            runOnUiThread {
+                                result.success(true)
+                            }
+                        }
+                    }
+
                     "updateScoreboardOverlayBitmap" -> {
                         val bytes = call.argument<ByteArray>("bitmapBytes")
                         val width = call.argument<Int>("width") ?: 0
@@ -380,6 +392,7 @@ class MainActivity : FlutterActivity() {
         val teamAShort = (map["teamAShort"] as? String) ?: ""
         val teamBShort = (map["teamBShort"] as? String) ?: ""
         val useShortNames = (map["useShortNames"] as? Boolean) ?: false
+        val style = (map["style"] as? String) ?: (map["scoreboardStyle"] as? String) ?: "tvProBroadcast"
         val data = VolleyballScoreboardData(
             teamA = (map["teamA"] as? String) ?: (map["teamAName"] as? String) ?: "TEAM A",
             teamB = (map["teamB"] as? String) ?: (map["teamBName"] as? String) ?: "TEAM B",
@@ -397,7 +410,8 @@ class MainActivity : FlutterActivity() {
             colorB = colorB,
             teamAShort = teamAShort,
             teamBShort = teamBShort,
-            useShortNames = useShortNames
+            useShortNames = useShortNames,
+            style = style
         )
         streamService?.updateScoreboard(data)
     }

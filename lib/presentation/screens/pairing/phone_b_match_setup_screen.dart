@@ -852,6 +852,7 @@ class _PhoneBMatchSetupScreenState extends State<PhoneBMatchSetupScreen> {
     StreamerProvider streamerProvider,
   ) {
     final styles = [
+      {'style': ScoreboardThemeStyle.broadcastCompact3Letter, 'label': 'Broadcast Pro Compact (3-letter)'},
       {'style': ScoreboardThemeStyle.tvProBroadcast, 'label': 'TV Pro Broadcast'},
       {'style': ScoreboardThemeStyle.cyberGlow, 'label': 'Cyber Glow'},
       {'style': ScoreboardThemeStyle.minimalist, 'label': 'Minimalist Clean'},
