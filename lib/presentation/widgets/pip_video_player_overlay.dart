@@ -1,12 +1,19 @@
 import 'dart:async';
-import 'package:camera/camera.dart';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:video_player/video_player.dart';
 import 'package:volleylive/core/theme/app_theme.dart';
+import 'package:volleylive/domain/models/connection_state.dart';
 import 'package:volleylive/domain/models/court_homography.dart';
+import 'package:volleylive/domain/models/streaming_config.dart';
 import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/providers/court_statistician_provider.dart';
+import 'package:volleylive/presentation/providers/match_provider.dart';
+import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
+import 'package:volleylive/presentation/providers/streamer_provider.dart';
+import 'package:volleylive/presentation/widgets/adaptive_camera_preview.dart';
+import 'package:volleylive/presentation/widgets/scoreboard_overlay.dart';
 
 /// Pływający odtwarzacz wideo PiP (Picture-in-Picture) ze swobodnym przesuwaniem i szybkimi powtórkami (-5s, -10s)
 class PipVideoPlayerOverlay extends StatefulWidget {
@@ -26,6 +33,7 @@ class PipVideoPlayerOverlay extends StatefulWidget {
 }
 
 class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
+  final GlobalKey _pipSurfaceKey = GlobalKey(debugLabel: 'pip_surface_key');
   VideoPlayerController? _controller;
   bool _isInitialized = false;
   bool _hasError = false;
@@ -186,66 +194,107 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
   @override
   Widget build(BuildContext context) {
     final provider = widget.provider;
-    if (!provider.isPipVisible) {
-      return const SizedBox();
-    }
 
     CameraProvider? camera;
+    StreamerProvider? streamer;
+    MatchProvider? match;
+    P2PConnectionProvider? p2p;
     try {
       camera = Provider.of<CameraProvider>(context);
-    } catch (_) {
-      // Bezpieczny fallback gdy CameraProvider nie jest obecny w hierarchii testów
-    }
+    } catch (_) {}
+    try {
+      streamer = Provider.of<StreamerProvider>(context);
+    } catch (_) {}
+    try {
+      match = Provider.of<MatchProvider>(context);
+    } catch (_) {}
+    try {
+      p2p = Provider.of<P2PConnectionProvider>(context);
+    } catch (_) {}
 
+    final isPortrait = MediaQuery.orientationOf(context) == Orientation.portrait;
+    final safePadding = MediaQuery.paddingOf(context);
     final sizeState = provider.pipSizeState;
+    final pipSize = sizeState.sizeForOrientation(isPortrait: isPortrait);
     final pipPos = provider.pipPosition;
 
-    // Bezpieczne ograniczenie pozycji w obrębie ekranu
-    final maxX = (widget.viewportSize.width - sizeState.width).clamp(0.0, widget.viewportSize.width);
-    final maxY = (widget.viewportSize.height - sizeState.height).clamp(0.0, widget.viewportSize.height);
-    final clampedX = pipPos.dx.clamp(0.0, maxX);
-    final clampedY = pipPos.dy.clamp(0.0, maxY);
+    // Bezpieczne ograniczenie pozycji w obrębie ekranu z uwzględnieniem SafeArea (wcięcie na aparat, pasek gestów)
+    final minX = safePadding.left;
+    final minY = safePadding.top;
+    final maxX = (widget.viewportSize.width - pipSize.width - safePadding.right).clamp(
+      minX,
+      widget.viewportSize.width,
+    );
+    final maxY = (widget.viewportSize.height - pipSize.height - safePadding.bottom).clamp(
+      minY,
+      widget.viewportSize.height,
+    );
+    final clampedX = pipPos.dx.clamp(minX, maxX);
+    final clampedY = pipPos.dy.clamp(minY, maxY);
 
     return Positioned(
       left: clampedX,
       top: clampedY,
-      child: GestureDetector(
-        onPanUpdate: (details) {
-          provider.updatePipPosition(details.delta, clampBounds: widget.viewportSize);
-        },
-        child: Container(
-          width: sizeState.width,
-          height: sizeState.height,
-          decoration: BoxDecoration(
-            color: const Color(0xFF0F172A),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: AppTheme.amberAccent.withValues(alpha: 0.8),
-              width: 1.8,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.75),
-                blurRadius: 18,
-                spreadRadius: 3,
-                offset: const Offset(0, 6),
+      child: Visibility(
+        visible: provider.isPipVisible,
+        maintainState: true,
+        maintainAnimation: true,
+        maintainSize: false,
+        child: GestureDetector(
+          onPanUpdate: (details) {
+            provider.updatePipPosition(
+              details.delta,
+              clampBounds: widget.viewportSize,
+              isPortrait: isPortrait,
+              safePadding: safePadding,
+            );
+          },
+          child: Container(
+            key: _pipSurfaceKey,
+            width: pipSize.width,
+            height: pipSize.height,
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: AppTheme.amberAccent.withValues(alpha: 0.8),
+                width: 1.8,
               ),
-              ...AppTheme.cyanGlow(blur: 12, opacity: 0.25),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: sizeState == PipSizeState.miniPill
-                ? _buildMiniPillContent(camera)
-                : _buildFullPipContent(sizeState, camera),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.75),
+                  blurRadius: 18,
+                  spreadRadius: 3,
+                  offset: const Offset(0, 6),
+                ),
+                ...AppTheme.cyanGlow(blur: 12, opacity: 0.25),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: sizeState == PipSizeState.miniPill
+                  ? _buildMiniPillContent(camera, streamer)
+                  : _buildFullPipContent(
+                      sizeState: sizeState,
+                      camera: camera,
+                      streamer: streamer,
+                      match: match,
+                      p2p: p2p,
+                      isPortrait: isPortrait,
+                    ),
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildMiniPillContent(CameraProvider? camera) {
-    final bool isRec = camera != null && camera.isRecording;
+  Widget _buildMiniPillContent(CameraProvider? camera, StreamerProvider? streamer) {
+    final bool isLiveStream = streamer != null &&
+        (streamer.streamingState == StreamingState.live ||
+            streamer.streamingState == StreamingState.connecting ||
+            streamer.streamingState == StreamingState.reconnecting);
+    final bool isRec = (camera != null && camera.isRecording) || isLiveStream;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       color: const Color(0xFF0F172A),
@@ -269,7 +318,9 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
                 const SizedBox(width: 5),
                 Flexible(
                   child: Text(
-                    isRec ? 'REC LIVE' : 'PiP CAM',
+                    isLiveStream
+                        ? 'LIVE RTMP'
+                        : (isRec ? 'REC LIVE' : 'PiP CAM'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -310,7 +361,14 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
     );
   }
 
-  Widget _buildFullPipContent(PipSizeState sizeState, CameraProvider? camera) {
+  Widget _buildFullPipContent({
+    required PipSizeState sizeState,
+    required CameraProvider? camera,
+    required StreamerProvider? streamer,
+    required MatchProvider? match,
+    required P2PConnectionProvider? p2p,
+    required bool isPortrait,
+  }) {
     final bool isPlaying = _isInitialized && _controller != null
         ? _controller!.value.isPlaying
         : _isSimulatedPlaying;
@@ -323,40 +381,81 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
         ? (_controller!.value.duration == Duration.zero ? _simulatedDuration : _controller!.value.duration)
         : _simulatedDuration;
 
+    final bool isStreamingLive = streamer != null &&
+        (streamer.streamingState == StreamingState.live ||
+            streamer.streamingState == StreamingState.connecting ||
+            streamer.streamingState == StreamingState.reconnecting);
+    final int? nativePreviewTexId = streamer?.previewTextureId;
+
     final bool hasLocalCamera = camera != null &&
         camera.isCameraInitialized &&
         camera.cameraController != null &&
         camera.cameraController!.value.isInitialized;
 
-    final String displayStatus = camera != null && camera.isRecording
-        ? '🔴 MASTER REC (1-PHONE)'
-        : _statusMessage;
+    final double targetAspectRatio = sizeState.aspectRatioForOrientation(
+      isPortrait: isPortrait,
+    );
+
+    final String displayStatus = isStreamingLive
+        ? '🔴 LIVE RTMP (${isPortrait ? "9:16" : "16:9"})'
+        : (camera != null && camera.isRecording
+            ? '🔴 MASTER REC (1-PHONE)'
+            : _statusMessage);
 
     return Stack(
       fit: StackFit.expand,
       children: [
-        // 1. Podgląd Wideo (Kamera lokalna w trybie 1 smartfona, VideoPlayer lub Symulowany Kadr Boiska)
-        if (hasLocalCamera)
-          Builder(
-            builder: (context) {
-              final controller = camera.cameraController!;
-              final pWidth = controller.value.previewSize?.width ?? 1920.0;
-              final pHeight = controller.value.previewSize?.height ?? 1080.0;
-              final sensorLong = pWidth > pHeight ? pWidth : pHeight;
-              final sensorShort = pWidth > pHeight ? pHeight : pWidth;
-              return Center(
-                child: AspectRatio(
-                  aspectRatio: sensorLong / sensorShort,
-                  child: FittedBox(
-                    fit: BoxFit.cover,
-                    child: SizedBox(
-                      width: sensorLong,
-                      height: sensorShort,
-                      child: CameraPreview(controller),
+        // 1. Zunifikowany podgląd Wideo (Solo Hardware Stream Texture, Lokalna Kamera, Dual P2P, lub Fallback)
+        if (isStreamingLive && nativePreviewTexId != null)
+          Center(
+            key: ValueKey('pip_native_stream_tex_$nativePreviewTexId'),
+            child: AspectRatio(
+              aspectRatio: targetAspectRatio,
+              child: Texture(
+                textureId: nativePreviewTexId,
+              ),
+            ),
+          )
+        else if (hasLocalCamera)
+          Center(
+            key: const ValueKey('pip_local_camera_preview'),
+            child: AspectRatio(
+              aspectRatio: targetAspectRatio,
+              child: AdaptiveCameraPreview(
+                controller: camera.cameraController!,
+                isPortrait: isPortrait,
+                fit: BoxFit.cover,
+              ),
+            ),
+          )
+        else if (p2p != null)
+          ValueListenableBuilder<Uint8List?>(
+            key: const ValueKey('pip_dual_p2p_feed'),
+            valueListenable: p2p.videoFrameNotifier,
+            builder: (context, frameBytes, _) {
+              if (frameBytes != null && frameBytes.isNotEmpty) {
+                return Center(
+                  child: AspectRatio(
+                    aspectRatio: targetAspectRatio,
+                    child: Image.memory(
+                      frameBytes,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
                     ),
                   ),
-                ),
-              );
+                );
+              }
+              if (_isInitialized && _controller != null && !_hasError) {
+                return FittedBox(
+                  fit: BoxFit.cover,
+                  child: SizedBox(
+                    width: _controller!.value.size.width > 0 ? _controller!.value.size.width : 1920,
+                    height: _controller!.value.size.height > 0 ? _controller!.value.size.height : 1080,
+                    child: VideoPlayer(_controller!),
+                  ),
+                );
+              }
+              return _buildSimulatedCameraFeed();
             },
           )
         else if (_isInitialized && _controller != null && !_hasError)
@@ -370,6 +469,28 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
           )
         else
           _buildSimulatedCameraFeed(),
+
+        // 1b. Zunifikowana nakładka wyniku (ScoreboardOverlay) w oknie PIP dla spójności Solo i Dual Mode
+        if (match != null && !(isStreamingLive && nativePreviewTexId != null))
+          IgnorePointer(
+            child: Align(
+              alignment: Alignment.topLeft,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 24, left: 6, right: 6),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.topLeft,
+                  child: ScoreboardOverlay(
+                    session: match.session,
+                    style: streamer?.scoreboardStyle ?? ScoreboardThemeStyle.tvProBroadcast,
+                    isStandaloneCard: true,
+                    showServeIndicator: streamer?.showServeIndicator ?? true,
+                    useThreeLetterAcronyms: streamer?.useThreeLetterAcronyms ?? false,
+                  ),
+                ),
+              ),
+            ),
+          ),
 
         // 2. Cień/Gradient dla czytelności kontrolek
         Container(
@@ -404,7 +525,9 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
                   height: 6,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: (camera != null && camera.isRecording) ? Colors.redAccent : AppTheme.greenLive,
+                    color: ((camera != null && camera.isRecording) || isStreamingLive)
+                        ? Colors.redAccent
+                        : AppTheme.greenLive,
                   ),
                 ),
                 const SizedBox(width: 4),

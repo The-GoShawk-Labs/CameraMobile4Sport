@@ -9,6 +9,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.view.TextureRegistry
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +24,7 @@ class MainActivity : FlutterActivity() {
 
     private val backgroundScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var streamService: RootEncoderLiveStreamService? = null
+    private var previewTextureEntry: TextureRegistry.SurfaceTextureEntry? = null
     private var eventSink: EventChannel.EventSink? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -196,10 +198,20 @@ class MainActivity : FlutterActivity() {
             }
 
         // 2. RootEncoder Hardware Live Stream Engine & OpenGL ES Scoreboard Filter
+        val textureEntry = try {
+            flutterEngine.renderer.createSurfaceTexture()
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "createSurfaceTexture warning: ${e.message}")
+            null
+        }
+        previewTextureEntry = textureEntry
+
         streamService = RootEncoderLiveStreamService(context = applicationContext).apply {
+            setSharedPreviewSurfaceTexture(textureEntry?.surfaceTexture())
             onStatusEvent = { status, details ->
                 runOnUiThread {
                     val payload = mutableMapOf<String, Any>("status" to status)
+                    textureEntry?.id()?.let { payload["previewTextureId"] = it }
                     details?.let { payload.putAll(it) }
                     eventSink?.success(payload)
                 }
@@ -219,6 +231,10 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, LIVE_STREAM_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "getPreviewTextureId" -> {
+                        result.success(previewTextureEntry?.id())
+                    }
+
                     "initializeStream", "initialize" -> {
                         val width = call.argument<Int>("width") ?: 1920
                         val height = call.argument<Int>("height") ?: 1080
@@ -419,6 +435,10 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         super.onDestroy()
         streamService?.release()
+        try {
+            previewTextureEntry?.release()
+        } catch (_: Exception) {}
+        previewTextureEntry = null
         backgroundScope.cancel()
     }
 }

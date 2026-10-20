@@ -22,15 +22,15 @@ class VolleyballScoreboardBitmapRenderer(
     val isPortrait: Boolean = frameHeight > frameWidth
 
     // Adaptive scale:
-    // - Landscape (16:9): scale = frameWidth / 1920.0 (card width ~18.8% of frame width: 360/1920)
-    // - Portrait (9:16): scale = frameWidth / 1080.0 (card width ~33.3% of frame width: 360/1080)
+    // - Landscape (16:9): scale = frameWidth / 1120.0 (card width ~32.1% of frame width)
+    // - Portrait (9:16): scale = frameWidth / 680.0 (card width ~52.9% of frame width)
     val scale: Float = if (isPortrait) {
-        frameWidth / 1080f
+        (frameWidth / 680f).coerceAtLeast(0.5f)
     } else {
-        frameWidth / 1920f
+        (frameWidth / 1120f).coerceAtLeast(0.5f)
     }
 
-    // Proportional compact TV card (360x76 for Full HD, ratio ~4.74:1)
+    // Proportional compact TV card (360x76 base, scaled up for high legibility)
     val overlayWidth = ((360f * scale).toInt() and 1.inv()).coerceAtLeast(160)
     val overlayHeight = ((76f * scale).toInt() and 1.inv()).coerceAtLeast(40)
 
@@ -745,12 +745,12 @@ class VolleyballScoreboardBitmapRenderer(
     }
 
     private fun _renderBroadcastCompact3Letter(data: VolleyballScoreboardData) {
-        val wLeague = 24f * scale
-        val wStrip = 4f * scale
-        val wTla = 68f * scale
-        val wSets = 34f * scale
-        val wPts = 48f * scale
-        val cardW = wLeague + wStrip + wTla + wSets + wPts // 178f * scale
+        val wLeague = 28f * scale
+        val wStrip = 5f * scale
+        val wTla = 85f * scale
+        val wSets = 44f * scale
+        val wPts = 58f * scale
+        val cardW = wLeague + wStrip + wTla + wSets + wPts // 220f * scale
         val rowH = 27.5f * scale
         val bannerH = 21f * scale
         val cardH = rowH * 2f + bannerH // 76f * scale

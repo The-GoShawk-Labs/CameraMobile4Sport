@@ -137,10 +137,10 @@ enum CourtDisplayMode {
   });
 }
 
-/// Rozmiar pływającego okna odtwarzacza PiP
+/// Rozmiar pływającego okna odtwarzacza PiP (16:9 w poziomie, 9:16 w pionie)
 enum PipSizeState {
-  normal(width: 260, height: 160),
-  expanded(width: 340, height: 210),
+  normal(width: 256, height: 144),
+  expanded(width: 336, height: 189),
   miniPill(width: 180, height: 48);
 
   final double width;
@@ -150,6 +150,17 @@ enum PipSizeState {
     required this.width,
     required this.height,
   });
+
+  Size sizeForOrientation({required bool isPortrait}) {
+    if (this == PipSizeState.miniPill) {
+      return Size(width, height);
+    }
+    return isPortrait ? Size(height, width) : Size(width, height);
+  }
+
+  double aspectRatioForOrientation({required bool isPortrait}) {
+    return isPortrait ? (9.0 / 16.0) : (16.0 / 9.0);
+  }
 }
 
 /// Tryb kalibracji perspektywy / homografii

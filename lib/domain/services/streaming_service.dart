@@ -21,6 +21,7 @@ abstract class IStreamingService {
     bool inputIsComposedProgramFrames = false,
     List<ScoreTimelineEntry>? timeline,
     MatchSession? matchSession,
+    bool? isPortrait,
   });
 
   Future<bool> startLiveStreamWithConfig(
@@ -29,6 +30,7 @@ abstract class IStreamingService {
     bool inputIsComposedProgramFrames = false,
     List<ScoreTimelineEntry>? timeline,
     MatchSession? matchSession,
+    bool? isPortrait,
   });
 
   Future<void> stopLiveStream();
@@ -119,6 +121,7 @@ class StreamingService implements IStreamingService {
     bool inputIsComposedProgramFrames = false,
     List<ScoreTimelineEntry>? timeline,
     MatchSession? matchSession,
+    bool? isPortrait,
   }) {
     return startLiveStreamWithConfig(
       destination.toStreamConfig(),
@@ -126,6 +129,7 @@ class StreamingService implements IStreamingService {
       inputIsComposedProgramFrames: inputIsComposedProgramFrames,
       timeline: timeline,
       matchSession: matchSession,
+      isPortrait: isPortrait,
     );
   }
 
@@ -136,6 +140,7 @@ class StreamingService implements IStreamingService {
     bool inputIsComposedProgramFrames = false,
     List<ScoreTimelineEntry>? timeline,
     MatchSession? matchSession,
+    bool? isPortrait,
   }) async {
     _activeConfig = config;
     _setState(StreamingState.preparing);
@@ -182,6 +187,7 @@ class StreamingService implements IStreamingService {
 
     await _nativeBridge.setScoreboardPosition(config.anchorPosition.name);
     await _nativeBridge.setScoreboardStyle(config.scoreboardStyle.name);
+    await _nativeBridge.ensurePreviewTextureId();
 
     final fullRtmpUrl = VideoOverlayBurnerService.buildRtmpEndpoint(
       config.serverUrl,
@@ -196,6 +202,7 @@ class StreamingService implements IStreamingService {
       config.fps,
       streamKey: resolvedStreamKey,
       scoreboardData: initialState.toMap(),
+      isPortrait: isPortrait,
     );
 
     if (hardwareStarted) {

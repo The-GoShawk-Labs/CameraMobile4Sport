@@ -2,6 +2,7 @@ package com.goshawk.volleylive.stream
 
 import android.content.Context
 import android.graphics.BitmapFactory
+import android.graphics.SurfaceTexture
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
@@ -15,7 +16,9 @@ import com.pedro.common.VideoCodec
 import com.pedro.encoder.input.gl.render.filters.`object`.ImageObjectFilterRender
 import com.pedro.encoder.input.video.CameraHelper
 import com.pedro.encoder.utils.CodecUtil
+import com.pedro.encoder.utils.gl.AspectRatioMode
 import com.pedro.library.rtmp.RtmpCamera2
+import com.pedro.library.view.GlStreamInterface
 import com.pedro.library.view.OpenGlView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,10 +51,14 @@ class RootEncoderLiveStreamService(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var rtmpCamera2: RtmpCamera2? = null
     private var scoreboardFilter: ImageObjectFilterRender? = null
+    private var sharedPreviewSurfaceTexture: SurfaceTexture? = null
+    private var sharedPreviewSurface: Surface? = null
 
     private var orientationListener: OrientationEventListener? = null
     @Volatile
     private var deviceOrientationDegrees = -1
+    @Volatile
+    private var explicitPortraitOverride: Boolean? = null
 
     @Volatile
     private var currentWidth = 1920
@@ -94,6 +101,53 @@ class RootEncoderLiveStreamService(
         initOrientationListener()
     }
 
+    /**
+     * Binds a Flutter TextureRegistry SurfaceTexture so the hardware OpenGL pipeline
+     * renders both to the MediaCodec GraphicBufferSource and the local PIP/preview widget.
+     */
+    @Synchronized
+    fun setSharedPreviewSurfaceTexture(surfaceTexture: SurfaceTexture?) {
+        sharedPreviewSurfaceTexture = surfaceTexture
+        sharedPreviewSurface?.release()
+        sharedPreviewSurface = surfaceTexture?.let { st ->
+            st.setDefaultBufferSize(currentWidth.coerceAtLeast(1), currentHeight.coerceAtLeast(1))
+            Surface(st)
+        }
+    }
+
+    @Synchronized
+    private fun attachSharedPreviewIfPossible(camera: RtmpCamera2) {
+        val glStream = camera.glInterface as? GlStreamInterface ?: return
+        val st = sharedPreviewSurfaceTexture ?: return
+        try {
+            glStream.deAttachPreview()
+            st.setDefaultBufferSize(currentWidth.coerceAtLeast(1), currentHeight.coerceAtLeast(1))
+            val surface = sharedPreviewSurface?.takeIf { it.isValid } ?: Surface(st).also {
+                sharedPreviewSurface = it
+            }
+            val isPortrait = currentHeight > currentWidth
+            val rotation = resolveDeviceRotation(currentWidth, currentHeight, isPortrait)
+            val cameraOrientation = if (rotation == 0) 270 else rotation - 90
+            glStream.setCameraOrientation(cameraOrientation)
+            glStream.setAspectRatioMode(AspectRatioMode.Adjust)
+            glStream.setIsPortrait(isPortrait)
+            glStream.setPreviewResolution(currentWidth, currentHeight)
+            glStream.attachPreview(surface)
+        } catch (e: Exception) {
+            Log.w(TAG, "attachSharedPreviewIfPossible warning: ${e.message}")
+        }
+    }
+
+    @Synchronized
+    private fun detachSharedPreviewIfAttached(camera: RtmpCamera2?) {
+        val glStream = camera?.glInterface as? GlStreamInterface ?: return
+        try {
+            glStream.deAttachPreview()
+        } catch (e: Exception) {
+            Log.w(TAG, "detachSharedPreviewIfAttached warning: ${e.message}")
+        }
+    }
+
     private fun initOrientationListener() {
         try {
             orientationListener = object : OrientationEventListener(context) {
@@ -120,9 +174,10 @@ class RootEncoderLiveStreamService(
     fun resolveDeviceRotation(
         requestedWidth: Int = currentWidth,
         requestedHeight: Int = currentHeight,
-        isExplicitPortrait: Boolean? = null
+        isExplicitPortrait: Boolean? = explicitPortraitOverride
     ): Int {
         val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        @Suppress("DEPRECATION")
         val displayRotation = windowManager?.defaultDisplay?.rotation ?: Surface.ROTATION_0
         val displayDegrees = when (displayRotation) {
             Surface.ROTATION_0 -> 90
@@ -134,12 +189,23 @@ class RootEncoderLiveStreamService(
 
         val isPortrait = when {
             isExplicitPortrait != null -> isExplicitPortrait
-            requestedWidth > 0 && requestedHeight > 0 && requestedWidth != requestedHeight -> requestedWidth < requestedHeight
+            requestedWidth > 0 && requestedHeight > 0 && requestedWidth < requestedHeight -> true
+            displayDegrees == 90 || displayDegrees == 270 -> true
             deviceOrientationDegrees != -1 -> deviceOrientationDegrees == 90 || deviceOrientationDegrees == 270
-            else -> displayDegrees == 90 || displayDegrees == 270
+            else -> false
         }
 
-        var rotation = if (deviceOrientationDegrees != -1) deviceOrientationDegrees else displayDegrees
+        var rotation = when {
+            displayDegrees == 90 || displayDegrees == 270 || displayDegrees == 0 || displayDegrees == 180 -> displayDegrees
+            deviceOrientationDegrees != -1 -> deviceOrientationDegrees
+            else -> 0
+        }
+        if (deviceOrientationDegrees != -1) {
+            val sensorPortrait = deviceOrientationDegrees == 90 || deviceOrientationDegrees == 270
+            if (sensorPortrait == isPortrait) {
+                rotation = deviceOrientationDegrees
+            }
+        }
         if (isPortrait && rotation != 90 && rotation != 270) {
             rotation = 90
         } else if (!isPortrait && (rotation == 90 || rotation == 270)) {
@@ -166,6 +232,7 @@ class RootEncoderLiveStreamService(
         instance.forceCodecType(CodecUtil.CodecType.HARDWARE, CodecUtil.CodecType.HARDWARE)
         instance.setVideoCodec(VideoCodec.H264)
         instance.setAudioCodec(AudioCodec.AAC)
+        (instance.glInterface as? GlStreamInterface)?.setAspectRatioMode(AspectRatioMode.Adjust)
         rtmpCamera2 = instance
         return instance
     }
@@ -182,13 +249,16 @@ class RootEncoderLiveStreamService(
         @Suppress("UNUSED_PARAMETER") audioChannels: Int = 2,
         isPortrait: Boolean? = null
     ) {
+        if (isPortrait != null) {
+            explicitPortraitOverride = isPortrait
+        }
         val rawWidth = if (width > 0) width else 1920
         val rawHeight = if (height > 0) height else 1080
-        val rotation = resolveDeviceRotation(rawWidth, rawHeight, isPortrait)
+        val rotation = resolveDeviceRotation(rawWidth, rawHeight, isPortrait ?: explicitPortraitOverride)
         val portrait = (rotation == 90 || rotation == 270)
 
-        // Landscape: 1920x1080 (or 1280x720)
-        // Portrait: 1080x1920 (or 720x1280)
+        // Landscape: 1920x1080 (16:9, rotation 0° or 180°)
+        // Portrait: 1080x1920 (9:16, rotation 90° or 270°)
         val safeWidth = (if (portrait) minOf(rawWidth, rawHeight) else maxOf(rawWidth, rawHeight)) and 1.inv()
         val safeHeight = (if (portrait) maxOf(rawWidth, rawHeight) else minOf(rawWidth, rawHeight)) and 1.inv()
         val safeFps = fps.coerceIn(15, 60)
@@ -206,6 +276,7 @@ class RootEncoderLiveStreamService(
         if (dimensionsChanged) {
             renderer = VolleyballScoreboardBitmapRenderer(safeWidth, safeHeight)
             renderer.updateData(lastScoreboardData)
+            sharedPreviewSurfaceTexture?.setDefaultBufferSize(safeWidth, safeHeight)
         }
         ensureCameraInstance()
     }
@@ -257,7 +328,12 @@ class RootEncoderLiveStreamService(
 
         onStatusEvent?.invoke(
             "CONNECTING",
-            mapOf("details" to "Inicjalizacja MediaCodec + OpenGL ($currentWidth×$currentHeight @ ${currentFps}fps)...")
+            mapOf(
+                "details" to "Inicjalizacja MediaCodec + OpenGL ($currentWidth×$currentHeight @ ${currentFps}fps)...",
+                "width" to currentWidth,
+                "height" to currentHeight,
+                "isPortrait" to (currentHeight > currentWidth)
+            )
         )
 
         scope.launch {
@@ -276,6 +352,7 @@ class RootEncoderLiveStreamService(
     @Synchronized
     private fun executeStartStreamInternal(endpoint: String) {
         val camera = ensureCameraInstance()
+        detachSharedPreviewIfAttached(camera)
         if (camera.isStreaming) {
             try {
                 camera.stopStream()
@@ -285,13 +362,15 @@ class RootEncoderLiveStreamService(
         camera.forceCodecType(CodecUtil.CodecType.HARDWARE, CodecUtil.CodecType.HARDWARE)
         camera.setVideoCodec(VideoCodec.H264)
         camera.setAudioCodec(AudioCodec.AAC)
+        (camera.glInterface as? GlStreamInterface)?.setAspectRatioMode(AspectRatioMode.Adjust)
 
-        val rotation = resolveDeviceRotation(currentWidth, currentHeight)
+        val isPortraitMode = currentHeight > currentWidth
+        val rotation = resolveDeviceRotation(currentWidth, currentHeight, isPortraitMode)
         val iFrameInterval = currentGopSeconds.toInt().coerceAtLeast(1)
 
-        // RootEncoder VideoEncoder expects base dimensions (longer x shorter).
-        // When rotation is 90 or 270, it automatically creates a portrait MediaFormat (height x width)
-        // and configures glInterface encoder size and portrait rendering mode.
+        // RootEncoder VideoEncoder expects sensor base dimensions (1920x1080) and applies
+        // rotation (0/180 for Landscape 1920x1080, 90/270 for Portrait 1080x1920) to both
+        // MediaCodec and RTMP @setDataFrame (onMetaData: width=1080.0, height=1920.0 in Portrait).
         val baseWidth = maxOf(currentWidth, currentHeight)
         val baseHeight = minOf(currentWidth, currentHeight)
 
@@ -347,6 +426,9 @@ class RootEncoderLiveStreamService(
         }
 
         camera.startStream(endpoint)
+
+        // Attach shared SurfaceTexture preview after glInterface is started so local PIP stays live
+        attachSharedPreviewIfPossible(camera)
 
         // Attach OpenGL ES scoreboard filter and upload initial bitmap texture once
         attachAndRefreshScoreboardFilter(camera)
@@ -502,13 +584,23 @@ class RootEncoderLiveStreamService(
      */
     @Synchronized
     fun updateOrientation(isPortrait: Boolean) {
+        explicitPortraitOverride = isPortrait
         val newW = if (isPortrait) minOf(currentWidth, currentHeight) else maxOf(currentWidth, currentHeight)
         val newH = if (isPortrait) maxOf(currentWidth, currentHeight) else minOf(currentWidth, currentHeight)
+        val rotation = resolveDeviceRotation(newW, newH, isPortrait)
+        val cameraOrientation = if (rotation == 0) 270 else rotation - 90
+        (rtmpCamera2?.glInterface as? GlStreamInterface)?.let { glStream ->
+            glStream.setCameraOrientation(cameraOrientation)
+            glStream.setAspectRatioMode(AspectRatioMode.Adjust)
+            glStream.setIsPortrait(isPortrait)
+            glStream.setPreviewResolution(newW, newH)
+        }
         if (newW != currentWidth || newH != currentHeight) {
             currentWidth = newW
             currentHeight = newH
             renderer = VolleyballScoreboardBitmapRenderer(currentWidth, currentHeight)
             renderer.updateData(lastScoreboardData)
+            sharedPreviewSurfaceTexture?.setDefaultBufferSize(currentWidth, currentHeight)
             scoreboardFilter?.let { filter ->
                 val snapshot = renderer.forceRenderAndSnapshot()
                 filter.setImage(snapshot)
@@ -526,8 +618,8 @@ class RootEncoderLiveStreamService(
         try {
             val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return
             filter.setImage(bmp)
-            val w = if (width > 0) width else bmp.width
-            val h = if (height > 0) height else bmp.height
+            val w = if (width > 0) maxOf(width, renderer.overlayWidth) else maxOf(bmp.width, renderer.overlayWidth)
+            val h = if (height > 0) maxOf(height, renderer.overlayHeight) else maxOf(bmp.height, renderer.overlayHeight)
             applyAnchorPositionAndScale(filter, currentAnchorPosition, w, h)
         } catch (e: Exception) {
             Log.w(TAG, "updateScoreboardOverlayBitmap decode warning: ${e.message}")
@@ -557,6 +649,7 @@ class RootEncoderLiveStreamService(
                 } catch (_: Exception) {}
                 scoreboardFilter = null
                 try {
+                    detachSharedPreviewIfAttached(rtmpCamera2)
                     if (rtmpCamera2?.isStreaming == true) {
                         rtmpCamera2?.stopStream()
                     }
@@ -577,6 +670,11 @@ class RootEncoderLiveStreamService(
             orientationListener = null
         } catch (_: Exception) {}
         stopStream()
+        synchronized(this) {
+            sharedPreviewSurface?.release()
+            sharedPreviewSurface = null
+            sharedPreviewSurfaceTexture = null
+        }
     }
 
     private fun buildEndpointUrl(rtmpUrl: String, streamKey: String): String {
@@ -610,7 +708,10 @@ class RootEncoderLiveStreamService(
             mapOf(
                 "details" to "Połączono z serwerem nadawczym (MediaCodec + OpenGL)",
                 "bitrate" to currentVideoBitrate,
-                "fps" to currentFps
+                "fps" to currentFps,
+                "width" to currentWidth,
+                "height" to currentHeight,
+                "isPortrait" to (currentHeight > currentWidth)
             )
         )
     }

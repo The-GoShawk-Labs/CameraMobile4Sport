@@ -20,6 +20,7 @@ class StatisticianScreen extends StatefulWidget {
 class _StatisticianScreenState extends State<StatisticianScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   bool _isInitialFitted = false;
+  final GlobalKey _pipOverlayKey = GlobalKey(debugLabel: 'statistician_pip_overlay');
 
   @override
   void initState() {
@@ -76,30 +77,30 @@ class _StatisticianScreenState extends State<StatisticianScreen> with SingleTick
         body: SafeArea(
           child: LayoutBuilder(
             builder: (context, screenConstraints) {
-            final screenSize = Size(screenConstraints.maxWidth, screenConstraints.maxHeight);
+              final screenSize = Size(screenConstraints.maxWidth, screenConstraints.maxHeight);
 
-            return Stack(
-              fit: StackFit.expand,
-              children: [
-                // GŁÓWNA STRUKTURA EKRANU (PEŁNY EKRAN LUB UKŁAD Z ZAKŁADKAMI)
-                if (statsProvider.isFullScreenCourt)
-                  _buildFullScreenLayout(context, statsProvider, matchProvider)
-                else
-                  _buildStandardLayout(context, statsProvider, matchProvider),
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  // GŁÓWNA STRUKTURA EKRANU (PEŁNY EKRAN LUB UKŁAD Z ZAKŁADKAMI)
+                  if (statsProvider.isFullScreenCourt)
+                    _buildFullScreenLayout(context, statsProvider, matchProvider)
+                  else
+                    _buildStandardLayout(context, statsProvider, matchProvider),
 
-                // PŁYWAJĄCY ODTWARZACZ WIDEO PiP (POWTÓRKI -5s, -10s, DRAG & DROP)
-                if (statsProvider.isPipVisible)
+                  // PŁYWAJĄCY ODTWARZACZ WIDEO PiP (POWTÓRKI -5s, -10s, DRAG & DROP)
                   PipVideoPlayerOverlay(
+                    key: _pipOverlayKey,
                     provider: statsProvider,
                     viewportSize: screenSize,
                   ),
-              ],
-            );
-          },
+                ],
+              );
+            },
+          ),
         ),
       ),
-    ),
-  );
+    );
   }
 
   /// Układ pełnoekranowy (Full-Screen Pitch Mode) dla maksymalnego obszaru makiety

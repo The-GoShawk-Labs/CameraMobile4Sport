@@ -118,15 +118,29 @@ class CourtStatisticianProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void updatePipPosition(Offset delta, {Size? clampBounds}) {
+  void updatePipPosition(
+    Offset delta, {
+    Size? clampBounds,
+    bool isPortrait = false,
+    EdgeInsets safePadding = EdgeInsets.zero,
+  }) {
     double newX = _pipPosition.dx + delta.dx;
     double newY = _pipPosition.dy + delta.dy;
 
     if (clampBounds != null) {
-      final maxX = (clampBounds.width - _pipSizeState.width).clamp(0.0, clampBounds.width);
-      final maxY = (clampBounds.height - _pipSizeState.height).clamp(0.0, clampBounds.height);
-      newX = newX.clamp(0.0, maxX);
-      newY = newY.clamp(0.0, maxY);
+      final pipSize = _pipSizeState.sizeForOrientation(isPortrait: isPortrait);
+      final minX = safePadding.left;
+      final minY = safePadding.top;
+      final maxX = (clampBounds.width - pipSize.width - safePadding.right).clamp(
+        minX,
+        clampBounds.width,
+      );
+      final maxY = (clampBounds.height - pipSize.height - safePadding.bottom).clamp(
+        minY,
+        clampBounds.height,
+      );
+      newX = newX.clamp(minX, maxX);
+      newY = newY.clamp(minY, maxY);
     }
 
     _pipPosition = Offset(newX, newY);

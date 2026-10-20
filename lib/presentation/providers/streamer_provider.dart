@@ -252,6 +252,24 @@ class StreamerProvider extends ChangeNotifier {
 
   String _lastMatchClock = '';
 
+  int? get previewTextureId => _streamingService.nativeBridge.previewTextureId;
+  bool get isPortraitStream => _streamingService.nativeBridge.isPortraitStream;
+
+  Future<int?> ensurePreviewTextureId() async {
+    final id = await _streamingService.nativeBridge.ensurePreviewTextureId();
+    if (id != null) {
+      notifyListeners();
+    }
+    return id;
+  }
+
+  Future<void> updateStreamOrientation({required bool isPortrait}) async {
+    await _streamingService.nativeBridge.updateOrientation(
+      isPortrait: isPortrait,
+    );
+    notifyListeners();
+  }
+
   void updateMatchSession(
     MatchSession session, {
     String? eventTag,
@@ -279,6 +297,7 @@ class StreamerProvider extends ChangeNotifier {
     MatchSession? matchSession,
     Stream<Uint8List>? composedFrameStream,
     Uint8List? initialProgramFrame,
+    bool? isPortrait,
   }) async {
     _streamingOverrideError = null;
     if (matchSession != null) {
@@ -292,11 +311,13 @@ class StreamerProvider extends ChangeNotifier {
       return false;
     } else {
       try {
+        await _streamingService.nativeBridge.ensurePreviewTextureId();
         final started = await _streamingService.startLiveStreamWithConfig(
           _config,
           inputSource: inputSource ?? '',
           timeline: _recordingService.sessionTimeline,
           matchSession: matchSession ?? _currentSession,
+          isPortrait: isPortrait,
         );
         notifyListeners();
         return started;

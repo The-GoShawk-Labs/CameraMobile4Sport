@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -20,6 +19,7 @@ import 'package:volleylive/presentation/screens/settings/scoreboard_customizer_m
 import 'package:volleylive/presentation/screens/settings/stream_settings_modal.dart';
 import 'package:volleylive/presentation/screens/settings/video_settings_modal.dart';
 import 'package:volleylive/presentation/services/scoreboard_widget_burner.dart';
+import 'package:volleylive/presentation/widgets/adaptive_camera_preview.dart';
 import 'package:volleylive/presentation/widgets/camera_controls_overlay.dart';
 import 'package:volleylive/presentation/widgets/recovery_banner.dart';
 import 'package:volleylive/presentation/widgets/recording_summary_dialog.dart';
@@ -143,14 +143,22 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
 
   Future<void> _onToggleLiveTransmission(BuildContext context, CameraProvider camera) async {
     final p2p = context.read<P2PConnectionProvider>();
+    final isPortrait = MediaQuery.orientationOf(context) == Orientation.portrait;
     if (p2p.isSinglePhoneMode) {
       final streamer = context.read<StreamerProvider>();
       final match = context.read<MatchProvider>();
       final isLive =
           streamer.streamingState == StreamingState.live ||
-          streamer.streamingState == StreamingState.connecting;
+          streamer.streamingState == StreamingState.connecting ||
+          streamer.streamingState == StreamingState.reconnecting;
       if (isLive) {
-        await streamer.toggleLiveStream(matchSession: match.session);
+        await streamer.toggleLiveStream(
+          matchSession: match.session,
+          isPortrait: isPortrait,
+        );
+        if (!camera.isCameraInitialized && !camera.isSimulationMode) {
+          await camera.initializeCamera();
+        }
         return;
       }
       final streamKey = await streamer.config.resolveEffectiveStreamKey();
@@ -166,7 +174,18 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
         );
         return;
       }
-      await camera.toggleLiveTransmission(p2pProvider: p2p);
+      await streamer.ensurePreviewTextureId();
+      await streamer.updateStreamOrientation(isPortrait: isPortrait);
+      if (camera.isCameraInitialized) {
+        await camera.releaseCameraForExternalStreamer();
+      }
+      final started = await streamer.toggleLiveStream(
+        matchSession: match.session,
+        isPortrait: isPortrait,
+      );
+      if (!started && !camera.isCameraInitialized && !camera.isSimulationMode) {
+        await camera.initializeCamera();
+      }
       return;
     }
     await camera.toggleLiveTransmission(p2pProvider: p2p);
@@ -545,7 +564,11 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                   onScaleUpdate: (details) {
                     camera.setZoom(_baseZoom * details.scale);
                   },
-                  child: _buildCameraPreviewContent(camera, isLandscape),
+                  child: _buildCameraPreviewContent(
+                    camera,
+                    streamer,
+                    isLandscape,
+                  ),
                 ),
               ),
 
@@ -800,7 +823,40 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
     return isLandscape ? (16.0 / 9.0) : (9.0 / 16.0);
   }
 
-  Widget _buildCameraPreviewContent(CameraProvider camera, bool isLandscape) {
+  Widget _buildCameraPreviewContent(
+    CameraProvider camera,
+    StreamerProvider streamer,
+    bool isLandscape,
+  ) {
+    final bool isStreamingLive =
+        streamer.streamingState == StreamingState.live ||
+        streamer.streamingState == StreamingState.connecting ||
+        streamer.streamingState == StreamingState.reconnecting;
+    final int? nativePreviewTexId = streamer.previewTextureId;
+
+    if (isStreamingLive && nativePreviewTexId != null) {
+      final double targetWidth = isLandscape ? 1920.0 : 1080.0;
+      final double targetHeight = isLandscape ? 1080.0 : 1920.0;
+      return Container(
+        color: Colors.black,
+        alignment: Alignment.center,
+        child: AspectRatio(
+          aspectRatio: targetWidth / targetHeight,
+          child: FittedBox(
+            fit: BoxFit.contain,
+            child: SizedBox(
+              width: targetWidth,
+              height: targetHeight,
+              child: Texture(
+                key: ValueKey('phone_a_native_tex_$nativePreviewTexId'),
+                textureId: nativePreviewTexId,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     if (camera.isCameraInitialized &&
         camera.cameraController != null &&
         camera.cameraController!.value.isInitialized) {
@@ -821,13 +877,10 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
         alignment: Alignment.center,
         child: AspectRatio(
           aspectRatio: targetAspectRatio,
-          child: FittedBox(
+          child: AdaptiveCameraPreview(
+            controller: controller,
+            isPortrait: !isLandscape,
             fit: BoxFit.contain,
-            child: SizedBox(
-              width: targetWidth,
-              height: targetHeight,
-              child: CameraPreview(controller),
-            ),
           ),
         ),
       );

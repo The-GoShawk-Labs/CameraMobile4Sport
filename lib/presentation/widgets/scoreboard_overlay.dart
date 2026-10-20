@@ -135,15 +135,25 @@ class ScoreboardOverlay extends StatelessWidget {
           offsetY = (parentH - videoH) / 2.0;
         }
 
-        // Dla strumienia poziomego (16:9) szerokość bazowa FullHD to 1920px (karta ~18.8% szerokości kadru).
-        // Dla strumienia pionowego (9:16) szerokość bazowa FullHD to 1080px (karta ~33.3% szerokości pionowego kadru),
-        // zachowując zwarty i nisko-profilowy układ (~4.74:1) na ekranach smartfonów.
-        final referenceStreamWidth = isPortraitVideo ? 1080.0 : 1920.0;
+        // Dla strumienia poziomego (16:9) oraz pionowego (9:16) stosujemy powiększoną skalę telewizyjną,
+        // aby tablica wyników była wyraźna i czytelna na ekranach smartfonów oraz w transmisji.
+        final isCompact3Letter =
+            style == ScoreboardThemeStyle.broadcastCompact3Letter;
+        final effectiveBaseWidth = isCompact3Letter ? 220.0 : baseWidth;
+        final referenceStreamWidth = isCompact3Letter
+            ? (isPortraitVideo ? 520.0 : 880.0)
+            : (isPortraitVideo ? 680.0 : 1120.0);
         final rawScale = customScale ?? (videoW / referenceStreamWidth);
         final scale = (rawScale.isFinite && rawScale > 0 ? rawScale : 0.5)
-            .clamp(0.05, 2.5);
-        final cardW = (baseWidth * scale).clamp(10.0, videoW * 0.92);
-        final cardH = cardW * (baseHeight / baseWidth);
+            .clamp(0.15, 2.5);
+        final minCardFraction = isCompact3Letter
+            ? (isPortraitVideo ? 0.38 : 0.24)
+            : (isPortraitVideo ? 0.50 : 0.30);
+        final cardW = (effectiveBaseWidth * scale).clamp(
+          videoW * minCardFraction,
+          videoW * 0.92,
+        );
+        final cardH = cardW * (baseHeight / effectiveBaseWidth);
 
         // Bezpieczne marginesy telewizyjne (Broadcast Safe Margin) wewnątrz aktywnego kadru wideo
         final marginX = videoW * (isPortraitVideo ? 0.035 : ScoreboardAnchorPosition.safeMarginX);
@@ -204,7 +214,7 @@ class ScoreboardOverlay extends StatelessWidget {
                 child: FittedBox(
                   fit: BoxFit.fill,
                   child: SizedBox(
-                    width: baseWidth,
+                    width: effectiveBaseWidth,
                     height: baseHeight,
                     child: _buildScoreboardCard(context, 1.0),
                   ),
@@ -247,13 +257,13 @@ class ScoreboardOverlay extends StatelessWidget {
     final teamACode = session.teamAShortCode;
     final teamBCode = session.teamBShortCode;
 
-    // Sztywna, zwarta siatka (rigid column widths: 24 + 4 + 68 + 34 + 48 = 178 dp)
-    final wLeague = 24.0 * scale;
-    final wStrip = 4.0 * scale;
-    final wTla = 68.0 * scale;
-    final wSets = 34.0 * scale;
-    final wPts = 48.0 * scale;
-    final totalWidth = wLeague + wStrip + wTla + wSets + wPts; // 178.0 * scale
+    // Sztywna, zwarta siatka (rigid column widths: 28 + 5 + 85 + 44 + 58 = 220 dp)
+    final wLeague = 28.0 * scale;
+    final wStrip = 5.0 * scale;
+    final wTla = 85.0 * scale;
+    final wSets = 44.0 * scale;
+    final wPts = 58.0 * scale;
+    final totalWidth = wLeague + wStrip + wTla + wSets + wPts; // 220.0 * scale
     final rowHeight = 27.0 * scale;
     final bannerHeight = 21.0 * scale;
     final alignment = switch (anchorPosition) {
@@ -266,7 +276,7 @@ class ScoreboardOverlay extends StatelessWidget {
     };
 
     return Container(
-      width: baseWidth * scale,
+      width: (isStandaloneCard ? baseWidth : 220.0) * scale,
       height: baseHeight * scale,
       color: Colors.transparent,
       alignment: alignment,

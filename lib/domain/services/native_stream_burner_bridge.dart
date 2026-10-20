@@ -113,6 +113,10 @@ class NativeStreamBurnerBridge {
   String _lastStyle = ScoreboardThemeStyle.tvProBroadcast.name;
   String get lastStyle => _lastStyle;
   String _lastMatchClock = '';
+  int? _previewTextureId;
+  int? get previewTextureId => _previewTextureId;
+  bool? _lastIsPortrait;
+  bool get isPortraitStream => _lastIsPortrait ?? false;
   StreamSubscription? _eventSubscription;
 
   // Auto-reconnect retry configuration
@@ -126,6 +130,21 @@ class NativeStreamBurnerBridge {
 
   NativeStreamBurnerBridge._internal() {
     _initEventListener();
+  }
+
+  /// Queries the shared Flutter TextureRegistry ID attached to RootEncoder's GlStreamInterface.
+  Future<int?> ensurePreviewTextureId() async {
+    if (_previewTextureId != null) return _previewTextureId;
+    if (kIsWeb || Platform.environment.containsKey('FLUTTER_TEST')) {
+      return null;
+    }
+    try {
+      final dynamic id = await _methodChannel.invokeMethod('getPreviewTextureId');
+      if (id is num) {
+        _previewTextureId = id.toInt();
+      }
+    } catch (_) {}
+    return _previewTextureId;
   }
 
   void _initEventListener() {
@@ -157,6 +176,14 @@ class NativeStreamBurnerBridge {
     final statusStr = map['status'] as String?;
     final details = map['details'] as String? ?? map['message'] as String?;
     final error = map['error'] as String?;
+    final texId = map['previewTextureId'];
+    if (texId is num) {
+      _previewTextureId = texId.toInt();
+    }
+    final isPortraitEvt = map['isPortrait'];
+    if (isPortraitEvt is bool) {
+      _lastIsPortrait = isPortraitEvt;
+    }
 
     switch (statusStr) {
       case 'CONNECTING':
@@ -326,20 +353,27 @@ class NativeStreamBurnerBridge {
     _intentionalStop = false;
     _lastRtmpUrl = rtmpUrl;
     _lastStreamKey = streamKey ?? '';
+    if (isPortrait != null) {
+      _lastIsPortrait = isPortrait;
+    } else if (width > 0 && height > 0 && width < height) {
+      _lastIsPortrait = true;
+    }
     _setStatus(NativeStreamStatus.connecting);
+    unawaited(ensurePreviewTextureId());
 
-    final bool portrait = isPortrait ?? (width < height);
-    final safeWidth = portrait
+    final bool? effectivePortrait = isPortrait ?? _lastIsPortrait ?? (width < height ? true : null);
+    final bool portraitDim = effectivePortrait ?? false;
+    final safeWidth = portraitDim
         ? ((width > 0 && height > 0 ? (width < height ? width : height) : 1080) & ~1)
         : ((width > 0 && height > 0 ? (width > height ? width : height) : 1920) & ~1);
-    final safeHeight = portrait
+    final safeHeight = portraitDim
         ? ((width > 0 && height > 0 ? (width > height ? width : height) : 1920) & ~1)
         : ((width > 0 && height > 0 ? (width < height ? width : height) : 1080) & ~1);
     final safeFps = (fps > 0 ? fps : 30).clamp(15, 60);
     final safeBitrate = bitrate > 0 ? bitrate : 4000000;
 
     try {
-      final bool? success = await _methodChannel.invokeMethod('startStream', {
+      final args = <String, dynamic>{
         'rtmpUrl': rtmpUrl,
         'streamKey': streamKey ?? '',
         'width': safeWidth,
@@ -351,9 +385,12 @@ class NativeStreamBurnerBridge {
         'gopSeconds': 2.0,
         'profile': 'high',
         'bitrateMode': 'CBR',
-        'isPortrait': portrait,
         'scoreboard': scoreboardData,
-      });
+      };
+      if (effectivePortrait != null) {
+        args['isPortrait'] = effectivePortrait;
+      }
+      final bool? success = await _methodChannel.invokeMethod('startStream', args);
       if (success == true) {
         _setStatus(NativeStreamStatus.streaming);
         return true;
@@ -469,6 +506,7 @@ class NativeStreamBurnerBridge {
 
   /// Dynamically updates stream orientation (portrait vs landscape) in native encoder & OpenGL filters.
   Future<void> updateOrientation({required bool isPortrait}) async {
+    _lastIsPortrait = isPortrait;
     try {
       await _methodChannel.invokeMethod('updateOrientation', {
         'isPortrait': isPortrait,
@@ -485,10 +523,14 @@ class NativeStreamBurnerBridge {
   Future<bool> initializeStream(StreamConfig config, {bool? isPortrait}) async {
     _lastConfig = config;
     _lastAnchorPosition = config.anchorPosition.name;
+    if (isPortrait != null) {
+      _lastIsPortrait = isPortrait;
+    }
     try {
       final map = config.toMap();
-      if (isPortrait != null) {
-        map['isPortrait'] = isPortrait;
+      final effectivePortrait = isPortrait ?? _lastIsPortrait;
+      if (effectivePortrait != null) {
+        map['isPortrait'] = effectivePortrait;
       }
       final bool? success = await _methodChannel.invokeMethod(
         'initializeStream',
@@ -515,16 +557,22 @@ class NativeStreamBurnerBridge {
     int audioBitrateBps = 128000,
     bool? isPortrait,
   }) async {
-    final bool portrait = isPortrait ?? (width < height);
-    final safeWidth = portrait
+    if (isPortrait != null) {
+      _lastIsPortrait = isPortrait;
+    } else if (width > 0 && height > 0 && width < height) {
+      _lastIsPortrait = true;
+    }
+    final bool? effectivePortrait = isPortrait ?? _lastIsPortrait ?? (width < height ? true : null);
+    final bool portraitDim = effectivePortrait ?? false;
+    final safeWidth = portraitDim
         ? ((width > 0 && height > 0 ? (width < height ? width : height) : 1080) & ~1)
         : ((width > 0 && height > 0 ? (width > height ? width : height) : 1920) & ~1);
-    final safeHeight = portrait
+    final safeHeight = portraitDim
         ? ((width > 0 && height > 0 ? (width > height ? width : height) : 1920) & ~1)
         : ((width > 0 && height > 0 ? (width < height ? width : height) : 1080) & ~1);
 
     try {
-      final bool? success = await _methodChannel.invokeMethod('initialize', {
+      final args = <String, dynamic>{
         'width': safeWidth,
         'height': safeHeight,
         'fps': fps,
@@ -533,8 +581,11 @@ class NativeStreamBurnerBridge {
         'gopSeconds': 2.0,
         'profile': 'high',
         'bitrateMode': 'CBR',
-        'isPortrait': portrait,
-      });
+      };
+      if (effectivePortrait != null) {
+        args['isPortrait'] = effectivePortrait;
+      }
+      final bool? success = await _methodChannel.invokeMethod('initialize', args);
       return success ?? false;
     } on PlatformException catch (e) {
       debugPrint('[NativeStreamBurnerBridge] Init failed: ${e.message}');
@@ -585,11 +636,12 @@ class NativeStreamBurnerBridge {
 
     final rawW = config?.width ?? width;
     final rawH = config?.height ?? height;
-    final bool portrait = isPortrait ?? (rawW < rawH);
-    final finalWidth = portrait
+    final bool? effectivePortrait = isPortrait ?? _lastIsPortrait ?? (rawW < rawH ? true : null);
+    final bool portraitDim = effectivePortrait ?? false;
+    final finalWidth = portraitDim
         ? ((rawW > 0 && rawH > 0 ? (rawW < rawH ? rawW : rawH) : 1080) & ~1)
         : ((rawW > 0 && rawH > 0 ? (rawW > rawH ? rawW : rawH) : 1920) & ~1);
-    final finalHeight = portrait
+    final finalHeight = portraitDim
         ? ((rawW > 0 && rawH > 0 ? (rawW > rawH ? rawW : rawH) : 1920) & ~1)
         : ((rawW > 0 && rawH > 0 ? (rawW < rawH ? rawW : rawH) : 1080) & ~1);
     final finalFps = (config?.fps ?? fps).clamp(15, 60);
@@ -618,7 +670,7 @@ class NativeStreamBurnerBridge {
       finalFps,
       streamKey: streamKey,
       scoreboardData: map,
-      isPortrait: portrait,
+      isPortrait: effectivePortrait,
     );
   }
 

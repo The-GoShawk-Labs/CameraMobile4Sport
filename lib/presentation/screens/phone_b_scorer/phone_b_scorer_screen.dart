@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -23,6 +22,7 @@ import 'package:volleylive/presentation/screens/settings/scoreboard_customizer_m
 import 'package:volleylive/presentation/screens/settings/storage_folder_picker_modal.dart';
 import 'package:volleylive/presentation/screens/settings/stream_settings_modal.dart';
 import 'package:volleylive/presentation/screens/settings/video_settings_modal.dart';
+import 'package:volleylive/presentation/widgets/adaptive_camera_preview.dart';
 import 'package:volleylive/presentation/widgets/recording_summary_dialog.dart';
 import 'package:volleylive/presentation/widgets/recovery_banner.dart';
 import 'package:volleylive/presentation/widgets/scoreboard_overlay.dart';
@@ -46,6 +46,10 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
   StreamerProvider? _streamerRef;
   StreamingState _previousStreamingState = StreamingState.idle;
   bool? _lastKeepAwakeState;
+  bool? _lastOrientationIsPortrait;
+  final GlobalKey _broadcastStreamSurfaceKey = GlobalKey(
+    debugLabel: 'broadcast_stream_surface_key',
+  );
   late final ProgramWidgetCapture _programCapture = ProgramWidgetCapture(
     boundaryKey: GlobalKey(),
     isSourceAvailable: _isProgramVideoSourceAvailable,
@@ -133,12 +137,17 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
   ) async {
     final p2p = context.read<P2PConnectionProvider>();
     final camera = context.read<CameraProvider>();
+    final isPortrait = MediaQuery.orientationOf(context) == Orientation.portrait;
 
     final isLive =
         streamer.streamingState == StreamingState.live ||
-        streamer.streamingState == StreamingState.connecting;
+        streamer.streamingState == StreamingState.connecting ||
+        streamer.streamingState == StreamingState.reconnecting;
     if (isLive) {
-      await streamer.toggleLiveStream(matchSession: match.session);
+      await streamer.toggleLiveStream(
+        matchSession: match.session,
+        isPortrait: isPortrait,
+      );
       _programCapture.stop();
       if (p2p.currentRole == DeviceRole.singlePhoneAllInOne &&
           !camera.isCameraInitialized &&
@@ -160,6 +169,10 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
 
     if (!context.mounted) return;
 
+    // Pobierz identyfikator współdzielonej tekstury OpenGL przed zwolnieniem lokalnego kontrolera CameraX/Camera2
+    await streamer.ensurePreviewTextureId();
+    await streamer.updateStreamOrientation(isPortrait: isPortrait);
+
     // Zatrzymaj całkowicie przechwytywanie PNG na CPU oraz zwolnij sensor Camera2 dla natywnego RootEncoder
     _programCapture.stop();
     if (camera.isCameraInitialized) {
@@ -174,6 +187,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
 
     final started = await streamer.toggleLiveStream(
       matchSession: match.session,
+      isPortrait: isPortrait,
     );
     if (!started && context.mounted) {
       if (p2p.currentRole == DeviceRole.singlePhoneAllInOne &&
@@ -535,6 +549,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
         currentSession: match.session,
         sessionStream: match.sessionStream,
       );
+      unawaited(streamer.ensurePreviewTextureId());
 
       if (p2p.currentRole == DeviceRole.singlePhoneAllInOne &&
           !camera.isCameraInitialized &&
@@ -578,6 +593,14 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
     final isOutdoor = match.isOutdoorModeEnabled;
     final isPortrait =
         MediaQuery.of(context).orientation == Orientation.portrait;
+    if (_lastOrientationIsPortrait != isPortrait) {
+      _lastOrientationIsPortrait = isPortrait;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          unawaited(streamer.updateStreamOrientation(isPortrait: isPortrait));
+        }
+      });
+    }
 
     // Phone B: blokada wygaszania ekranu podczas trwania meczu i nagrywania/streamingu
     final isStreamingOrRecording =
@@ -1827,7 +1850,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
   }
 
   // ===========================================================================
-  // WIDOK STRUMIENIA WIDEO (16:9) Z TABLICĄ WYNIKÓW OVERLAY I TELEMETRIĄ
+  // WIDOK STRUMIENIA WIDEO (16:9 / 9:16) Z TABLICĄ WYNIKÓW OVERLAY I TELEMETRIĄ
   // ===========================================================================
   double _resolveActiveStreamAspectRatio(
     CameraProvider camera,
@@ -1843,9 +1866,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
       final double pHeight = previewSize?.height ?? 1080.0;
       final double sensorLong = pWidth > pHeight ? pWidth : pHeight;
       final double sensorShort = pWidth > pHeight ? pHeight : pWidth;
-      return isPortrait
-          ? (sensorShort / sensorLong)
-          : (sensorLong / sensorShort);
+      return sensorLong / sensorShort;
     }
     return 16.0 / 9.0;
   }
@@ -1864,6 +1885,14 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
       p2p,
       isPortrait,
     );
+    final isStreamingLive =
+        streamer.streamingState == StreamingState.live ||
+        streamer.streamingState == StreamingState.connecting ||
+        streamer.streamingState == StreamingState.reconnecting;
+    final hasActiveSinglePhoneCameraOrStream =
+        p2p.currentRole == DeviceRole.singlePhoneAllInOne &&
+        (camera.isCameraInitialized || isStreamingLive);
+
     return GestureDetector(
       onTap: () {
         if (_isControlsHidden) {
@@ -1874,6 +1903,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
         }
       },
       child: Container(
+        key: _broadcastStreamSurfaceKey,
         color: Colors.black,
         child: AspectRatio(
           aspectRatio: 16 / 9,
@@ -1890,23 +1920,36 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                     _buildStreamMediaLayer(
                       match,
                       camera,
+                      streamer,
                       p2p,
                       isOutdoor,
                       isPortrait,
                     ),
+                    // Gdy natywny RootEncoder strumieniuje z własną teksturą OpenGL,
+                    // tablica wyników jest już wpalona sprzętowo w teksturę podglądu,
+                    // więc unikamy podwójnego nakładania w tym samym kadrze.
                     Positioned.fill(
-                      child: ScoreboardOverlay(
-                        session: match.session,
-                        style: streamer.scoreboardStyle,
-                        anchorPosition: streamer.scoreboardAnchorPosition,
-                        targetAspectRatio: activeStreamAspectRatio,
-                        isTimeoutActive: match.isTimeoutActive,
-                        timeoutSeconds: match.timeoutSecondsRemaining,
-                        timeoutTeam: match.timeoutCallingTeam,
-                        showServeIndicator: streamer.showServeIndicator,
-                        activeSpecialEvent: match.activeSpecialEvent,
-                        matchDuration: match.matchDuration,
-                        useThreeLetterAcronyms: streamer.useThreeLetterAcronyms,
+                      child: Visibility(
+                        visible: !(isStreamingLive &&
+                            p2p.isSinglePhoneMode &&
+                            streamer.previewTextureId != null &&
+                            _showLocalCameraPreview),
+                        maintainState: true,
+                        maintainAnimation: true,
+                        maintainSize: false,
+                        child: ScoreboardOverlay(
+                          session: match.session,
+                          style: streamer.scoreboardStyle,
+                          anchorPosition: streamer.scoreboardAnchorPosition,
+                          targetAspectRatio: activeStreamAspectRatio,
+                          isTimeoutActive: match.isTimeoutActive,
+                          timeoutSeconds: match.timeoutSecondsRemaining,
+                          timeoutTeam: match.timeoutCallingTeam,
+                          showServeIndicator: streamer.showServeIndicator,
+                          activeSpecialEvent: match.activeSpecialEvent,
+                          matchDuration: match.matchDuration,
+                          useThreeLetterAcronyms: streamer.useThreeLetterAcronyms,
+                        ),
                       ),
                     ),
                   ],
@@ -1922,26 +1965,30 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                   child: _buildStreamStatusAndControlsRow(
                     context,
                     camera,
+                    streamer,
                     p2p,
                     isPortrait: isPortrait,
                   ),
                 ),
 
               // Pływający pasek sterowania kamerą w trybie Single Mode (Obiektyw, Latarka, Tryb REC)
-              if (p2p.currentRole == DeviceRole.singlePhoneAllInOne &&
-                  camera.isCameraInitialized)
+              if (hasActiveSinglePhoneCameraOrStream)
                 Positioned(
                   top: isPortrait ? 8 : 12,
                   right: 10,
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // Przełącznik kamery Tył / Przód
-                      if (camera.availableCamerasList.length > 1)
+                      // Przełącznik kamery Tył / Przód (obsługuje zarówno lokalny CameraX, jak i natywny RootEncoder)
+                      if (camera.availableCamerasList.length > 1 || isStreamingLive)
                         InkWell(
                           onTap: () async {
                             HapticFeedback.selectionClick();
-                            await camera.switchCamera();
+                            if (isStreamingLive) {
+                              await NativeStreamBurnerBridge().switchCamera();
+                            } else {
+                              await camera.switchCamera();
+                            }
                           },
                           borderRadius: BorderRadius.circular(16),
                           child: Container(
@@ -1961,35 +2008,37 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                       const SizedBox(width: 5),
 
                       // Włącznik latarki / doświetlenia
-                      InkWell(
-                        onTap: () async {
-                          HapticFeedback.selectionClick();
-                          await camera.toggleTorch();
-                        },
-                        borderRadius: BorderRadius.circular(16),
-                        child: Container(
-                          padding: const EdgeInsets.all(5),
-                          decoration: BoxDecoration(
-                            color: camera.isTorchOn
-                                ? AppTheme.amberAccent
-                                : Colors.black.withValues(alpha: 0.65),
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(
+                      if (camera.isCameraInitialized) ...[
+                        InkWell(
+                          onTap: () async {
+                            HapticFeedback.selectionClick();
+                            await camera.toggleTorch();
+                          },
+                          borderRadius: BorderRadius.circular(16),
+                          child: Container(
+                            padding: const EdgeInsets.all(5),
+                            decoration: BoxDecoration(
                               color: camera.isTorchOn
                                   ? AppTheme.amberAccent
-                                  : Colors.white24,
+                                  : Colors.black.withValues(alpha: 0.65),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: camera.isTorchOn
+                                    ? AppTheme.amberAccent
+                                    : Colors.white24,
+                              ),
+                            ),
+                            child: Icon(
+                              camera.isTorchOn ? Icons.flash_on : Icons.flash_off,
+                              color: camera.isTorchOn
+                                  ? Colors.black
+                                  : Colors.white70,
+                              size: 15,
                             ),
                           ),
-                          child: Icon(
-                            camera.isTorchOn ? Icons.flash_on : Icons.flash_off,
-                            color: camera.isTorchOn
-                                ? Colors.black
-                                : Colors.white70,
-                            size: 15,
-                          ),
                         ),
-                      ),
-                      const SizedBox(width: 5),
+                        const SizedBox(width: 5),
+                      ],
 
                       // Szybki wybór trybu nagrywania (RAW / PROG / DUAL)
                       InkWell(
@@ -2060,71 +2109,125 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
   Widget _buildStreamMediaLayer(
     MatchProvider match,
     CameraProvider camera,
+    StreamerProvider streamer,
     P2PConnectionProvider p2p,
     bool isOutdoor,
     bool isPortrait,
   ) {
-    // 1. LOKALNA KAMERA W TRYBIE POJEDYNCZEGO TELEFONU (ALL-IN-ONE) LUB GDY ZAINICJOWANA
-    if (_showLocalCameraPreview &&
+    final bool isStreamingLive =
+        streamer.streamingState == StreamingState.live ||
+        streamer.streamingState == StreamingState.connecting ||
+        streamer.streamingState == StreamingState.reconnecting;
+    final int? nativePreviewTexId = streamer.previewTextureId;
+    final bool hasLocalCamera =
         camera.isCameraInitialized &&
         camera.cameraController != null &&
-        camera.cameraController!.value.isInitialized) {
-      final controller = camera.cameraController!;
-      final previewSize = controller.value.previewSize;
-      final double pWidth = previewSize?.width ?? 1920.0;
-      final double pHeight = previewSize?.height ?? 1080.0;
-      final double sensorLong = pWidth > pHeight ? pWidth : pHeight;
-      final double sensorShort = pWidth > pHeight ? pHeight : pWidth;
+        camera.cameraController!.value.isInitialized;
 
-      final double targetWidth = isPortrait ? sensorShort : sensorLong;
-      final double targetHeight = isPortrait ? sensorLong : sensorShort;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // 0. TŁO MAKIETY BOISKA (ZAWSZE ZAMONTOWANE POD SPODEM)
+        _buildCourtFallbackStack(match, p2p, isOutdoor),
 
-      return Container(
-        color: Colors.black,
-        alignment: Alignment.center,
-        child: FittedBox(
-          fit: BoxFit.contain,
-          child: SizedBox(
-            width: targetWidth,
-            height: targetHeight,
-            child: CameraPreview(controller),
-          ),
+        // 1. WSPÓŁDZIELONA TEKSTURA OPENGL PODCZAS NADAWANIA RTMP W TRYBIE SOLO (ZACHOWUJE PODGLĄD LIVE)
+        Visibility(
+          key: const ValueKey('solo_hardware_stream_preview_visibility'),
+          visible: _showLocalCameraPreview &&
+              p2p.isSinglePhoneMode &&
+              isStreamingLive &&
+              nativePreviewTexId != null,
+          maintainState: true,
+          maintainAnimation: true,
+          maintainSize: false,
+          child: nativePreviewTexId != null
+              ? Container(
+                  color: Colors.black,
+                  alignment: Alignment.center,
+                  child: FittedBox(
+                    fit: BoxFit.contain,
+                    child: SizedBox(
+                      width: isPortrait ? 1080.0 : 1920.0,
+                      height: isPortrait ? 1920.0 : 1080.0,
+                      child: Texture(
+                        key: ValueKey('solo_native_tex_$nativePreviewTexId'),
+                        textureId: nativePreviewTexId,
+                      ),
+                    ),
+                  ),
+                )
+              : const SizedBox.expand(),
         ),
-      );
-    }
 
-    // 2. BEZPRZEWODOWY OBRAZ Z KAMERY PHONE A (P2P REALME)
-    if (!p2p.isSinglePhoneMode) {
-      return ValueListenableBuilder<Uint8List?>(
-        valueListenable: p2p.videoFrameNotifier,
-        builder: (context, frame, _) {
-          if (frame != null) {
-            return FittedBox(
-              fit: BoxFit.cover,
-              child: Image.memory(frame, gaplessPlayback: true),
-            );
-          }
-          if (camera.programPreviewFrame != null && !camera.isCameraInitialized) {
-            return FittedBox(
-              fit: BoxFit.cover,
-              child: Image.memory(camera.programPreviewFrame!, gaplessPlayback: true),
-            );
-          }
-          return _buildCourtFallbackStack(match, p2p, isOutdoor);
-        },
-      );
-    }
+        // 2. LOKALNA KAMERA W TRYBIE POJEDYNCZEGO TELEFONU PRZED STARTEM RTMP (ZACHOWUJE STAN PRZEZ VISIBILITY)
+        Visibility(
+          key: const ValueKey('solo_local_camera_preview_visibility'),
+          visible: _showLocalCameraPreview && hasLocalCamera && !isStreamingLive,
+          maintainState: true,
+          maintainAnimation: true,
+          maintainSize: false,
+          child: hasLocalCamera
+              ? Container(
+                  color: Colors.black,
+                  alignment: Alignment.center,
+                  child: SizedBox.expand(
+                    child: AdaptiveCameraPreview(
+                      controller: camera.cameraController!,
+                      isPortrait: isPortrait,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                )
+              : const SizedBox.expand(),
+        ),
 
-    // 3. AWARYJNY OBRAZ PROGRAM PREVIEW (TRYB ALL-IN-ONE GDY KAMERA NIE JEST JESZCZE GOTOWA)
-    if (camera.programPreviewFrame != null && !camera.isCameraInitialized) {
-      return FittedBox(
-        fit: BoxFit.cover,
-        child: Image.memory(camera.programPreviewFrame!, gaplessPlayback: true),
-      );
-    }
+        // 3. BEZPRZEWODOWY OBRAZ Z KAMERY PHONE A (TRYB DUAL P2P)
+        if (!p2p.isSinglePhoneMode)
+          ValueListenableBuilder<Uint8List?>(
+            key: const ValueKey('dual_p2p_stream_media_layer'),
+            valueListenable: p2p.videoFrameNotifier,
+            builder: (context, frame, _) {
+              if (frame != null) {
+                return Container(
+                  color: Colors.black,
+                  alignment: Alignment.center,
+                  child: AspectRatio(
+                    aspectRatio: isPortrait ? (9.0 / 16.0) : (16.0 / 9.0),
+                    child: FittedBox(
+                      fit: BoxFit.cover,
+                      child: Image.memory(frame, gaplessPlayback: true),
+                    ),
+                  ),
+                );
+              }
+              if (camera.programPreviewFrame != null && !camera.isCameraInitialized) {
+                return FittedBox(
+                  fit: BoxFit.cover,
+                  child: Image.memory(
+                    camera.programPreviewFrame!,
+                    gaplessPlayback: true,
+                  ),
+                );
+              }
+              return const SizedBox.shrink();
+            },
+          ),
 
-    // 4. MAKIETA BOISKA JEŚLI BRAK AKTYWNEGO OBRAZU Z KAMERY
-    return _buildCourtFallbackStack(match, p2p, isOutdoor);
+        // 4. AWARYJNY OBRAZ PROGRAM PREVIEW (GDY KAMERA JEST W TRAKCIE PRZEŁĄCZANIA)
+        if (p2p.isSinglePhoneMode &&
+            _showLocalCameraPreview &&
+            !hasLocalCamera &&
+            !(isStreamingLive && nativePreviewTexId != null) &&
+            camera.programPreviewFrame != null)
+          FittedBox(
+            fit: BoxFit.contain,
+            child: Image.memory(
+              camera.programPreviewFrame!,
+              gaplessPlayback: true,
+            ),
+          ),
+      ],
+    );
   }
 
   Widget _buildCourtFallbackStack(
@@ -2362,9 +2465,16 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
   Widget _buildStreamStatusAndControlsRow(
     BuildContext context,
     CameraProvider camera,
+    StreamerProvider streamer,
     P2PConnectionProvider p2p, {
     bool isPortrait = true,
   }) {
+    final bool isStreamingLive =
+        streamer.streamingState == StreamingState.live ||
+        streamer.streamingState == StreamingState.connecting ||
+        streamer.streamingState == StreamingState.reconnecting;
+    final String formatBadge = isPortrait ? '9:16 (1080×1920)' : '16:9 (1920×1080)';
+
     return Align(
       alignment: isPortrait ? Alignment.bottomCenter : Alignment.bottomLeft,
       child: FittedBox(
@@ -2401,7 +2511,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                         width: 6,
                         height: 6,
                         decoration: BoxDecoration(
-                          color: camera.isRecording
+                          color: (camera.isRecording || isStreamingLive)
                               ? AppTheme.redLive
                               : (p2p.hasStreamTimeout
                                     ? AppTheme.amberAccent
@@ -2417,25 +2527,27 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        isPortrait
-                            ? (p2p.currentVideoFrame != null
-                                  ? 'LIVE FEED • ${p2p.remoteDeviceName.toUpperCase()} (${p2p.healthMetrics.latencyMs}ms • P2P)'
-                                  : (p2p.hasStreamTimeout
-                                        ? 'TIMEOUT STRUMIENIA (${p2p.remoteDeviceName.toUpperCase()})'
-                                        : (camera.isCameraInitialized
-                                              ? 'LOKALNA KAMERA (${camera.settings.resolution.label} ${camera.settings.fps.label})'
-                                              : (p2p.connectionState ==
-                                                        CameraConnectionState
-                                                            .connected
-                                                    ? 'OCZEKIWANIE NA STRUMIEŃ ${p2p.remoteDeviceName.toUpperCase()}...'
-                                                    : 'OCZEKIWANIE NA KAMERĘ ${p2p.remoteDeviceName.toUpperCase()}...'))))
-                            : (p2p.currentVideoFrame != null
-                                  ? 'P2P ${p2p.healthMetrics.latencyMs}ms'
-                                  : (p2p.hasStreamTimeout
-                                        ? 'TIMEOUT'
-                                        : (camera.isCameraInitialized
-                                              ? 'KAMERA ${camera.settings.fps.label}'
-                                              : 'BRAK ŹRÓDŁA'))),
+                        isStreamingLive
+                            ? 'LIVE RTMP • $formatBadge • ${streamer.config.fps} FPS'
+                            : (isPortrait
+                                  ? (p2p.currentVideoFrame != null
+                                        ? 'LIVE FEED • ${p2p.remoteDeviceName.toUpperCase()} (${p2p.healthMetrics.latencyMs}ms • P2P)'
+                                        : (p2p.hasStreamTimeout
+                                              ? 'TIMEOUT STRUMIENIA (${p2p.remoteDeviceName.toUpperCase()})'
+                                              : (camera.isCameraInitialized
+                                                    ? 'LOKALNA KAMERA ($formatBadge • ${camera.settings.fps.label})'
+                                                    : (p2p.connectionState ==
+                                                              CameraConnectionState
+                                                                  .connected
+                                                          ? 'OCZEKIWANIE NA STRUMIEŃ ${p2p.remoteDeviceName.toUpperCase()}...'
+                                                          : 'OCZEKIWANIE NA KAMERĘ ${p2p.remoteDeviceName.toUpperCase()}...'))))
+                                  : (p2p.currentVideoFrame != null
+                                        ? 'P2P ${p2p.healthMetrics.latencyMs}ms'
+                                        : (p2p.hasStreamTimeout
+                                              ? 'TIMEOUT'
+                                              : (camera.isCameraInitialized
+                                                    ? 'KAMERA $formatBadge'
+                                                    : 'BRAK ŹRÓDŁA')))),
                         style: TextStyle(
                           fontSize: 9,
                           fontWeight: FontWeight.bold,
@@ -2468,7 +2580,9 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                   setState(() {
                     _showLocalCameraPreview = !_showLocalCameraPreview;
                   });
-                  if (_showLocalCameraPreview && !camera.isCameraInitialized) {
+                  if (_showLocalCameraPreview &&
+                      !camera.isCameraInitialized &&
+                      !isStreamingLive) {
                     camera.initializeCamera();
                   }
                 },
