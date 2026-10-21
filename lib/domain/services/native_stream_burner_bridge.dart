@@ -127,6 +127,7 @@ class NativeStreamBurnerBridge {
   String? _lastRtmpUrl;
   String? _lastStreamKey;
   bool _intentionalStop = false;
+  bool _isReconfiguring = false;
 
   NativeStreamBurnerBridge._internal() {
     _initEventListener();
@@ -210,7 +211,7 @@ class NativeStreamBurnerBridge {
 
       case 'DISCONNECTED':
       case 'STOPPED':
-        if (_intentionalStop) {
+        if (_intentionalStop || _isReconfiguring) {
           _setStatus(NativeStreamStatus.stopped);
           _eventController.add(
             StreamEvent(
@@ -260,6 +261,12 @@ class NativeStreamBurnerBridge {
   }
 
   void _handleConnectionDrop(String reason) {
+    if (_intentionalStop || _isReconfiguring) {
+      debugPrint(
+        '[NativeStreamBurnerBridge] Connection drop ignored (intentionalStop: $_intentionalStop, isReconfiguring: $_isReconfiguring)',
+      );
+      return;
+    }
     if (_retryAttempt < _maxRetryAttempts && _lastRtmpUrl != null) {
       _retryAttempt++;
       _setStatus(NativeStreamStatus.reconnecting);
@@ -513,6 +520,63 @@ class NativeStreamBurnerBridge {
       });
     } on PlatformException catch (e) {
       debugPrint('[NativeStreamBurnerBridge] updateOrientation error: ${e.message}');
+    }
+  }
+
+  /// Safely reconfigures stream FPS on active stream and camera preview.
+  Future<bool> reconfigureFps(int fps) async {
+    _isReconfiguring = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    final safeFps = fps.clamp(15, 60);
+    if (_lastConfig != null) {
+      _lastConfig = _lastConfig!.copyWith(fps: safeFps);
+    }
+    try {
+      final bool? success = await _methodChannel.invokeMethod('reconfigureFps', {
+        'fps': safeFps,
+      });
+      return success ?? false;
+    } on PlatformException catch (e) {
+      debugPrint('[NativeStreamBurnerBridge] reconfigureFps error: ${e.message}');
+      return false;
+    } finally {
+      _isReconfiguring = false;
+    }
+  }
+
+  /// Full dynamic reconfiguration of encoder, camera capture session, and preview surface.
+  Future<bool> reconfigureStream({
+    required int width,
+    required int height,
+    required int fps,
+    required int bitrate,
+    bool? isPortrait,
+  }) async {
+    _isReconfiguring = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    final bool? effectivePortrait = isPortrait ?? _lastIsPortrait ?? (width < height ? true : null);
+    final safeFps = fps.clamp(15, 60);
+    final safeBitrate = bitrate > 0 ? bitrate : 4000000;
+    try {
+      final args = <String, dynamic>{
+        'width': width,
+        'height': height,
+        'fps': safeFps,
+        'bitrate': safeBitrate,
+        'videoBitrate': safeBitrate,
+      };
+      if (effectivePortrait != null) {
+        args['isPortrait'] = effectivePortrait;
+      }
+      final bool? success = await _methodChannel.invokeMethod('reconfigureStream', args);
+      return success ?? false;
+    } on PlatformException catch (e) {
+      debugPrint('[NativeStreamBurnerBridge] reconfigureStream error: ${e.message}');
+      return false;
+    } finally {
+      _isReconfiguring = false;
     }
   }
 

@@ -18,6 +18,7 @@ class ScoreboardWidgetBurner {
 
   bool _isCapturing = false;
   Uint8List? _lastBytes;
+  int _lastCaptureTimeMs = 0;
 
   ScoreboardWidgetBurner({
     required this.boundaryKey,
@@ -31,6 +32,10 @@ class ScoreboardWidgetBurner {
   /// and updates the native video frame modifier texture and disk cache.
   Future<bool> captureAndPush({bool force = false}) async {
     if (_isCapturing) return false;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (!force && _lastCaptureTimeMs > 0 && (now - _lastCaptureTimeMs) < 250) {
+      return false;
+    }
     final context = boundaryKey.currentContext;
     if (context == null) return false;
 
@@ -65,6 +70,7 @@ class ScoreboardWidgetBurner {
         return false;
       }
       _lastBytes = bytes;
+      _lastCaptureTimeMs = now;
       latestCapturedPngBytes = bytes;
       _persistLatestImageToDiskAsync(bytes);
 

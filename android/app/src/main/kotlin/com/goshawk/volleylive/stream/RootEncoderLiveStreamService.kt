@@ -3,20 +3,32 @@ package com.goshawk.volleylive.stream
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.graphics.SurfaceTexture
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CaptureRequest
+import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
+import android.os.Build
+import android.os.Handler
 import android.util.Log
+import android.util.Range
 import android.view.OrientationEventListener
 import android.view.Surface
 import android.view.WindowManager
 import com.pedro.common.AudioCodec
 import com.pedro.common.ConnectChecker
 import com.pedro.common.VideoCodec
+import com.pedro.encoder.BaseEncoder
 import com.pedro.encoder.input.gl.render.filters.`object`.ImageObjectFilterRender
+import com.pedro.encoder.input.video.CameraCallbacks
 import com.pedro.encoder.input.video.CameraHelper
 import com.pedro.encoder.utils.CodecUtil
 import com.pedro.encoder.utils.gl.AspectRatioMode
+import com.pedro.encoder.video.FormatVideoEncoder
+import com.pedro.encoder.video.GetVideoData
+import com.pedro.encoder.video.VideoEncoder
+import com.pedro.library.base.Camera2Base
 import com.pedro.library.rtmp.RtmpCamera2
 import com.pedro.library.view.GlStreamInterface
 import com.pedro.library.view.OpenGlView
@@ -27,6 +39,171 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * Własny VideoEncoder wymuszający przestrzeń barw BT.709 oraz ograniczony zakres YUV (Limited Range).
+ * Zapobiega oznaczaniu klatek przez enkoder MediaCodec jako JPEG full range (yuvj420p)
+ * i eliminuje ostrzeżenie FFmpeg: "deprecated pixel format used, make sure you did set range correctly (yuvj420p)".
+ */
+private class Bt709VideoEncoder(getVideoData: GetVideoData) : VideoEncoder(getVideoData) {
+    override fun prepareVideoEncoder(
+        width: Int,
+        height: Int,
+        fps: Int,
+        bitRate: Int,
+        rotation: Int,
+        iFrameInterval: Int,
+        formatVideoEncoder: FormatVideoEncoder,
+        profile: Int,
+        level: Int
+    ): Boolean {
+        return try {
+            val fPrepared = BaseEncoder::class.java.getDeclaredField("prepared").apply { isAccessible = true }
+            if (fPrepared.getBoolean(this)) {
+                stop()
+            }
+
+            require(width % 2 == 0) { "Invalid width: $width, must be an even value" }
+            require(height % 2 == 0) { "Invalid height: $height, must be an even value" }
+            require(fps > 0) { "Invalid fps: $fps, must be higher than 0" }
+
+            val fWidth = VideoEncoder::class.java.getDeclaredField("width").apply { isAccessible = true }
+            val fHeight = VideoEncoder::class.java.getDeclaredField("height").apply { isAccessible = true }
+            val fFps = VideoEncoder::class.java.getDeclaredField("fps").apply { isAccessible = true }
+            val fBitRate = VideoEncoder::class.java.getDeclaredField("bitRate").apply { isAccessible = true }
+            val fRotation = VideoEncoder::class.java.getDeclaredField("rotation").apply { isAccessible = true }
+            val fIFrame = VideoEncoder::class.java.getDeclaredField("iFrameInterval").apply { isAccessible = true }
+            val fFormat = VideoEncoder::class.java.getDeclaredField("formatVideoEncoder").apply { isAccessible = true }
+            val fProfile = VideoEncoder::class.java.getDeclaredField("profile").apply { isAccessible = true }
+            val fLevel = VideoEncoder::class.java.getDeclaredField("level").apply { isAccessible = true }
+            val fCodec = BaseEncoder::class.java.getDeclaredField("codec").apply { isAccessible = true }
+            val fInputSurface = VideoEncoder::class.java.getDeclaredField("inputSurface").apply { isAccessible = true }
+            val fRunning = BaseEncoder::class.java.getDeclaredField("running").apply { isAccessible = true }
+            val fIsBufferMode = BaseEncoder::class.java.getDeclaredField("isBufferMode").apply { isAccessible = true }
+
+            fWidth.setInt(this, width)
+            fHeight.setInt(this, height)
+            fFps.setInt(this, fps)
+            fBitRate.setInt(this, bitRate)
+            fRotation.setInt(this, rotation)
+            fIFrame.setInt(this, iFrameInterval)
+            fFormat.set(this, formatVideoEncoder)
+            fProfile.setInt(this, profile)
+            fLevel.setInt(this, level)
+            fIsBufferMode.setBoolean(this, true)
+
+            val encoder = chooseEncoder(type) ?: run {
+                Log.e("Bt709VideoEncoder", "Valid encoder not found for $type")
+                return false
+            }
+            Log.i("Bt709VideoEncoder", "Encoder selected: ${encoder.name}")
+
+            val codecInstance = MediaCodec.createByCodecName(encoder.name)
+            fCodec.set(this, codecInstance)
+
+            val formatW: Int
+            val formatH: Int
+            if (rotation == 90 || rotation == 270) {
+                formatW = height
+                formatH = width
+            } else {
+                formatW = width
+                formatH = height
+            }
+
+            val mediaFormat = MediaFormat.createVideoFormat(type, formatW, formatH)
+            Log.i("Bt709VideoEncoder", "Prepare video info: ${formatVideoEncoder.name}, ${formatW}x${formatH}")
+            mediaFormat.setInteger("color-format", formatVideoEncoder.getFormatCodec())
+            mediaFormat.setInteger("max-input-size", 0)
+            mediaFormat.setInteger("bitrate", bitRate)
+            mediaFormat.setInteger("frame-rate", fps)
+            mediaFormat.setInteger("i-frame-interval", iFrameInterval)
+
+            // 1. Wymuszenie stałego bitrate CBR (Constant Bitrate)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                mediaFormat.setInteger(
+                    MediaFormat.KEY_BITRATE_MODE,
+                    MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+                )
+            } else {
+                mediaFormat.setInteger("bitrate-mode", 2)
+            }
+
+            // 2. Całkowite wyłączenie klatek B-frames (Zero B-frames) - eliminuje buforowanie "pipelineFull"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                mediaFormat.setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+            } else {
+                mediaFormat.setInteger("max-bframes", 0)
+            }
+            mediaFormat.setInteger("vendor.qti-ext-enc-b-frames.num-b-frames", 0)
+
+            // 3. Ultra-niskie opóźnienie (Zero-Latency / Low-Latency mode) dla Android API 30+ (R)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                mediaFormat.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                mediaFormat.setInteger(MediaFormat.KEY_LATENCY, 0)
+            } else {
+                mediaFormat.setInteger("low-latency", 1)
+                mediaFormat.setInteger("latency", 0)
+            }
+
+            // 4. Priorytet czasu rzeczywistego (0 = Realtime, streaming na żywo)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                mediaFormat.setInteger(MediaFormat.KEY_PRIORITY, 0)
+            } else {
+                mediaFormat.setInteger("priority", 0)
+            }
+
+            if (profile > 0) mediaFormat.setInteger("profile", profile)
+            if (level > 0) mediaFormat.setInteger("level", level)
+
+            // 5. BT.709 ColorStandard & Limited ColorRange to avoid FFmpeg deprecated pixel format (yuvj420p)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                mediaFormat.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
+                mediaFormat.setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+                mediaFormat.setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+            }
+
+            setCallback()
+
+            try {
+                codecInstance.configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            } catch (e: Exception) {
+                Log.w("Bt709VideoEncoder", "Codec rejected BT.709 color keys: ${e.message}, retrying standard format")
+                codecInstance.reset()
+                val fallbackFormat = MediaFormat.createVideoFormat(type, formatW, formatH)
+                fallbackFormat.setInteger("color-format", formatVideoEncoder.getFormatCodec())
+                fallbackFormat.setInteger("max-input-size", 0)
+                fallbackFormat.setInteger("bitrate", bitRate)
+                fallbackFormat.setInteger("frame-rate", fps)
+                fallbackFormat.setInteger("i-frame-interval", iFrameInterval)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    fallbackFormat.setInteger("bitrate-mode", 2)
+                }
+                fallbackFormat.setInteger("max-bframes", 0)
+                fallbackFormat.setInteger("priority", 0)
+                if (profile > 0) fallbackFormat.setInteger("profile", profile)
+                if (level > 0) fallbackFormat.setInteger("level", level)
+                codecInstance.configure(fallbackFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            }
+
+            fRunning.setBoolean(this, false)
+
+            if (formatVideoEncoder == FormatVideoEncoder.SURFACE && Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+                fIsBufferMode.setBoolean(this, false)
+                val surface = codecInstance.createInputSurface()
+                fInputSurface.set(this, surface)
+            }
+
+            fPrepared.setBoolean(this, true)
+            Log.i("Bt709VideoEncoder", "prepared with BT.709 limited color format")
+            true
+        } catch (e: Exception) {
+            Log.e("Bt709VideoEncoder", "Create VideoEncoder failed: ${e.message}", e)
+            stop()
+            false
+        }
+    }
+}
 
 /**
  * Hardware-accelerated RTMP/RTMPS streaming service powered by pedroSG94/RootEncoder (v2.5.4).
@@ -83,6 +260,9 @@ class RootEncoderLiveStreamService(
     private var lastScoreboardData = VolleyballScoreboardData()
 
     private var reconnectJob: Job? = null
+    private var aeFpsJob: Job? = null
+    @Volatile
+    private var isReconfiguring = false
     private var lastEndpointUrl: String? = null
     private var retryCount = 0
     private val maxRetries = 3
@@ -189,27 +369,16 @@ class RootEncoderLiveStreamService(
 
         val isPortrait = when {
             isExplicitPortrait != null -> isExplicitPortrait
-            requestedWidth > 0 && requestedHeight > 0 && requestedWidth < requestedHeight -> true
-            displayDegrees == 90 || displayDegrees == 270 -> true
+            requestedWidth > 0 && requestedHeight > 0 -> requestedHeight > requestedWidth
             deviceOrientationDegrees != -1 -> deviceOrientationDegrees == 90 || deviceOrientationDegrees == 270
+            displayDegrees == 90 || displayDegrees == 270 -> true
             else -> false
         }
 
-        var rotation = when {
-            displayDegrees == 90 || displayDegrees == 270 || displayDegrees == 0 || displayDegrees == 180 -> displayDegrees
-            deviceOrientationDegrees != -1 -> deviceOrientationDegrees
-            else -> 0
-        }
-        if (deviceOrientationDegrees != -1) {
-            val sensorPortrait = deviceOrientationDegrees == 90 || deviceOrientationDegrees == 270
-            if (sensorPortrait == isPortrait) {
-                rotation = deviceOrientationDegrees
-            }
-        }
-        if (isPortrait && rotation != 90 && rotation != 270) {
-            rotation = 90
-        } else if (!isPortrait && (rotation == 90 || rotation == 270)) {
-            rotation = 0
+        var rotation = if (isPortrait) {
+            if (deviceOrientationDegrees == 270 || displayDegrees == 270) 270 else 90
+        } else {
+            if (deviceOrientationDegrees == 180 || displayDegrees == 180) 180 else 0
         }
 
         rtmpCamera2?.let { camera ->
@@ -233,6 +402,39 @@ class RootEncoderLiveStreamService(
         instance.setVideoCodec(VideoCodec.H264)
         instance.setAudioCodec(AudioCodec.AAC)
         (instance.glInterface as? GlStreamInterface)?.setAspectRatioMode(AspectRatioMode.Adjust)
+
+        // Install BT.709 video encoder to avoid FFmpeg "deprecated pixel format used (yuvj420p)"
+        try {
+            val getVideoDataField = Camera2Base::class.java.getDeclaredField("getVideoData").apply { isAccessible = true }
+            val getVideoData = getVideoDataField.get(instance) as GetVideoData
+            val customVideoEncoder = Bt709VideoEncoder(getVideoData)
+            val videoEncoderField = Camera2Base::class.java.getDeclaredField("videoEncoder").apply { isAccessible = true }
+            videoEncoderField.set(instance, customVideoEncoder)
+            Log.i(TAG, "Bt709VideoEncoder successfully installed on RtmpCamera2")
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not install Bt709VideoEncoder, using default VideoEncoder: ${e.message}")
+        }
+
+        instance.setCameraCallbacks(object : CameraCallbacks {
+            override fun onCameraChanged(facing: CameraHelper.Facing) {
+                Log.d(TAG, "onCameraChanged: $facing")
+                enforceFixedAeFpsRange(currentFps)
+            }
+
+            override fun onCameraError(error: String) {
+                Log.e(TAG, "onCameraError: $error")
+            }
+
+            override fun onCameraOpened() {
+                Log.d(TAG, "onCameraOpened -> enforcing AE FPS Range: $currentFps")
+                enforceFixedAeFpsRange(currentFps)
+            }
+
+            override fun onCameraDisconnected() {
+                Log.d(TAG, "onCameraDisconnected")
+            }
+        })
+
         rtmpCamera2 = instance
         return instance
     }
@@ -254,7 +456,8 @@ class RootEncoderLiveStreamService(
         }
         val rawWidth = if (width > 0) width else 1920
         val rawHeight = if (height > 0) height else 1080
-        val rotation = resolveDeviceRotation(rawWidth, rawHeight, isPortrait ?: explicitPortraitOverride)
+        val targetPortrait = isPortrait ?: explicitPortraitOverride ?: (rawHeight > rawWidth)
+        val rotation = resolveDeviceRotation(rawWidth, rawHeight, targetPortrait)
         val portrait = (rotation == 90 || rotation == 270)
 
         // Landscape: 1920x1080 (16:9, rotation 0° or 180°)
@@ -358,6 +561,14 @@ class RootEncoderLiveStreamService(
                 camera.stopStream()
             } catch (_: Exception) {}
         }
+        if (camera.isOnPreview) {
+            try {
+                camera.stopPreview()
+            } catch (_: Exception) {}
+        }
+        try {
+            camera.resetVideoEncoder()
+        } catch (_: Exception) {}
 
         camera.forceCodecType(CodecUtil.CodecType.HARDWARE, CodecUtil.CodecType.HARDWARE)
         camera.setVideoCodec(VideoCodec.H264)
@@ -366,7 +577,6 @@ class RootEncoderLiveStreamService(
 
         val isPortraitMode = currentHeight > currentWidth
         val rotation = resolveDeviceRotation(currentWidth, currentHeight, isPortraitMode)
-        val iFrameInterval = currentGopSeconds.toInt().coerceAtLeast(1)
 
         // RootEncoder VideoEncoder expects sensor base dimensions (1920x1080) and applies
         // rotation (0/180 for Landscape 1920x1080, 90/270 for Portrait 1080x1920) to both
@@ -374,33 +584,8 @@ class RootEncoderLiveStreamService(
         val baseWidth = maxOf(currentWidth, currentHeight)
         val baseHeight = minOf(currentWidth, currentHeight)
 
-        // Try H.264 High Profile 4.1 first, fallback to Baseline / default hardware profile
-        val videoPrepared = camera.prepareVideo(
-            baseWidth,
-            baseHeight,
-            currentFps,
-            currentVideoBitrate,
-            iFrameInterval,
-            rotation,
-            MediaCodecInfo.CodecProfileLevel.AVCProfileHigh,
-            MediaCodecInfo.CodecProfileLevel.AVCLevel41
-        ) || camera.prepareVideo(
-            baseWidth,
-            baseHeight,
-            currentFps,
-            currentVideoBitrate,
-            iFrameInterval,
-            rotation,
-            MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
-            MediaCodecInfo.CodecProfileLevel.AVCLevel31
-        ) || camera.prepareVideo(
-            baseWidth,
-            baseHeight,
-            currentFps,
-            currentVideoBitrate,
-            iFrameInterval,
-            rotation
-        )
+        // Przygotowanie enkodera wideo w trybie Zero-Latency (Baseline / no B-frames, CBR, krótki GOP 1-2s)
+        val videoPrepared = prepareVideoEncoderWithZeroLatency(camera, baseWidth, baseHeight, rotation)
 
         if (!videoPrepared) {
             throw IllegalStateException("Sprzętowy enkoder MediaCodec H.264 odrzucił konfigurację ${currentWidth}x${currentHeight}@${currentFps}fps (rot=$rotation)")
@@ -425,6 +610,22 @@ class RootEncoderLiveStreamService(
             Log.w(TAG, "Hardware AAC audio preparation returned false; proceeding with video stream")
         }
 
+        // Lock OpenGL rendering to strict target FPS
+        camera.forceFpsLimit(true)
+
+        // Start physical camera preview session before RTMP streaming
+        val facing = camera.cameraFacing
+        if (!camera.isOnPreview) {
+            try {
+                camera.startPreview(facing, baseWidth, baseHeight, currentFps, rotation)
+            } catch (e: Exception) {
+                Log.w(TAG, "startPreview warning: ${e.message}")
+            }
+        }
+
+        // Enforce constant AE FPS Range (e.g. [30, 30] or [60, 60]) preventing indoor light frame-drops
+        enforceFixedAeFpsRange(currentFps)
+
         camera.startStream(endpoint)
 
         // Attach shared SurfaceTexture preview after glInterface is started so local PIP stays live
@@ -439,6 +640,318 @@ class RootEncoderLiveStreamService(
         )
     }
 
+    /**
+     * Bezpieczna rekonfiguracja parametrów wideo i klatkażu FPS (30 <-> 60 fps):
+     * 1. Zabezpiecza przed deadlockiem bufora OpenGL / SurfaceTexture (odpięcie powierzchni podglądu).
+     * 2. Zatrzymuje aktywny strumień i podgląd kamery (reset sesji CaptureSession).
+     * 3. Resetuje enkoder sprzętowy (resetVideoEncoder).
+     * 4. Przygotowuje nowy enkoder z zadanym klatkażem i profilem bitrate.
+     * 5. Wymusza stały limit FPS (forceFpsLimit) oraz stały zakres AE FPS range [fps, fps] w Camera2.
+     * 6. Wznawia podgląd kamery (startPreview) i podłącza powierzchnię podglądu (attachSharedPreview).
+     * 7. Jeśli transmisja była aktywna, wznawia nadawanie RTMP (startStream).
+     */
+    @Synchronized
+    fun reconfigureStream(
+        width: Int? = null,
+        height: Int? = null,
+        fps: Int? = null,
+        bitrate: Int? = null,
+        isPortrait: Boolean? = null
+    ): Boolean {
+        isReconfiguring = true
+        try {
+            val targetWidth = width ?: currentWidth
+            val targetHeight = height ?: currentHeight
+            val targetFps = (fps ?: currentFps).coerceIn(15, 60)
+            val targetBitrate = if (bitrate != null) normalizeBitrateBps(bitrate) else currentVideoBitrate
+            val effectivePortrait = isPortrait ?: (targetHeight > targetWidth)
+
+            Log.i(TAG, "reconfigureStream requested: ${targetWidth}x${targetHeight}@${targetFps}fps, bitrate=$targetBitrate bps")
+
+            val camera = ensureCameraInstance()
+            val wasStreaming = camera.isStreaming
+            val endpoint = lastEndpointUrl
+
+            // 1. Odpięcie bufora podglądu, by uniknąć BufferQueue abandoned / deadlocka
+            detachSharedPreviewIfAttached(camera)
+
+            // 2. Bezpieczne zatrzymanie strumienia
+            if (camera.isStreaming) {
+                try {
+                    camera.stopStream()
+                } catch (e: Exception) {
+                    Log.w(TAG, "stopStream during reconfigure warning: ${e.message}")
+                }
+            }
+
+            // 3. Bezpieczne zatrzymanie podglądu kamery (zamknięcie CaptureSession)
+            if (camera.isOnPreview) {
+                try {
+                    camera.stopPreview()
+                } catch (e: Exception) {
+                    Log.w(TAG, "stopPreview during reconfigure warning: ${e.message}")
+                }
+            }
+
+            // 4. Zwolnienie i reset enkodera wideo
+            try {
+                camera.resetVideoEncoder()
+            } catch (e: Exception) {
+                Log.w(TAG, "resetVideoEncoder warning: ${e.message}")
+            }
+
+            // 5. Aktualizacja konfiguracji
+            initialize(
+                width = targetWidth,
+                height = targetHeight,
+                fps = targetFps,
+                videoBitrate = targetBitrate,
+                audioBitrate = currentAudioBitrate,
+                gopSeconds = currentGopSeconds,
+                audioSampleRate = currentAudioSampleRate,
+                isPortrait = effectivePortrait
+            )
+
+            val isPortraitMode = (currentHeight > currentWidth)
+            val rotation = resolveDeviceRotation(currentWidth, currentHeight, isPortraitMode)
+            val baseWidth = maxOf(currentWidth, currentHeight)
+            val baseHeight = minOf(currentWidth, currentHeight)
+
+            // 6. Ponowne przygotowanie enkodera wideo w trybie Zero-Latency (Baseline / no B-frames, CBR, krótki GOP 1-2s)
+            val videoPrepared = prepareVideoEncoderWithZeroLatency(camera, baseWidth, baseHeight, rotation)
+
+            if (!videoPrepared) {
+                Log.e(TAG, "reconfigureStream: prepareVideo failed for ${currentWidth}x${currentHeight}@${currentFps}fps")
+                return false
+            }
+
+            // 7. ZAWSZE przygotuj enkoder audio AAC przed ewentualnym startStream
+            // Zapobiega: IllegalStateException: AudioEncoder not prepared yet. You must call prepare method before start it
+            val audioPrepared = camera.prepareAudio(
+                currentAudioBitrate,
+                currentAudioSampleRate,
+                true,
+                false,
+                false
+            ) || camera.prepareAudio(
+                128_000,
+                44_100,
+                true,
+                false,
+                false
+            )
+            if (!audioPrepared) {
+                Log.w(TAG, "reconfigureStream: prepareAudio returned false")
+            }
+
+            // Wymuszenie stałego limitu FPS w GL pipeline
+            camera.forceFpsLimit(true)
+
+            // 8. Ponowne otwarcie sesji kamery (startPreview)
+            try {
+                val facing = camera.cameraFacing
+                camera.startPreview(facing, baseWidth, baseHeight, currentFps, rotation)
+            } catch (e: Exception) {
+                Log.e(TAG, "reconfigureStream: startPreview failed: ${e.message}", e)
+            }
+
+            // 9. Wymuszenie stałego zakresu AE FPS w Camera2 (np. [30, 30] lub [60, 60])
+            enforceFixedAeFpsRange(currentFps)
+
+            // 10. Ponowne podpięcie powierzchni podglądu (SurfaceTexture)
+            attachSharedPreviewIfPossible(camera)
+
+            // 11. Ponowne odświeżenie filtru scoreboardu
+            attachAndRefreshScoreboardFilter(camera)
+
+            // 12. Jeśli transmisja była aktywna, wznów nadawanie RTMP
+            if (wasStreaming && !endpoint.isNullOrEmpty()) {
+                try {
+                    camera.startStream(endpoint)
+                    isStreamingActive = true
+                } catch (e: Exception) {
+                    Log.e(TAG, "reconfigureStream: restart stream failed: ${e.message}", e)
+                }
+            }
+
+            Log.i(TAG, "reconfigureStream completed successfully: ${currentWidth}x${currentHeight}@${currentFps}fps")
+            onStatusEvent?.invoke(
+                "BITRATE_UPDATE",
+                mapOf(
+                    "fps" to currentFps,
+                    "bitrate" to currentVideoBitrate,
+                    "width" to currentWidth,
+                    "height" to currentHeight
+                )
+            )
+            return true
+        } finally {
+            isReconfiguring = false
+        }
+    }
+
+    fun reconfigureFps(newFps: Int): Boolean {
+        return reconfigureStream(fps = newFps)
+    }
+
+    /**
+     * Przygotowuje enkoder wideo w trybie ultra-niskiego opóźnienia (Zero-Latency / Realtime H.264):
+     * 1. Krótki interwał klatek kluczowych GOP: iFrameInterval = 1 lub 2 sekundy (szybka odbudowa strumienia).
+     * 2. Profil: preferowany AVCProfileBaseline (całkowity brak klatek B-frames w specyfikacji H.264,
+     *    co eliminuje buforowanie reorder buffer 'pipelineFull' na układach Qualcomm c2.qti.avc.encoder),
+     *    z fallbackiem do AVCProfileMain (z programowo wyłączonymi B-frames) oraz Baseline Level 3.1.
+     * 3. Poziom: AVCLevel4 (1080p@30fps) lub AVCLevel42 (1080p@60fps).
+     */
+    private fun prepareVideoEncoderWithZeroLatency(
+        camera: RtmpCamera2,
+        baseWidth: Int,
+        baseHeight: Int,
+        rotation: Int
+    ): Boolean {
+        val iFrameInterval = currentGopSeconds.toInt().coerceIn(1, 2)
+        val targetLevel = if (currentFps >= 60) {
+            MediaCodecInfo.CodecProfileLevel.AVCLevel42
+        } else {
+            MediaCodecInfo.CodecProfileLevel.AVCLevel4
+        }
+
+        return camera.prepareVideo(
+            baseWidth,
+            baseHeight,
+            currentFps,
+            currentVideoBitrate,
+            iFrameInterval,
+            rotation,
+            MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
+            targetLevel
+        ) || camera.prepareVideo(
+            baseWidth,
+            baseHeight,
+            currentFps,
+            currentVideoBitrate,
+            iFrameInterval,
+            rotation,
+            MediaCodecInfo.CodecProfileLevel.AVCProfileMain,
+            targetLevel
+        ) || camera.prepareVideo(
+            baseWidth,
+            baseHeight,
+            currentFps,
+            currentVideoBitrate,
+            iFrameInterval,
+            rotation,
+            MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
+            MediaCodecInfo.CodecProfileLevel.AVCLevel31
+        ) || camera.prepareVideo(
+            baseWidth,
+            baseHeight,
+            currentFps,
+            currentVideoBitrate,
+            iFrameInterval,
+            rotation
+        )
+    }
+
+    /**
+     * Wymusza stały zakres FPS (np. [30, 30] lub [60, 60]) w Camera2 (CONTROL_AE_TARGET_FPS_RANGE).
+     * Zapobiega klatkowaniu i gubieniu klatek w słabszym oświetleniu hali sportowej,
+     * w którym auto-ekspozycja domyślnie obniża klatkaż do np. 10-15 fps.
+     * Wykonywane asynchronicznie z pętlą retry oczekującą na gotowość asynchronicznej sesji CameraCaptureSession.
+     */
+    private fun enforceFixedAeFpsRange(targetFps: Int) {
+        aeFpsJob?.cancel()
+        aeFpsJob = scope.launch {
+            try {
+                val camera = rtmpCamera2 ?: return@launch
+                val supportedFpsList = camera.supportedFps ?: emptyList()
+                if (supportedFpsList.isEmpty()) {
+                    Log.w(TAG, "enforceFixedAeFpsRange: supportedFps list is empty")
+                    return@launch
+                }
+
+                val is1000Scale = supportedFpsList.any { it.upper > 1000 }
+                val scaledTarget = if (is1000Scale) targetFps * 1000 else targetFps
+
+                var bestRange: Range<Int>? = null
+
+                // 1. Priorytet: idealnie stały zakres [targetFps, targetFps]
+                for (r in supportedFpsList) {
+                    if (r.upper == scaledTarget && r.lower == scaledTarget) {
+                        bestRange = r
+                        break
+                    }
+                }
+
+                // 2. Jeśli brak idealnego, wybierz zakres o górnym limicie targetFps z najwyższym dolnym limitem
+                if (bestRange == null) {
+                    for (r in supportedFpsList) {
+                        if (r.upper == scaledTarget) {
+                            if (bestRange == null || r.lower > bestRange.lower) {
+                                bestRange = r
+                            }
+                        }
+                    }
+                }
+
+                // 3. Fallback: najwęższy zakres zawierający targetFps
+                if (bestRange == null) {
+                    var minDiff = Int.MAX_VALUE
+                    for (r in supportedFpsList) {
+                        if (r.lower <= scaledTarget && r.upper >= scaledTarget) {
+                            val diff = (scaledTarget - r.lower) + (r.upper - scaledTarget)
+                            if (diff < minDiff) {
+                                minDiff = diff
+                                bestRange = r
+                            }
+                        }
+                    }
+                }
+
+                if (bestRange == null) {
+                    Log.w(TAG, "enforceFixedAeFpsRange: no suitable AE range found for targetFps=$targetFps")
+                    return@launch
+                }
+
+                Log.i(TAG, "Target AE FPS Range: $bestRange for targetFps=$targetFps (is1000Scale=$is1000Scale)")
+
+                val baseClass = Camera2Base::class.java
+                val cameraManagerField = baseClass.getDeclaredField("cameraManager").apply { isAccessible = true }
+                val cameraManager = cameraManagerField.get(camera) ?: return@launch
+
+                val mgrClass = cameraManager.javaClass
+                val builderField = mgrClass.getDeclaredField("builderInputSurface").apply { isAccessible = true }
+                val sessionField = mgrClass.getDeclaredField("cameraCaptureSession").apply { isAccessible = true }
+                val handlerField = mgrClass.getDeclaredField("cameraHandler").apply { isAccessible = true }
+                val cbField = mgrClass.getDeclaredField("cb").apply { isAccessible = true }
+
+                // Pętla retry: oczekujemy aż asynchroniczna sesja CameraCaptureSession zostanie skompletowana (do 2.5s)
+                var attempts = 0
+                while (attempts < 50) {
+                    val builder = builderField.get(cameraManager) as? CaptureRequest.Builder
+                    val session = sessionField.get(cameraManager) as? CameraCaptureSession
+                    val handler = handlerField.get(cameraManager) as? Handler
+                    val cb = cbField.get(cameraManager) as? CameraCaptureSession.CaptureCallback
+
+                    if (builder != null && session != null) {
+                        try {
+                            builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, bestRange)
+                            session.setRepeatingRequest(builder.build(), cb, handler)
+                            Log.i(TAG, "Successfully locked Camera2 to fixed AE FPS Range: $bestRange on attempt $attempts")
+                            return@launch
+                        } catch (e: Exception) {
+                            Log.w(TAG, "setRepeatingRequest failed on attempt $attempts: ${e.message}")
+                        }
+                    }
+                    delay(50)
+                    attempts++
+                }
+                Log.w(TAG, "enforceFixedAeFpsRange timed out waiting for active CameraCaptureSession")
+            } catch (e: Exception) {
+                Log.w(TAG, "enforceFixedAeFpsRange ignored: ${e.message}")
+            }
+        }
+    }
+
     @Synchronized
     private fun attachAndRefreshScoreboardFilter(camera: RtmpCamera2) {
         val filter = ImageObjectFilterRender()
@@ -449,6 +962,11 @@ class RootEncoderLiveStreamService(
         filter.setImage(snapshot)
         applyAnchorPositionAndScale(filter, currentAnchorPosition)
     }
+
+    private var lastScoreboardUploadNs = 0L
+    private val MIN_CLOCK_UPLOAD_INTERVAL_NS = 500_000_000L // Max 2x/s dla zegara, zapobiega przeciążeniu OpenGL
+    private var lastOverlayBitmapHash = 0
+    private var lastOverlayUploadNs = 0L
 
     /**
      * Updates scoreboard data and refreshes the OpenGL texture ONLY when score data
@@ -469,6 +987,20 @@ class RootEncoderLiveStreamService(
         }
 
         val resolvedClock = if (data.matchClock.isNotBlank()) data.matchClock else lastScoreboardData.matchClock
+        val scoreChanged = data.scoreA != lastScoreboardData.scoreA ||
+                           data.scoreB != lastScoreboardData.scoreB ||
+                           data.setsA != lastScoreboardData.setsA ||
+                           data.setsB != lastScoreboardData.setsB ||
+                           data.servingTeam != lastScoreboardData.servingTeam ||
+                           data.eventTag != lastScoreboardData.eventTag ||
+                           data.toastMessage != lastScoreboardData.toastMessage ||
+                           data.teamA != lastScoreboardData.teamA ||
+                           data.teamB != lastScoreboardData.teamB ||
+                           data.colorA != lastScoreboardData.colorA ||
+                           data.colorB != lastScoreboardData.colorB
+
+        val clockChanged = resolvedClock != lastScoreboardData.matchClock
+
         val normalizedData = data.copy(
             anchorPosition = currentAnchorPosition,
             style = currentScoreboardStyle,
@@ -478,10 +1010,19 @@ class RootEncoderLiveStreamService(
         renderer.updateData(normalizedData)
 
         val filter = scoreboardFilter ?: return
-        val dirtySnapshot = if (styleChanged) renderer.forceRenderAndSnapshot() else renderer.renderAndSnapshotIfDirty()
-        if (dirtySnapshot != null) {
-            filter.setImage(dirtySnapshot)
-            applyAnchorPositionAndScale(filter, currentAnchorPosition)
+
+        // Jeśli zmieniły się punkty, sety, serwujący lub styl - renderujemy i wrzucamy do GL natychmiast.
+        // Jeśli zmienił się tylko zegar meczowy - ograniczamy taktowanie do max 2x/s, eliminując "pipelineFull: too many frames".
+        val now = System.nanoTime()
+        val shouldUpload = scoreChanged || styleChanged || (clockChanged && (now - lastScoreboardUploadNs >= MIN_CLOCK_UPLOAD_INTERVAL_NS))
+
+        if (shouldUpload) {
+            val dirtySnapshot = if (styleChanged) renderer.forceRenderAndSnapshot() else renderer.renderAndSnapshotIfDirty()
+            if (dirtySnapshot != null) {
+                lastScoreboardUploadNs = now
+                filter.setImage(dirtySnapshot)
+                applyAnchorPositionAndScale(filter, currentAnchorPosition)
+            }
         } else if (anchorChanged) {
             applyAnchorPositionAndScale(filter, currentAnchorPosition)
         }
@@ -615,8 +1156,20 @@ class RootEncoderLiveStreamService(
             currentAnchorPosition = anchor
         }
         val filter = scoreboardFilter ?: return
+        val now = System.nanoTime()
+        val bytesHash = bytes.contentHashCode()
+        // Throttling: unikamy wielokrotnego wysyłania identycznej bitmapy w odstępie mniejszym niż 250ms
+        if (bytesHash == lastOverlayBitmapHash && (now - lastOverlayUploadNs < 250_000_000L)) {
+            return
+        }
+        lastOverlayBitmapHash = bytesHash
+        lastOverlayUploadNs = now
+
         try {
-            val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return
+            val opts = BitmapFactory.Options().apply {
+                inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+            }
+            val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return
             filter.setImage(bmp)
             val w = if (width > 0) maxOf(width, renderer.overlayWidth) else maxOf(bmp.width, renderer.overlayWidth)
             val h = if (height > 0) maxOf(height, renderer.overlayHeight) else maxOf(bmp.height, renderer.overlayHeight)
@@ -719,6 +1272,10 @@ class RootEncoderLiveStreamService(
     override fun onConnectionFailed(reason: String) {
         Log.e(TAG, "RTMP connection failed: $reason")
         isStreamingActive = false
+        if (isReconfiguring) {
+            Log.i(TAG, "onConnectionFailed suppressed during reconfigureStream: $reason")
+            return
+        }
 
         val endpoint = lastEndpointUrl
         if (!isUserStopped && retryCount < maxRetries && !endpoint.isNullOrEmpty()) {
@@ -771,6 +1328,10 @@ class RootEncoderLiveStreamService(
     override fun onDisconnect() {
         Log.i(TAG, "RTMP disconnected")
         isStreamingActive = false
+        if (isReconfiguring) {
+            Log.i(TAG, "onDisconnect suppressed during reconfigureStream")
+            return
+        }
         onStatusEvent?.invoke(
             "DISCONNECTED",
             mapOf("details" to "Rozłączono z serwerem RTMP")

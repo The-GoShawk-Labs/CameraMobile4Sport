@@ -320,6 +320,37 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
+                    "reconfigureFps" -> {
+                        val fps = call.argument<Int>("fps") ?: 30
+                        backgroundScope.launch {
+                            val success = streamService?.reconfigureFps(fps) ?: false
+                            runOnUiThread {
+                                result.success(success)
+                            }
+                        }
+                    }
+
+                    "reconfigureStream" -> {
+                        val width = call.argument<Int>("width")
+                        val height = call.argument<Int>("height")
+                        val fps = call.argument<Int>("fps") ?: 30
+                        val bitrate = call.argument<Int>("bitrate")
+                            ?: call.argument<Int>("videoBitrate")
+                        val isPortrait = call.argument<Boolean>("isPortrait")
+                        backgroundScope.launch {
+                            val success = streamService?.reconfigureStream(
+                                width = width,
+                                height = height,
+                                fps = fps,
+                                bitrate = bitrate,
+                                isPortrait = isPortrait
+                            ) ?: false
+                            runOnUiThread {
+                                result.success(success)
+                            }
+                        }
+                    }
+
                     "updateScoreboardData", "updateScoreboard" -> {
                         @Suppress("UNCHECKED_CAST")
                         val map = (call.argument<Map<String, Any>>("data"))

@@ -45,6 +45,8 @@ abstract class IStreamingService {
   });
   void setScoreboardPosition(ScoreboardAnchorPosition position);
   void setScoreboardStyle(ScoreboardThemeStyle style);
+  Future<bool> reconfigureFps(int fps);
+  Future<bool> reconfigureStream(StreamConfig config, {bool? isPortrait});
 }
 
 /// Serwis nadawania RTMP/RTMPS oparty wyłącznie o sprzętowy enkoder RootEncoder
@@ -256,6 +258,34 @@ class StreamingService implements IStreamingService {
   void setScoreboardStyle(ScoreboardThemeStyle style) {
     _activeConfig = _activeConfig.copyWith(scoreboardStyle: style);
     _nativeBridge.setScoreboardStyle(style.name);
+  }
+
+  @override
+  Future<bool> reconfigureFps(int fps) async {
+    _activeConfig = _activeConfig.copyWith(fps: fps);
+    if (_currentState == StreamingState.live ||
+        _currentState == StreamingState.connecting ||
+        _currentState == StreamingState.reconnecting) {
+      return await _nativeBridge.reconfigureFps(fps);
+    }
+    return true;
+  }
+
+  @override
+  Future<bool> reconfigureStream(StreamConfig config, {bool? isPortrait}) async {
+    _activeConfig = config;
+    if (_currentState == StreamingState.live ||
+        _currentState == StreamingState.connecting ||
+        _currentState == StreamingState.reconnecting) {
+      return await _nativeBridge.reconfigureStream(
+        width: config.width,
+        height: config.height,
+        fps: config.fps,
+        bitrate: config.videoBitrate,
+        isPortrait: isPortrait,
+      );
+    }
+    return true;
   }
 
   @override

@@ -136,22 +136,57 @@ class StreamerProvider extends ChangeNotifier {
   }
 
   void updateStreamConfig(StreamConfig config) {
+    final oldFps = _config.fps;
+    final oldWidth = _config.width;
+    final oldHeight = _config.height;
+    final oldBitrate = _config.videoBitrate;
     _config = config;
     _destination = config.toStreamingDestination();
     unawaited(config.saveToPreferences());
+    if ((oldFps != config.fps ||
+            oldWidth != config.width ||
+            oldHeight != config.height ||
+            oldBitrate != config.videoBitrate) &&
+        (_streamingState == StreamingState.live ||
+            _streamingState == StreamingState.connecting ||
+            _streamingState == StreamingState.reconnecting)) {
+      unawaited(_streamingService.reconfigureStream(config));
+    }
     notifyListeners();
   }
 
   void selectPreset(YouTubeLivePreset preset) {
+    final oldFps = _config.fps;
+    final oldWidth = _config.width;
+    final oldHeight = _config.height;
+    final oldBitrate = _config.videoBitrate;
     _config = StreamConfig.fromPreset(
       preset,
       serverUrl: _config.serverUrl,
+      streamKey: _config.streamKey,
       credentialReference: _config.credentialReference,
       isLocalProgramRecordingEnabled: _config.isLocalProgramRecordingEnabled,
+      anchorPosition: _config.anchorPosition,
+      scoreboardStyle: _scoreboardStyle,
     );
     _destination = _config.toStreamingDestination();
     unawaited(_config.saveToPreferences());
+    if ((oldFps != _config.fps ||
+            oldWidth != _config.width ||
+            oldHeight != _config.height ||
+            oldBitrate != _config.videoBitrate) &&
+        (_streamingState == StreamingState.live ||
+            _streamingState == StreamingState.connecting ||
+            _streamingState == StreamingState.reconnecting)) {
+      unawaited(_streamingService.reconfigureStream(_config));
+    }
     notifyListeners();
+  }
+
+  Future<bool> reconfigureFps(int fps) async {
+    final updated = _config.copyWith(fps: fps);
+    updateStreamConfig(updated);
+    return await _streamingService.reconfigureFps(fps);
   }
 
   void updateDestination(StreamingDestination destination) {
