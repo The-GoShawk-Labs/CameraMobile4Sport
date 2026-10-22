@@ -25,6 +25,7 @@ import 'package:volleylive/presentation/screens/settings/video_settings_modal.da
 import 'package:volleylive/presentation/widgets/adaptive_camera_preview.dart';
 import 'package:volleylive/presentation/widgets/recording_summary_dialog.dart';
 import 'package:volleylive/presentation/widgets/recovery_banner.dart';
+import 'package:volleylive/presentation/widgets/sports_ui_components.dart';
 import 'package:volleylive/presentation/widgets/scoreboard_overlay.dart';
 import 'package:volleylive/presentation/widgets/tactile_score_pad.dart';
 
@@ -54,6 +55,391 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
     boundaryKey: GlobalKey(),
     isSourceAvailable: _isProgramVideoSourceAvailable,
   );
+
+  bool _isCameraToggling = false;
+
+  /// Płynne, bezpieczne przejście na Tryb Solo (Kamera Lokalna) z bezwzględnym zachowaniem stanu meczu
+  Future<void> _switchToSoloMode() async {
+    if (_isCameraToggling) return;
+    _isCameraToggling = true;
+    try {
+      final p2p = context.read<P2PConnectionProvider>();
+      final camera = context.read<CameraProvider>();
+      final isStreamingLive = NativeStreamBurnerBridge().isStreaming || NativeStreamBurnerBridge().isRecording;
+
+      HapticFeedback.mediumImpact();
+      await p2p.switchToSoloMode();
+      setState(() {
+        _showLocalCameraPreview = true;
+      });
+
+      if (!isStreamingLive && !camera.isCameraInitialized && !camera.isSimulationMode) {
+        await camera.initializeCamera();
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.phone_android, color: Colors.black, size: 18),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Aktywowano Tryb Solo (Kamera Lokalna). Wynik meczu zachowany!',
+                    style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: AppTheme.cyanAccent,
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isCameraToggling = false);
+      }
+    }
+  }
+
+  /// Płynne przejście na Tryb Dwóch Smartfonów (Dual - Phone B Scorer + Phone A Kamera)
+  Future<void> _switchToDualMode() async {
+    if (_isCameraToggling) return;
+    _isCameraToggling = true;
+    try {
+      final p2p = context.read<P2PConnectionProvider>();
+      final camera = context.read<CameraProvider>();
+
+      HapticFeedback.mediumImpact();
+      if (camera.isCameraInitialized) {
+        await camera.releaseCameraForExternalStreamer();
+      }
+      p2p.switchToDualMode(role: DeviceRole.scorerPhoneB);
+      setState(() {
+        _showLocalCameraPreview = true;
+      });
+
+      if (mounted) {
+        _openCameraConnectionModal(context);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isCameraToggling = false);
+      }
+    }
+  }
+
+  /// Dialog potwierdzenia awaryjnego przełączenia na Tryb Solo (np. gdy Phone A się rozładuje)
+  Future<void> _showEmergencySwitchToSoloDialog() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161F2E),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: AppTheme.amberAccent, width: 1.5),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: AppTheme.amberAccent, size: 22),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Awaryjne przełączenie na Solo',
+                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Telefon A (kamera na statywie) utracił łączność lub rozładowała się bateria.',
+              style: TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+            SizedBox(height: 12),
+            Text(
+              '• Przełączenie aktywuje lokalną kamerę w tym telefonie.\n'
+              '• Aktualny wynik meczu, sety i zegar zostaną w 100% zachowane.\n'
+              '• Po powrocie zasilania w Phone A możesz w każdej chwili wrócić do trybu Dual.',
+              style: TextStyle(color: Colors.white, fontSize: 12, height: 1.4),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('ANULUJ', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            icon: const Icon(Icons.videocam, size: 16),
+            label: const Text('PRZEŁĄCZ NA SOLO'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.amberAccent,
+              foregroundColor: Colors.black,
+              textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _switchToSoloMode();
+    }
+  }
+
+  /// Dialog potwierdzenia zmiany trybu (z Solo na Dual lub odwrotnie)
+  Future<void> _showModeSwitchConfirmationDialog({required bool toSolo}) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161F2E),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(
+            color: toSolo ? AppTheme.cyanAccent : AppTheme.greenLive,
+            width: 1.5,
+          ),
+        ),
+        title: Row(
+          children: [
+            Icon(
+              toSolo ? Icons.phone_android : Icons.phonelink,
+              color: toSolo ? AppTheme.cyanAccent : AppTheme.greenLive,
+              size: 22,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                toSolo ? 'Przełącz na Tryb Solo' : 'Przełącz na Tryb Dual',
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              toSolo
+                  ? 'Czy na pewno chcesz przełączyć się na Tryb Jednego Telefonu (Solo)? Transmisja będzie prowadzona z kamery tego telefonu.'
+                  : 'Czy na pewno chcesz połączyć z kamerą Phone A na statywie (Tryb Dwóch Telefonów)?',
+              style: const TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.white10,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.check_circle_outline, color: AppTheme.greenLive, size: 16),
+                  SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Wynik meczu, czas gry i sety pozostaną bez zmian.',
+                      style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('ANULUJ', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: toSolo ? AppTheme.cyanAccent : AppTheme.greenLive,
+              foregroundColor: Colors.black,
+              textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+            ),
+            child: Text(toSolo ? 'WŁĄCZ TRYB SOLO' : 'WŁĄCZ TRYB DUAL'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      if (toSolo) {
+        await _switchToSoloMode();
+      } else {
+        await _switchToDualMode();
+      }
+    }
+  }
+
+  /// Informacyjny BottomSheet ze szczegółami aktywnego trybu i możliwością bezpiecznej zmiany
+  void _showModeDetailsModal(
+    BuildContext context,
+    bool isSingleMode,
+    P2PConnectionProvider p2p,
+    StreamerProvider streamer,
+    CameraProvider camera,
+  ) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF101726),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        side: BorderSide(color: Colors.white12),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: isSingleMode
+                            ? AppTheme.cyanAccent
+                            : (p2p.connectionState == CameraConnectionState.connected
+                                ? AppTheme.greenLive
+                                : Colors.redAccent),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      isSingleMode ? 'TRYB SOLO (1 SMARTFON)' : 'TRYB DUAL (2 SMARTFONY)',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 16),
+                    ),
+                  ],
+                ),
+                IconButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  icon: const Icon(Icons.close, color: Colors.white70, size: 20),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF162133),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isSingleMode
+                        ? 'Wszystko w jednym: ten telefon nagrywa / transmituje przez kamerę wbudowaną oraz steruje tablicą wyników.'
+                        : 'Podział ról: ten telefon to Panel Sędziego (Phone B), a obraz pobierany jest bezprzewodowo z Phone A na statywie.',
+                    style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.3),
+                  ),
+                  const SizedBox(height: 10),
+                  const Divider(color: Colors.white12, height: 1),
+                  const SizedBox(height: 10),
+                  if (isSingleMode) ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Kamera lokalna:', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                        Text(
+                          '${camera.settings.resolution.label} • ${camera.settings.fps.label}',
+                          style: const TextStyle(color: AppTheme.cyanAccent, fontWeight: FontWeight.bold, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Enkoder sprzętowy:', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                        Text(
+                          NativeStreamBurnerBridge().isStreaming || NativeStreamBurnerBridge().isRecording
+                              ? 'AKTYWNY (RootEncoder)'
+                              : 'GOTOWY',
+                          style: const TextStyle(color: AppTheme.greenLive, fontWeight: FontWeight.bold, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ] else ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Stan połączenia z Phone A:', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                        Text(
+                          p2p.connectionState == CameraConnectionState.connected
+                              ? 'POŁĄCZONO (${p2p.healthMetrics.latencyMs} ms)'
+                              : 'ROZŁĄCZONO',
+                          style: TextStyle(
+                            color: p2p.connectionState == CameraConnectionState.connected
+                                ? AppTheme.greenLive
+                                : Colors.redAccent,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Adres nadajnika Phone A:', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                        Text(
+                          p2p.hostAddress.isNotEmpty ? p2p.hostAddress : 'Brak',
+                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  _showModeSwitchConfirmationDialog(toSolo: !isSingleMode);
+                },
+                icon: Icon(isSingleMode ? Icons.phonelink : Icons.phone_android, size: 18),
+                label: Text(
+                  isSingleMode
+                      ? 'PRZEŁĄCZ NA TRYB DWÓCH TELEFONÓW (DUAL)'
+                      : 'PRZEŁĄCZ NA TRYB JEDNEGO TELEFONU (SOLO)',
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isSingleMode ? AppTheme.greenLive : AppTheme.cyanAccent,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  textStyle: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   void _onStreamerStateChanged() {
     if (!mounted || _streamerRef == null) return;
@@ -400,16 +786,16 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
           : DeviceOrientation.portraitUp;
 
       if (!wasRecording) {
-        final hasLocalCamera =
-            camera.isCameraInitialized &&
-            !camera.isSimulationMode &&
-            _showLocalCameraPreview;
-        if (!hasLocalCamera && !camera.isSimulationMode) {
-          _showRecordingErrorNotice(
-            context,
-            'Uruchom lokalną kamerę przed rozpoczęciem nagrywania.',
-          );
-          return;
+        final isNativeActive =
+            NativeStreamBurnerBridge().isStreaming ||
+            NativeStreamBurnerBridge().isRecording;
+        if (!isNativeActive &&
+            !camera.isCameraInitialized &&
+            !camera.isSimulationMode) {
+          setState(() {
+            _showLocalCameraPreview = true;
+          });
+          await camera.initializeCamera();
         }
       }
 
@@ -650,9 +1036,9 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                       true,
                     ),
 
-                    // 2. AWARYJNY BANER PRZYWRACANIA POŁĄCZENIA
+                    // 2. AWARYJNY BANER PRZYWRACANIA POŁĄCZENIA I SZYBKIE PRZEŁĄCZENIE NA TRYB SOLO
                     if (p2p.currentRole != DeviceRole.singlePhoneAllInOne &&
-                        p2p.connectionState != CameraConnectionState.connected)
+                        p2p.connectionState != CameraConnectionState.connected) ...[
                       RecoveryBanner(
                         connectionState: p2p.connectionState,
                         onManualReconnect: () async {
@@ -665,6 +1051,53 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                           );
                         },
                       ),
+                      Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF161F2E),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppTheme.amberAccent.withValues(alpha: 0.8), width: 1.2),
+                        ),
+                        child: Wrap(
+                          alignment: WrapAlignment.spaceBetween,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: [
+                            const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.phone_android, size: 16, color: AppTheme.amberAccent),
+                                SizedBox(width: 8),
+                                Flexible(
+                                  child: Text(
+                                    'Brak sygnału z Phone A (rozładowany / rozłączony)?',
+                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            ElevatedButton.icon(
+                              onPressed: () {
+                                HapticFeedback.mediumImpact();
+                                _showEmergencySwitchToSoloDialog();
+                              },
+                              icon: const Icon(Icons.swap_horiz, size: 14),
+                              label: const Text('PRZEŁĄCZ NA SOLO'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.cyanAccent,
+                                foregroundColor: Colors.black,
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
 
                     // 3. WIDOK STRUMIENIA WIDEO (16:9 DOPASOWANY DO SZEROKOŚCI Z NAŁOŻONĄ TABLICĄ WYNIKÓW)
                     _buildBroadcastStreamView(
@@ -719,7 +1152,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                     ),
 
                     // 5. STAŁY DOK DOLNY (ZAWSZE DOSTĘPNY W PORTRAIT, NIEZALEŻNIE OD SCROLLA)
-                    _buildBottomModernNavBar(context, streamer),
+                    _buildBottomModernNavBar(context, streamer, p2p),
                   ],
                 )
               else
@@ -1232,96 +1665,135 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
 
                       const SizedBox(width: 8),
 
-                      // WEBRTC CAMERA LINK TELEMETRY (PHONE A) LUB LOKALNA KAMERA W SINGLE MODE
-                      if (!isSingleMode)
+                      // =======================================================
+                      // WSKAŹNIK TRYBU PRACY (SOLO / DUAL) ORAZ TELEMETRIA ŁĄCZA
+                      // =======================================================
+                      if (!isSingleMode) ...[
                         InkWell(
-                          onTap: () => _openCameraConnectionModal(context),
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            _showModeDetailsModal(context, isSingleMode, p2p, streamer, camera);
+                          },
                           borderRadius: BorderRadius.circular(8),
                           child: Container(
                             height: 38,
                             padding: const EdgeInsets.symmetric(horizontal: 10),
                             decoration: BoxDecoration(
-                              color:
-                                  p2p.connectionState ==
-                                      CameraConnectionState.connected
-                                  ? AppTheme.cyanAccent.withValues(alpha: 0.15)
-                                  : AppTheme.amberAccent.withValues(alpha: 0.15),
+                              color: p2p.connectionState == CameraConnectionState.connected
+                                  ? const Color(0xFF0A2219)
+                                  : const Color(0xFF2B1316),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
-                                color:
-                                    p2p.connectionState ==
-                                        CameraConnectionState.connected
-                                    ? AppTheme.cyanAccent.withValues(alpha: 0.4)
-                                    : AppTheme.amberAccent.withValues(alpha: 0.4),
+                                color: p2p.connectionState == CameraConnectionState.connected
+                                    ? AppTheme.greenLive.withValues(alpha: 0.7)
+                                    : Colors.redAccent.withValues(alpha: 0.8),
+                                width: 1.2,
                               ),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(
-                                  Icons.videocam,
-                                  color:
-                                      p2p.connectionState ==
-                                          CameraConnectionState.connected
-                                      ? AppTheme.cyanAccent
-                                      : AppTheme.amberAccent,
-                                  size: 16,
+                                PulseDot(
+                                  color: p2p.connectionState == CameraConnectionState.connected
+                                      ? AppTheme.greenLive
+                                      : Colors.redAccent,
+                                  size: 7,
                                 ),
-                                const SizedBox(width: 5),
-                                Text(
-                                  p2p.connectionState ==
-                                          CameraConnectionState.connected
-                                      ? 'Phone A\n${p2p.healthMetrics.latencyMs}ms'
-                                      : 'Phone A\nPOŁĄCZ',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                    color:
-                                        p2p.connectionState ==
-                                            CameraConnectionState.connected
-                                        ? AppTheme.cyanAccent
-                                        : AppTheme.amberAccent,
-                                    height: 1.1,
-                                  ),
+                                const SizedBox(width: 6),
+                                Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'TRYB DUAL',
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w900,
+                                        color: Colors.white,
+                                        letterSpacing: 0.4,
+                                      ),
+                                    ),
+                                    Text(
+                                      p2p.connectionState == CameraConnectionState.connected
+                                          ? 'PHONE A (${p2p.healthMetrics.latencyMs}ms)'
+                                          : 'ROZŁĄCZONO',
+                                      style: TextStyle(
+                                        fontSize: 8.5,
+                                        fontWeight: FontWeight.bold,
+                                        color: p2p.connectionState == CameraConnectionState.connected
+                                            ? AppTheme.greenLive
+                                            : Colors.red.shade300,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
                           ),
-                        )
-                      else
-                        // W TRYBIE SINGLE PHONE: SKRÓT DO PARAMETRÓW KAMERY LOKALNEJ
+                        ),
+                        if (p2p.connectionState != CameraConnectionState.connected) ...[
+                          const SizedBox(width: 5),
+                          ElevatedButton(
+                            onPressed: () {
+                              HapticFeedback.mediumImpact();
+                              _showEmergencySwitchToSoloDialog();
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppTheme.amberAccent,
+                              foregroundColor: Colors.black,
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              minimumSize: const Size(48, 38),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                            child: const Text('SOLO', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900)),
+                          ),
+                        ],
+                      ] else
+                        // W TRYBIE SINGLE PHONE: TRYB SOLO HUD PILL
                         InkWell(
-                          onTap: () => _openVideoSettings(context),
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            _showModeDetailsModal(context, isSingleMode, p2p, streamer, camera);
+                          },
                           borderRadius: BorderRadius.circular(8),
                           child: Container(
                             height: 38,
                             padding: const EdgeInsets.symmetric(horizontal: 10),
                             decoration: BoxDecoration(
-                              color: AppTheme.cyanAccent.withValues(alpha: 0.15),
+                              color: const Color(0xFF0F2332),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
-                                color: AppTheme.cyanAccent.withValues(alpha: 0.4),
+                                color: AppTheme.cyanAccent.withValues(alpha: 0.7),
+                                width: 1.2,
                               ),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Icon(
-                                  Icons.camera_alt,
-                                  color: AppTheme.cyanAccent,
-                                  size: 16,
-                                ),
-                                const SizedBox(width: 5),
-                                Text(
-                                  'KAMERA\n${camera.settings.resolution.label}',
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                    color: AppTheme.cyanAccent,
-                                    height: 1.1,
-                                  ),
+                                const PulseDot(color: AppTheme.cyanAccent, size: 7),
+                                const SizedBox(width: 6),
+                                Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'TRYB SOLO',
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w900,
+                                        color: AppTheme.cyanAccent,
+                                        letterSpacing: 0.4,
+                                      ),
+                                    ),
+                                    Text(
+                                      'KAMERA ${camera.settings.resolution.label}',
+                                      style: const TextStyle(
+                                        fontSize: 8.5,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white70,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
@@ -1440,7 +1912,9 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                     // WSKAŹNIK PRACY LOKALNEJ KAMERY W TLE
                     if (camera.isRecording) ...[
                       InkWell(
-                        onTap: () => context.push(AppRouter.cameraRoute),
+                        onTap: isSingleMode
+                            ? () => setState(() => _isControlsHidden = !_isControlsHidden)
+                            : () => context.push(AppRouter.cameraRoute),
                         borderRadius: BorderRadius.circular(6),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
@@ -1619,69 +2093,97 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                     ),
                     const SizedBox(width: 8),
 
-                    // WEBRTC CAMERA LINK TELEMETRY LUB LOKALNA KAMERA
-                    if (p2p.currentRole != DeviceRole.singlePhoneAllInOne)
+                    // =======================================================
+                    // WSKAŹNIK TRYBU PRACY (SOLO / DUAL) W POZIOMIE
+                    // =======================================================
+                    if (p2p.currentRole != DeviceRole.singlePhoneAllInOne) ...[
                       InkWell(
-                        onTap: () => _openCameraConnectionModal(context),
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          _showModeDetailsModal(context, false, p2p, streamer, camera);
+                        },
                         borderRadius: BorderRadius.circular(6),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 4,
-                            vertical: 2,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: p2p.connectionState == CameraConnectionState.connected
+                                ? AppTheme.greenLive.withValues(alpha: 0.15)
+                                : Colors.red.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: p2p.connectionState == CameraConnectionState.connected
+                                  ? AppTheme.greenLive
+                                  : Colors.redAccent,
+                              width: 1,
+                            ),
                           ),
                           child: Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(
-                                Icons.videocam,
-                                color:
-                                    p2p.connectionState ==
-                                        CameraConnectionState.connected
-                                    ? AppTheme.cyanAccent
-                                    : AppTheme.amberAccent,
-                                size: 15,
+                              PulseDot(
+                                color: p2p.connectionState == CameraConnectionState.connected
+                                    ? AppTheme.greenLive
+                                    : Colors.redAccent,
+                                size: 6,
                               ),
-                              const SizedBox(width: 4),
+                              const SizedBox(width: 5),
                               Text(
-                                p2p.connectionState ==
-                                        CameraConnectionState.connected
-                                    ? 'Phone A (${p2p.healthMetrics.latencyMs}ms)'
-                                    : 'Phone A (POŁĄCZ)',
+                                p2p.connectionState == CameraConnectionState.connected
+                                    ? 'TRYB DUAL • PHONE A (${p2p.healthMetrics.latencyMs}ms)'
+                                    : 'TRYB DUAL • ROZŁĄCZONO',
                                 style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color:
-                                      p2p.connectionState ==
-                                          CameraConnectionState.connected
-                                      ? AppTheme.cyanAccent
-                                      : AppTheme.amberAccent,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: p2p.connectionState == CameraConnectionState.connected
+                                      ? AppTheme.greenLive
+                                      : Colors.redAccent,
                                 ),
                               ),
                             ],
                           ),
                         ),
-                      )
-                    else
+                      ),
+                      if (p2p.connectionState != CameraConnectionState.connected) ...[
+                        const SizedBox(width: 6),
+                        ElevatedButton(
+                          onPressed: () {
+                            HapticFeedback.mediumImpact();
+                            _showEmergencySwitchToSoloDialog();
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.amberAccent,
+                            foregroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            minimumSize: const Size(48, 26),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          ),
+                          child: const Text('SOLO', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900)),
+                        ),
+                      ],
+                    ] else
                       InkWell(
-                        onTap: () => _openVideoSettings(context),
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          _showModeDetailsModal(context, true, p2p, streamer, camera);
+                        },
                         borderRadius: BorderRadius.circular(6),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 4,
-                            vertical: 2,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: AppTheme.cyanAccent.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.6), width: 1),
                           ),
                           child: Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(
-                                Icons.camera_alt,
-                                color: AppTheme.cyanAccent,
-                                size: 14,
-                              ),
-                              const SizedBox(width: 4),
+                              const PulseDot(color: AppTheme.cyanAccent, size: 6),
+                              const SizedBox(width: 5),
                               Text(
-                                'LOKALNA (${camera.settings.resolution.label})',
+                                'TRYB SOLO • LOKALNA (${camera.settings.resolution.label})',
                                 style: const TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
                                   color: AppTheme.cyanAccent,
                                 ),
                               ),
@@ -2118,6 +2620,8 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
         streamer.streamingState == StreamingState.live ||
         streamer.streamingState == StreamingState.connecting ||
         streamer.streamingState == StreamingState.reconnecting;
+    final isNativeActive =
+        isStreamingLive || NativeStreamBurnerBridge().isRecording;
     final int? nativePreviewTexId = streamer.previewTextureId;
     final bool hasLocalCamera =
         camera.isCameraInitialized &&
@@ -2130,12 +2634,12 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
         // 0. TŁO MAKIETY BOISKA (ZAWSZE ZAMONTOWANE POD SPODEM)
         _buildCourtFallbackStack(match, p2p, isOutdoor),
 
-        // 1. WSPÓŁDZIELONA TEKSTURA OPENGL PODCZAS NADAWANIA RTMP W TRYBIE SOLO (ZACHOWUJE PODGLĄD LIVE)
+        // 1. WSPÓŁDZIELONA TEKSTURA OPENGL PODCZAS NADAWANIA RTMP LUB NAGRYWANIA MP4 W TRYBIE SOLO (ZACHOWUJE PODGLĄD LIVE)
         Visibility(
           key: const ValueKey('solo_hardware_stream_preview_visibility'),
           visible: _showLocalCameraPreview &&
               p2p.isSinglePhoneMode &&
-              isStreamingLive &&
+              isNativeActive &&
               nativePreviewTexId != null,
           maintainState: true,
           maintainAnimation: true,
@@ -2159,10 +2663,10 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
               : const SizedBox.expand(),
         ),
 
-        // 2. LOKALNA KAMERA W TRYBIE POJEDYNCZEGO TELEFONU PRZED STARTEM RTMP (ZACHOWUJE STAN PRZEZ VISIBILITY)
+        // 2. LOKALNA KAMERA W TRYBIE POJEDYNCZEGO TELEFONU PRZED STARTEM RTMP / REC (ZACHOWUJE STAN PRZEZ VISIBILITY)
         Visibility(
           key: const ValueKey('solo_local_camera_preview_visibility'),
-          visible: _showLocalCameraPreview && hasLocalCamera && !isStreamingLive,
+          visible: _showLocalCameraPreview && hasLocalCamera && !isNativeActive,
           maintainState: true,
           maintainAnimation: true,
           maintainSize: false,
@@ -2217,7 +2721,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
         if (p2p.isSinglePhoneMode &&
             _showLocalCameraPreview &&
             !hasLocalCamera &&
-            !(isStreamingLive && nativePreviewTexId != null) &&
+            !(isNativeActive && nativePreviewTexId != null) &&
             camera.programPreviewFrame != null)
           FittedBox(
             fit: BoxFit.contain,
@@ -2574,16 +3078,28 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
 
               const SizedBox(width: 8),
 
-              // PRZEŁĄCZNIK WIDOKU KAMERA LIVE / MAKIETA
+              // PRZEŁĄCZNIK WIDOKU KAMERA LIVE / MAKIETA (DEBOUNCED & SAFE INIT)
               InkWell(
-                onTap: () {
-                  setState(() {
-                    _showLocalCameraPreview = !_showLocalCameraPreview;
-                  });
-                  if (_showLocalCameraPreview &&
-                      !camera.isCameraInitialized &&
-                      !isStreamingLive) {
-                    camera.initializeCamera();
+                onTap: () async {
+                  if (_isCameraToggling) return;
+                  _isCameraToggling = true;
+                  try {
+                    final nextPreview = !_showLocalCameraPreview;
+                    setState(() {
+                      _showLocalCameraPreview = nextPreview;
+                    });
+                    final isNativeActive =
+                        NativeStreamBurnerBridge().isStreaming ||
+                        NativeStreamBurnerBridge().isRecording ||
+                        isStreamingLive;
+                    if (nextPreview &&
+                        !camera.isCameraInitialized &&
+                        !isNativeActive &&
+                        !camera.isSimulationMode) {
+                      await camera.initializeCamera();
+                    }
+                  } finally {
+                    _isCameraToggling = false;
                   }
                 },
                 borderRadius: BorderRadius.circular(6),
@@ -2975,11 +3491,12 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                       InkWell(
                         onTap: () {
                           HapticFeedback.selectionClick();
-                          showModalBottomSheet(
-                            context: context,
-                            isScrollControlled: true,
-                            backgroundColor: Colors.transparent,
-                            builder: (_) => const CameraConnectionModal(),
+                          _showModeDetailsModal(
+                            context,
+                            p2p.currentRole == DeviceRole.singlePhoneAllInOne,
+                            p2p,
+                            streamer,
+                            camera,
                           );
                         },
                         borderRadius: BorderRadius.circular(6),
@@ -2987,12 +3504,16 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
                             color: p2p.connectionState == CameraConnectionState.connected
-                                ? AppTheme.greenLive.withValues(alpha: 0.15)
+                                ? (p2p.currentRole == DeviceRole.singlePhoneAllInOne
+                                    ? AppTheme.cyanAccent.withValues(alpha: 0.15)
+                                    : AppTheme.greenLive.withValues(alpha: 0.15))
                                 : Colors.red.withValues(alpha: 0.15),
                             borderRadius: BorderRadius.circular(6),
                             border: Border.all(
                               color: p2p.connectionState == CameraConnectionState.connected
-                                  ? AppTheme.greenLive
+                                  ? (p2p.currentRole == DeviceRole.singlePhoneAllInOne
+                                      ? AppTheme.cyanAccent
+                                      : AppTheme.greenLive)
                                   : Colors.redAccent,
                               width: 1,
                             ),
@@ -3005,7 +3526,9 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                                 height: 7,
                                 decoration: BoxDecoration(
                                   color: p2p.connectionState == CameraConnectionState.connected
-                                      ? AppTheme.greenLive
+                                      ? (p2p.currentRole == DeviceRole.singlePhoneAllInOne
+                                          ? AppTheme.cyanAccent
+                                          : AppTheme.greenLive)
                                       : Colors.redAccent,
                                   shape: BoxShape.circle,
                                 ),
@@ -3014,14 +3537,16 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                               Text(
                                 p2p.connectionState == CameraConnectionState.connected
                                     ? (p2p.currentRole == DeviceRole.singlePhoneAllInOne
-                                        ? 'LOCAL CAM'
-                                        : 'PHONE A')
-                                    : 'ROZŁĄCZONO',
+                                        ? 'TRYB SOLO (KAMERA)'
+                                        : 'TRYB DUAL (PHONE A • ${p2p.healthMetrics.latencyMs}ms)')
+                                    : 'TRYB DUAL (ROZŁĄCZONO)',
                                 style: TextStyle(
                                   fontSize: 10,
                                   fontWeight: FontWeight.bold,
                                   color: p2p.connectionState == CameraConnectionState.connected
-                                      ? AppTheme.greenLive
+                                      ? (p2p.currentRole == DeviceRole.singlePhoneAllInOne
+                                          ? AppTheme.cyanAccent
+                                          : AppTheme.greenLive)
                                       : Colors.redAccent,
                                 ),
                               ),
@@ -3029,6 +3554,24 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                           ),
                         ),
                       ),
+                      if (p2p.connectionState != CameraConnectionState.connected &&
+                          p2p.currentRole != DeviceRole.singlePhoneAllInOne) ...[
+                        const SizedBox(width: 6),
+                        ElevatedButton(
+                          onPressed: () {
+                            HapticFeedback.mediumImpact();
+                            _showEmergencySwitchToSoloDialog();
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.amberAccent,
+                            foregroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            minimumSize: const Size(44, 24),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          ),
+                          child: const Text('SOLO', style: TextStyle(fontSize: 9, fontWeight: FontWeight.w900)),
+                        ),
+                      ],
                     ],
                   ),
 
@@ -3805,10 +4348,14 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
   Widget _buildBottomModernNavBar(
     BuildContext context,
     StreamerProvider streamer,
+    P2PConnectionProvider p2p,
   ) {
     final items = [
       {'label': 'SCORER', 'icon': Icons.sports_score},
-      {'label': 'KAMERA', 'icon': Icons.camera_alt_outlined},
+      {
+        'label': p2p.isSinglePhoneMode ? 'KADR / PEŁNY' : 'KAMERA',
+        'icon': Icons.camera_alt_outlined,
+      },
       {'label': 'STATS', 'icon': Icons.analytics_outlined},
       {'label': 'WIDEO REC', 'icon': Icons.video_settings},
       {'label': 'STREAM', 'icon': Icons.stream},
@@ -3837,8 +4384,15 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                 });
 
                 if (index == 1) {
-                  // PRZEJDŹ DO PEŁNEJ KAMERY
-                  context.push(AppRouter.cameraRoute);
+                  // W TRYBIE SOLO: PRZEŁĄCZ PEŁNY KADR / UKRYJ KOKPIT ZAMIAST NIEBEZPIECZNEGO ROUTINGU
+                  if (p2p.isSinglePhoneMode) {
+                    setState(() {
+                      _isControlsHidden = !_isControlsHidden;
+                    });
+                  } else {
+                    // W TRYBIE DUAL: PRZEJDŹ DO EKRANU KAMERY PHONE A CZYSTYM GO
+                    context.go(AppRouter.cameraRoute);
+                  }
                 } else if (index == 2) {
                   // STATS
                   context.push(AppRouter.statisticianRoute);

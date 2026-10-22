@@ -320,6 +320,46 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
+                    "startRecord" -> {
+                        val filePath = call.argument<String>("filePath") ?: ""
+                        if (filePath.isEmpty()) {
+                            result.error("INVALID_ARGS", "Missing filePath", null)
+                            return@setMethodCallHandler
+                        }
+                        backgroundScope.launch {
+                            streamService?.startRecord(
+                                filePath = filePath,
+                                onSuccess = {
+                                    runOnUiThread { result.success(true) }
+                                },
+                                onError = { err ->
+                                    runOnUiThread { result.error("RECORD_FAILED", err, null) }
+                                }
+                            )
+                        }
+                    }
+
+                    "stopRecord" -> {
+                        backgroundScope.launch {
+                            streamService?.stopRecord(
+                                onSuccess = { path ->
+                                    runOnUiThread { result.success(path) }
+                                },
+                                onError = { err ->
+                                    runOnUiThread { result.error("STOP_RECORD_FAILED", err, null) }
+                                }
+                            )
+                        }
+                    }
+
+                    "isRecording" -> {
+                        result.success(streamService?.isRecording() ?: false)
+                    }
+
+                    "isStreaming" -> {
+                        result.success(streamService?.isStreaming() ?: false)
+                    }
+
                     "reconfigureFps" -> {
                         val fps = call.argument<Int>("fps") ?: 30
                         backgroundScope.launch {

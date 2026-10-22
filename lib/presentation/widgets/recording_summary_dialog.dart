@@ -141,7 +141,10 @@ class _RecordingSummaryDialogState extends State<RecordingSummaryDialog> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
+                Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 8,
+                  runSpacing: 4,
                   children: [
                     Text(
                       isDual
@@ -155,7 +158,6 @@ class _RecordingSummaryDialogState extends State<RecordingSummaryDialog> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 6,

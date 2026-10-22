@@ -11,6 +11,7 @@ import 'package:volleylive/domain/models/camera_config.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
 import 'package:volleylive/domain/models/match_session.dart';
 import 'package:volleylive/domain/models/recording_result.dart';
+import 'package:volleylive/domain/services/native_stream_burner_bridge.dart';
 import 'package:volleylive/presentation/providers/camera_provider.dart';
 import 'package:volleylive/presentation/providers/match_provider.dart';
 import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
@@ -67,7 +68,10 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
         currentSession: match.session,
         sessionStream: match.sessionStream,
       );
-      if (!camera.isCameraInitialized && !camera.isSimulationMode) {
+      final isNativeActive = NativeStreamBurnerBridge().isStreaming ||
+          NativeStreamBurnerBridge().isRecording ||
+          streamer.streamingState == StreamingState.live;
+      if (!isNativeActive && !camera.isCameraInitialized && !camera.isSimulationMode && !p2p.isSinglePhoneMode) {
         await camera.initializeCamera();
       }
       ScoreboardWidgetBurner.ensureOverlayImageOnDisk(
@@ -76,7 +80,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
       );
 
       // Automatyczny start transmisji live po sparowaniu urządzenia Phone A
-      if (p2p.currentRole == DeviceRole.cameraPhoneA || !p2p.isSinglePhoneMode) {
+      if (!isNativeActive && (p2p.currentRole == DeviceRole.cameraPhoneA || !p2p.isSinglePhoneMode)) {
         if (!camera.isLiveTransmitting) {
           debugPrint('[PhoneACameraScreen] Auto-starting live transmission for paired scorer...');
           await camera.startLiveTransmission(p2pProvider: p2p);
@@ -594,6 +598,48 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                   ),
                 ),
 
+              // 3b. BANER INFORMACYJNY DLA TRYBU SOLO (EKRAN PHONE A JEST DLA DUAL)
+              if (p2p.isSinglePhoneMode)
+                Positioned(
+                  top: isLandscape ? 48 : 84,
+                  left: 16,
+                  right: 16,
+                  child: SafeArea(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF161F2E),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppTheme.cyanAccent, width: 1.5),
+                        boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 8)],
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.info_outline, color: AppTheme.cyanAccent, size: 20),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Text(
+                              'Aktywny tryb Solo (1 Telefon). Ekran Phone A służy jako nadajnik w trybie Dual.',
+                              style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            onPressed: () => context.go(AppRouter.scorerRoute),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppTheme.cyanAccent,
+                              foregroundColor: Colors.black,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              minimumSize: const Size(0, 32),
+                            ),
+                            child: const Text('DO SĘDZIEGO', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+
               // 4. GÓRNY HUD TELEMETRII (WIDOCZNY GDY HUD JEST AKTYWNY)
               if (camera.settings.isHudVisible)
                 Positioned(
@@ -832,9 +878,10 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
         streamer.streamingState == StreamingState.live ||
         streamer.streamingState == StreamingState.connecting ||
         streamer.streamingState == StreamingState.reconnecting;
+    final bool isNativeActive = isStreamingLive || NativeStreamBurnerBridge().isRecording;
     final int? nativePreviewTexId = streamer.previewTextureId;
 
-    if (isStreamingLive && nativePreviewTexId != null) {
+    if (isNativeActive && nativePreviewTexId != null) {
       final double targetWidth = isLandscape ? 1920.0 : 1080.0;
       final double targetHeight = isLandscape ? 1080.0 : 1920.0;
       return Container(
@@ -980,7 +1027,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                   InkWell(
                     onTap: () {
                       _showBackgroundRecNotice(context, camera);
-                      context.push(AppRouter.scorerRoute);
+                      context.go(AppRouter.scorerRoute);
                     },
                     borderRadius: BorderRadius.circular(16),
                     child: Container(
@@ -1305,7 +1352,7 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                 InkWell(
                   onTap: () {
                     _showBackgroundRecNotice(context, camera);
-                    context.push(AppRouter.scorerRoute);
+                    context.go(AppRouter.scorerRoute);
                   },
                   borderRadius: BorderRadius.circular(16),
                   child: Container(

@@ -9,6 +9,7 @@ import 'package:volleylive/domain/models/match_recording_metadata.dart';
 import 'package:volleylive/domain/models/match_session.dart';
 import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/domain/models/streaming_config.dart';
+import 'package:volleylive/domain/services/native_stream_burner_bridge.dart';
 import 'package:volleylive/domain/services/remote_frame_recorder.dart';
 import 'package:volleylive/domain/services/video_overlay_burner_service.dart';
 
@@ -26,6 +27,7 @@ abstract class IRecordingService {
   Future<void> startMasterRecording({
     CameraController? cameraController,
     IRemoteFrameRecorder? remoteFrameRecorder,
+    NativeStreamBurnerBridge? nativeStreamBridge,
     Stream<Uint8List>? remoteFrameStream,
     Uint8List? initialFrame,
     String remoteFrameExtension = 'jpg',
@@ -53,6 +55,7 @@ abstract class IRecordingService {
   Future<MasterRecordingResult?> stopRecording({
     CameraController? cameraController,
     IRemoteFrameRecorder? remoteFrameRecorder,
+    NativeStreamBurnerBridge? nativeStreamBridge,
     bool simulatedDelay = false,
     String? storageFolder,
     MatchSession? finalSession,
@@ -137,11 +140,14 @@ class RecordingService implements IRecordingService {
   bool _ownsRemoteRecorder = false;
   IRemoteFrameRecorder? _activeRawFrameRecorder;
   bool _activeRemoteFramesIncludeProgramOverlay = false;
+  bool _isNativeStreamRecordingActive = false;
+  String? _activeNativeRecordPath;
 
   @override
   Future<void> startMasterRecording({
     CameraController? cameraController,
     IRemoteFrameRecorder? remoteFrameRecorder,
+    NativeStreamBurnerBridge? nativeStreamBridge,
     Stream<Uint8List>? remoteFrameStream,
     Uint8List? initialFrame,
     String remoteFrameExtension = 'jpg',
@@ -169,6 +175,8 @@ class RecordingService implements IRecordingService {
     _startSession = initialSession;
     _recordingStartTime = DateTime.now();
     _sessionTimeline.clear();
+    _isNativeStreamRecordingActive = false;
+    _activeNativeRecordPath = null;
 
     if (initialSession != null) {
       _sessionTimeline.add(
@@ -205,8 +213,37 @@ class RecordingService implements IRecordingService {
       return;
     }
 
-    // Sprawdź czy mamy aktywne źródło klatek zdalnych (Phone B)
-    if (remoteFrameRecorder != null ||
+    // Single-Encode, Dual-Mux: Jeśli aktywny jest natywny mostek RootEncoder (RTMP stream lub Phone A native)
+    final bool useNativeBridge = nativeStreamBridge != null &&
+        (nativeStreamBridge.isStreaming ||
+            nativeStreamBridge.isRecording ||
+            cameraController == null);
+
+    if (useNativeBridge) {
+      _isCurrentSessionSimulated = false;
+      try {
+        final targetPath = await _storageService.generateNewRecordingPath(
+          subDirectory: storageFolder,
+          recordingType: recordingType,
+        );
+        final success = await nativeStreamBridge.startRecord(targetPath);
+        if (success) {
+          _isNativeStreamRecordingActive = true;
+          _activeNativeRecordPath = targetPath;
+        } else {
+          _currentState = RecordingState.failed;
+          _lastErrorMessage =
+              'Nie udało się uruchomić sprzętowego nagrywania MP4 w RootEncoder.';
+          _stateController.add(_currentState);
+          return;
+        }
+      } catch (e) {
+        _currentState = RecordingState.failed;
+        _lastErrorMessage = 'Błąd sprzętowego nagrywania MP4: $e';
+        _stateController.add(_currentState);
+        return;
+      }
+    } else if (remoteFrameRecorder != null ||
         remoteFrameStream != null ||
         initialFrame != null) {
       _isCurrentSessionSimulated = isSimulation;
@@ -283,8 +320,10 @@ class RecordingService implements IRecordingService {
       }
     }
 
-    // 2. Start nagrywania sprzętowego przez CameraController (jeśli podłączony na Phone A)
-    if (!_isCurrentSessionSimulated && cameraController != null) {
+    // 2. Start nagrywania sprzętowego przez CameraController (jeśli podłączony na Phone A i nie nagrywamy przez RootEncoder)
+    if (!_isCurrentSessionSimulated &&
+        !_isNativeStreamRecordingActive &&
+        cameraController != null) {
       try {
         await cameraController.startVideoRecording();
       } on CameraException catch (e) {
@@ -362,6 +401,7 @@ class RecordingService implements IRecordingService {
   Future<MasterRecordingResult?> stopRecording({
     CameraController? cameraController,
     IRemoteFrameRecorder? remoteFrameRecorder,
+    NativeStreamBurnerBridge? nativeStreamBridge,
     bool simulatedDelay = false,
     String? storageFolder,
     MatchSession? finalSession,
@@ -383,8 +423,16 @@ class RecordingService implements IRecordingService {
     String? remoteProgramSourcePath;
     String? rawCameraFrameSourcePath;
 
-    // 1. Zatrzymanie sprzętowego nagrywania wideo przez CameraController (Phone A)
-    if (!_isCurrentSessionSimulated &&
+    // 1. Zatrzymanie sprzętowego nagrywania wideo przez NativeStreamBurnerBridge (RootEncoder Single-Encode)
+    if (_isNativeStreamRecordingActive && nativeStreamBridge != null) {
+      try {
+        final stoppedPath = await nativeStreamBridge.stopRecord();
+        recordedSourcePath = stoppedPath ?? _activeNativeRecordPath;
+      } catch (e) {
+        debugPrint('Błąd zatrzymania nagrywania RootEncoder: $e');
+        recordedSourcePath = _activeNativeRecordPath;
+      }
+    } else if (!_isCurrentSessionSimulated &&
         cameraController != null &&
         cameraController.value.isInitialized &&
         cameraController.value.isRecordingVideo) {
@@ -555,7 +603,12 @@ class RecordingService implements IRecordingService {
       // fizycznie wypalamy tablicę wyników i elementy sędziowskie do pliku MP4 przez FFmpeg.
       if (_activeRecordingType == RecordingType.programWithScoreboard ||
           _activeRecordingType == RecordingType.dual) {
-        if (_activeRemoteFramesIncludeProgramOverlay &&
+        if (_isNativeStreamRecordingActive) {
+          // Single-Encode, Dual-Mux: RootEncoder (RtmpCamera2) wstrzykuje i wypala
+          // tablicę wyników w locie przez OpenGL ES (ImageObjectFilterRender).
+          // Pomiń ciężkie procesorowo wypalanie FFmpeg!
+          scoreboardIncluded = true;
+        } else if (_activeRemoteFramesIncludeProgramOverlay &&
             remoteProgramSourcePath != null) {
           // The captured program frames already contain the visible scoreboard.
           // Do not paint a second, visually different FFmpeg HUD over them.
@@ -731,6 +784,8 @@ class RecordingService implements IRecordingService {
     _sessionTimeline.clear();
     _startSession = null;
     _recordingStartTime = null;
+    _isNativeStreamRecordingActive = false;
+    _activeNativeRecordPath = null;
     _stateController.add(_currentState);
     _durationController.add(_duration);
   }

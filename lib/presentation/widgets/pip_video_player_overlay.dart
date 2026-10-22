@@ -14,6 +14,7 @@ import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
 import 'package:volleylive/presentation/providers/streamer_provider.dart';
 import 'package:volleylive/presentation/widgets/adaptive_camera_preview.dart';
 import 'package:volleylive/presentation/widgets/scoreboard_overlay.dart';
+import 'package:volleylive/domain/services/native_stream_burner_bridge.dart';
 
 /// Pływający odtwarzacz wideo PiP (Picture-in-Picture) ze swobodnym przesuwaniem i szybkimi powtórkami (-5s, -10s)
 class PipVideoPlayerOverlay extends StatefulWidget {
@@ -385,6 +386,8 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
         (streamer.streamingState == StreamingState.live ||
             streamer.streamingState == StreamingState.connecting ||
             streamer.streamingState == StreamingState.reconnecting);
+    final bool isNativeRecording = NativeStreamBurnerBridge().isRecording;
+    final bool isNativeActive = isStreamingLive || isNativeRecording;
     final int? nativePreviewTexId = streamer?.previewTextureId;
 
     final bool hasLocalCamera = camera != null &&
@@ -406,7 +409,7 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
       fit: StackFit.expand,
       children: [
         // 1. Zunifikowany podgląd Wideo (Solo Hardware Stream Texture, Lokalna Kamera, Dual P2P, lub Fallback)
-        if (isStreamingLive && nativePreviewTexId != null)
+        if (isNativeActive && nativePreviewTexId != null)
           Center(
             key: ValueKey('pip_native_stream_tex_$nativePreviewTexId'),
             child: AspectRatio(
@@ -471,7 +474,7 @@ class _PipVideoPlayerOverlayState extends State<PipVideoPlayerOverlay> {
           _buildSimulatedCameraFeed(),
 
         // 1b. Zunifikowana nakładka wyniku (ScoreboardOverlay) w oknie PIP dla spójności Solo i Dual Mode
-        if (match != null && !(isStreamingLive && nativePreviewTexId != null))
+        if (match != null && !(isNativeActive && nativePreviewTexId != null))
           IgnorePointer(
             child: Align(
               alignment: Alignment.topLeft,

@@ -29,7 +29,9 @@ import com.pedro.encoder.video.FormatVideoEncoder
 import com.pedro.encoder.video.GetVideoData
 import com.pedro.encoder.video.VideoEncoder
 import com.pedro.library.base.Camera2Base
+import com.pedro.library.base.recording.RecordController
 import com.pedro.library.rtmp.RtmpCamera2
+import com.pedro.library.util.BitrateAdapter
 import com.pedro.library.view.GlStreamInterface
 import com.pedro.library.view.OpenGlView
 import kotlinx.coroutines.CoroutineScope
@@ -90,7 +92,7 @@ private class Bt709VideoEncoder(getVideoData: GetVideoData) : VideoEncoder(getVi
             fFormat.set(this, formatVideoEncoder)
             fProfile.setInt(this, profile)
             fLevel.setInt(this, level)
-            fIsBufferMode.setBoolean(this, true)
+            fIsBufferMode.setBoolean(this, formatVideoEncoder != FormatVideoEncoder.SURFACE)
 
             val encoder = chooseEncoder(type) ?: run {
                 Log.e("Bt709VideoEncoder", "Valid encoder not found for $type")
@@ -250,7 +252,7 @@ class RootEncoderLiveStreamService(
     @Volatile
     private var currentAudioSampleRate = 48_000
     @Volatile
-    private var currentGopSeconds = 2.0f
+    private var currentGopSeconds = 1.0f
     @Volatile
     private var currentAnchorPosition = "topLeft"
     @Volatile
@@ -258,6 +260,8 @@ class RootEncoderLiveStreamService(
 
     private var renderer = VolleyballScoreboardBitmapRenderer(1920, 1080)
     private var lastScoreboardData = VolleyballScoreboardData()
+
+    private var bitrateAdapter: BitrateAdapter? = null
 
     private var reconnectJob: Job? = null
     private var aeFpsJob: Job? = null
@@ -272,7 +276,14 @@ class RootEncoderLiveStreamService(
     @Volatile
     private var isStreamingActive = false
     @Volatile
+    private var isRecordingActive = false
+    @Volatile
+    private var currentRecordPath: String? = null
+    @Volatile
     private var cachedCapabilities: Map<String, Any>? = null
+
+    fun isRecording(): Boolean = rtmpCamera2?.isRecording ?: isRecordingActive
+    fun isStreaming(): Boolean = rtmpCamera2?.isStreaming ?: isStreamingActive
 
     var onStatusEvent: ((status: String, details: Map<String, Any>?) -> Unit)? = null
 
@@ -284,14 +295,29 @@ class RootEncoderLiveStreamService(
     /**
      * Binds a Flutter TextureRegistry SurfaceTexture so the hardware OpenGL pipeline
      * renders both to the MediaCodec GraphicBufferSource and the local PIP/preview widget.
+     * Guarantees surface continuity: safely de-attaches old surface before attaching new surface.
      */
     @Synchronized
     fun setSharedPreviewSurfaceTexture(surfaceTexture: SurfaceTexture?) {
-        sharedPreviewSurfaceTexture = surfaceTexture
+        val camera = rtmpCamera2
+        val glStream = camera?.glInterface as? GlStreamInterface
+        try {
+            glStream?.deAttachPreview()
+        } catch (e: Exception) {
+            Log.w(TAG, "deAttachPreview warning in setSharedPreviewSurfaceTexture: ${e.message}")
+        }
+
         sharedPreviewSurface?.release()
-        sharedPreviewSurface = surfaceTexture?.let { st ->
-            st.setDefaultBufferSize(currentWidth.coerceAtLeast(1), currentHeight.coerceAtLeast(1))
-            Surface(st)
+        sharedPreviewSurface = null
+        sharedPreviewSurfaceTexture = surfaceTexture
+
+        if (surfaceTexture != null) {
+            surfaceTexture.setDefaultBufferSize(currentWidth.coerceAtLeast(1), currentHeight.coerceAtLeast(1))
+            val newSurface = Surface(surfaceTexture)
+            sharedPreviewSurface = newSurface
+            if (camera != null && (camera.isStreaming || camera.isOnPreview || camera.isRecording)) {
+                attachSharedPreviewIfPossible(camera)
+            }
         }
     }
 
@@ -299,12 +325,12 @@ class RootEncoderLiveStreamService(
     private fun attachSharedPreviewIfPossible(camera: RtmpCamera2) {
         val glStream = camera.glInterface as? GlStreamInterface ?: return
         val st = sharedPreviewSurfaceTexture ?: return
+        val surface = sharedPreviewSurface?.takeIf { it.isValid } ?: Surface(st).also {
+            sharedPreviewSurface = it
+        }
         try {
             glStream.deAttachPreview()
             st.setDefaultBufferSize(currentWidth.coerceAtLeast(1), currentHeight.coerceAtLeast(1))
-            val surface = sharedPreviewSurface?.takeIf { it.isValid } ?: Surface(st).also {
-                sharedPreviewSurface = it
-            }
             val isPortrait = currentHeight > currentWidth
             val rotation = resolveDeviceRotation(currentWidth, currentHeight, isPortrait)
             val cameraOrientation = if (rotation == 0) 270 else rotation - 90
@@ -313,6 +339,7 @@ class RootEncoderLiveStreamService(
             glStream.setIsPortrait(isPortrait)
             glStream.setPreviewResolution(currentWidth, currentHeight)
             glStream.attachPreview(surface)
+            Log.i(TAG, "attachSharedPreviewIfPossible: preview surface successfully attached ($currentWidth x $currentHeight)")
         } catch (e: Exception) {
             Log.w(TAG, "attachSharedPreviewIfPossible warning: ${e.message}")
         }
@@ -403,6 +430,23 @@ class RootEncoderLiveStreamService(
         instance.setAudioCodec(AudioCodec.AAC)
         (instance.glInterface as? GlStreamInterface)?.setAspectRatioMode(AspectRatioMode.Adjust)
 
+        // Konfiguracja bufora wyjściowego RTMP i gniazda sieciowego (streamClient)
+        try {
+            instance.streamClient.resizeCache(newSize = 60)
+        } catch (e: Exception) {
+            Log.w(TAG, "resizeCache warning: ${e.message}")
+        }
+        instance.streamClient.setLogs(false)
+        instance.streamClient.setReTries(5)
+
+        // Implementacja adaptacyjnego bitrate'u (BitrateAdapter)
+        bitrateAdapter = BitrateAdapter { bps ->
+            rtmpCamera2?.setVideoBitrateOnFly(bps)
+            Log.d(TAG, "Adaptive bitrate changed on fly: ${bps / 1000} kbps")
+        }.apply {
+            setMaxBitrate(currentVideoBitrate)
+        }
+
         // Install BT.709 video encoder to avoid FFmpeg "deprecated pixel format used (yuvj420p)"
         try {
             val getVideoDataField = Camera2Base::class.java.getDeclaredField("getVideoData").apply { isAccessible = true }
@@ -423,6 +467,7 @@ class RootEncoderLiveStreamService(
 
             override fun onCameraError(error: String) {
                 Log.e(TAG, "onCameraError: $error")
+                onStatusEvent?.invoke("ERROR", mapOf("error" to "Błąd kamery RootEncoder: $error"))
             }
 
             override fun onCameraOpened() {
@@ -432,6 +477,7 @@ class RootEncoderLiveStreamService(
 
             override fun onCameraDisconnected() {
                 Log.d(TAG, "onCameraDisconnected")
+                onStatusEvent?.invoke("ERROR", mapOf("error" to "Kamera odłączona (kolizja z innym procesem/CameraX)"))
             }
         })
 
@@ -473,8 +519,9 @@ class RootEncoderLiveStreamService(
         currentFps = safeFps
         currentVideoBitrate = normalizedBitrate
         currentAudioBitrate = if (audioBitrate in 1..1000) audioBitrate * 1000 else audioBitrate
-        currentGopSeconds = gopSeconds.coerceAtLeast(1.0f)
+        currentGopSeconds = 1.0f // Wymuszenie GOP 1s (Zero-Latency)
         currentAudioSampleRate = if (audioSampleRate > 0) audioSampleRate else 48_000
+        bitrateAdapter?.setMaxBitrate(normalizedBitrate)
 
         if (dimensionsChanged) {
             renderer = VolleyballScoreboardBitmapRenderer(safeWidth, safeHeight)
@@ -555,84 +602,97 @@ class RootEncoderLiveStreamService(
     @Synchronized
     private fun executeStartStreamInternal(endpoint: String) {
         val camera = ensureCameraInstance()
-        detachSharedPreviewIfAttached(camera)
-        if (camera.isStreaming) {
-            try {
-                camera.stopStream()
-            } catch (_: Exception) {}
-        }
-        if (camera.isOnPreview) {
-            try {
-                camera.stopPreview()
-            } catch (_: Exception) {}
-        }
-        try {
-            camera.resetVideoEncoder()
-        } catch (_: Exception) {}
-
-        camera.forceCodecType(CodecUtil.CodecType.HARDWARE, CodecUtil.CodecType.HARDWARE)
-        camera.setVideoCodec(VideoCodec.H264)
-        camera.setAudioCodec(AudioCodec.AAC)
-        (camera.glInterface as? GlStreamInterface)?.setAspectRatioMode(AspectRatioMode.Adjust)
-
+        val isAlreadyRecording = camera.isRecording || isRecordingActive
         val isPortraitMode = currentHeight > currentWidth
         val rotation = resolveDeviceRotation(currentWidth, currentHeight, isPortraitMode)
 
-        // RootEncoder VideoEncoder expects sensor base dimensions (1920x1080) and applies
-        // rotation (0/180 for Landscape 1920x1080, 90/270 for Portrait 1080x1920) to both
-        // MediaCodec and RTMP @setDataFrame (onMetaData: width=1080.0, height=1920.0 in Portrait).
-        val baseWidth = maxOf(currentWidth, currentHeight)
-        val baseHeight = minOf(currentWidth, currentHeight)
-
-        // Przygotowanie enkodera wideo w trybie Zero-Latency (Baseline / no B-frames, CBR, krótki GOP 1-2s)
-        val videoPrepared = prepareVideoEncoderWithZeroLatency(camera, baseWidth, baseHeight, rotation)
-
-        if (!videoPrepared) {
-            throw IllegalStateException("Sprzętowy enkoder MediaCodec H.264 odrzucił konfigurację ${currentWidth}x${currentHeight}@${currentFps}fps (rot=$rotation)")
-        }
-
-        // AAC 128 kbps, 48000 Hz stereo from device microphone (fallback to 44100 Hz if needed)
-        val audioPrepared = camera.prepareAudio(
-            currentAudioBitrate,
-            currentAudioSampleRate,
-            true,
-            false,
-            false
-        ) || camera.prepareAudio(
-            128_000,
-            44_100,
-            true,
-            false,
-            false
-        )
-
-        if (!audioPrepared) {
-            Log.w(TAG, "Hardware AAC audio preparation returned false; proceeding with video stream")
-        }
-
-        // Lock OpenGL rendering to strict target FPS
-        camera.forceFpsLimit(true)
-
-        // Start physical camera preview session before RTMP streaming
-        val facing = camera.cameraFacing
-        if (!camera.isOnPreview) {
-            try {
-                camera.startPreview(facing, baseWidth, baseHeight, currentFps, rotation)
-            } catch (e: Exception) {
-                Log.w(TAG, "startPreview warning: ${e.message}")
+        if (!isAlreadyRecording) {
+            detachSharedPreviewIfAttached(camera)
+            if (camera.isStreaming) {
+                try {
+                    camera.stopStream()
+                } catch (_: Exception) {}
             }
+            if (camera.isOnPreview) {
+                try {
+                    camera.stopPreview()
+                } catch (_: Exception) {}
+            }
+            try {
+                camera.resetVideoEncoder()
+            } catch (_: Exception) {}
+
+            camera.forceCodecType(CodecUtil.CodecType.HARDWARE, CodecUtil.CodecType.HARDWARE)
+            camera.setVideoCodec(VideoCodec.H264)
+            camera.setAudioCodec(AudioCodec.AAC)
+            (camera.glInterface as? GlStreamInterface)?.setAspectRatioMode(AspectRatioMode.Adjust)
+
+            val baseWidth = maxOf(currentWidth, currentHeight)
+            val baseHeight = minOf(currentWidth, currentHeight)
+
+            // Przygotowanie enkodera wideo w trybie Zero-Latency (Baseline / no B-frames, CBR, krótki GOP 1-2s)
+            val videoPrepared = prepareVideoEncoderWithZeroLatency(camera, baseWidth, baseHeight, rotation)
+
+            if (!videoPrepared) {
+                throw IllegalStateException("Sprzętowy enkoder MediaCodec H.264 odrzucił konfigurację ${currentWidth}x${currentHeight}@${currentFps}fps (rot=$rotation)")
+            }
+
+            // AAC 128 kbps, 48000 Hz stereo from device microphone (fallback to 44100 Hz if needed)
+            val audioPrepared = camera.prepareAudio(
+                currentAudioBitrate,
+                currentAudioSampleRate,
+                true,
+                false,
+                false
+            ) || camera.prepareAudio(
+                128_000,
+                44_100,
+                true,
+                false,
+                false
+            )
+
+            if (!audioPrepared) {
+                Log.w(TAG, "Hardware AAC audio preparation returned false; proceeding with video stream")
+            }
+
+            // Lock OpenGL rendering to strict target FPS
+            camera.forceFpsLimit(true)
+
+            // Start physical camera preview session before RTMP streaming
+            val facing = camera.cameraFacing
+            if (!camera.isOnPreview) {
+                try {
+                    camera.startPreview(facing, baseWidth, baseHeight, currentFps, rotation)
+                } catch (e: Exception) {
+                    Log.w(TAG, "startPreview warning: ${e.message}")
+                }
+            }
+
+            // Enforce constant AE FPS Range (e.g. [30, 30] or [60, 60]) preventing indoor light frame-drops
+            enforceFixedAeFpsRange(currentFps)
         }
 
-        // Enforce constant AE FPS Range (e.g. [30, 30] or [60, 60]) preventing indoor light frame-drops
-        enforceFixedAeFpsRange(currentFps)
+        // Konfiguracja bufora wyjściowego RTMP i gniazda sieciowego (streamClient)
+        try {
+            camera.streamClient.clearCache()
+            camera.streamClient.resizeCache(newSize = 60)
+        } catch (_: Exception) {}
+        camera.streamClient.setLogs(false)
+        camera.streamClient.setReTries(5)
+
+        bitrateAdapter?.setMaxBitrate(currentVideoBitrate)
+        bitrateAdapter?.reset()
 
         camera.startStream(endpoint)
 
-        // Attach shared SurfaceTexture preview after glInterface is started so local PIP stays live
-        attachSharedPreviewIfPossible(camera)
+        if (!isAlreadyRecording) {
+            // Attach shared SurfaceTexture preview after glInterface is started so local PIP stays live
+            attachSharedPreviewIfPossible(camera)
 
-        // Attach OpenGL ES scoreboard filter and upload initial bitmap texture once
-        attachAndRefreshScoreboardFilter(camera)
+            // Attach OpenGL ES scoreboard filter and upload initial bitmap texture once
+            attachAndRefreshScoreboardFilter(camera)
+        }
         Log.i(
             TAG,
             "RootEncoder hardware stream started: ${currentWidth}x${currentHeight}@${currentFps}fps (rot=$rotation), " +
@@ -670,7 +730,25 @@ class RootEncoderLiveStreamService(
 
             val camera = ensureCameraInstance()
             val wasStreaming = camera.isStreaming
+            val wasRecording = camera.isRecording || isRecordingActive
+            val recordingPath = currentRecordPath
             val endpoint = lastEndpointUrl
+
+            // 0. Zabezpieczenie: jeśli trwa nagrywanie MP4, bezpiecznie domknij segment przed zmianą konfiguracji enkodera
+            if (wasRecording) {
+                Log.i(TAG, "reconfigureStream: safely finalizing active MP4 recording before encoder reset")
+                try {
+                    camera.stopRecord()
+                } catch (e: Exception) {
+                    Log.w(TAG, "stopRecord during reconfigure warning: ${e.message}")
+                }
+                isRecordingActive = false
+                currentRecordPath = null
+                onStatusEvent?.invoke(
+                    "RECORDING_SEGMENT_COMPLETED",
+                    mapOf("path" to (recordingPath ?: ""), "reason" to "reconfigureStream")
+                )
+            }
 
             // 1. Odpięcie bufora podglądu, by uniknąć BufferQueue abandoned / deadlocka
             detachSharedPreviewIfAttached(camera)
@@ -711,6 +789,15 @@ class RootEncoderLiveStreamService(
                 audioSampleRate = currentAudioSampleRate,
                 isPortrait = effectivePortrait
             )
+
+            try {
+                camera.streamClient.resizeCache(newSize = 60)
+            } catch (_: Exception) {}
+            camera.streamClient.setLogs(false)
+            camera.streamClient.setReTries(5)
+
+            bitrateAdapter?.setMaxBitrate(targetBitrate)
+            bitrateAdapter?.reset()
 
             val isPortraitMode = (currentHeight > currentWidth)
             val rotation = resolveDeviceRotation(currentWidth, currentHeight, isPortraitMode)
@@ -796,11 +883,8 @@ class RootEncoderLiveStreamService(
 
     /**
      * Przygotowuje enkoder wideo w trybie ultra-niskiego opóźnienia (Zero-Latency / Realtime H.264):
-     * 1. Krótki interwał klatek kluczowych GOP: iFrameInterval = 1 lub 2 sekundy (szybka odbudowa strumienia).
-     * 2. Profil: preferowany AVCProfileBaseline (całkowity brak klatek B-frames w specyfikacji H.264,
-     *    co eliminuje buforowanie reorder buffer 'pipelineFull' na układach Qualcomm c2.qti.avc.encoder),
-     *    z fallbackiem do AVCProfileMain (z programowo wyłączonymi B-frames) oraz Baseline Level 3.1.
-     * 3. Poziom: AVCLevel4 (1080p@30fps) lub AVCLevel42 (1080p@60fps).
+     * Wymusza AVCProfileBaseline (0 B-frames), iFrameInterval = 1 (GOP 1s)
+     * oraz AVCLevel4 (30fps) / AVCLevel42 (60fps).
      */
     private fun prepareVideoEncoderWithZeroLatency(
         camera: RtmpCamera2,
@@ -808,16 +892,18 @@ class RootEncoderLiveStreamService(
         baseHeight: Int,
         rotation: Int
     ): Boolean {
-        val iFrameInterval = currentGopSeconds.toInt().coerceIn(1, 2)
+        val iFrameInterval = 1
         val targetLevel = if (currentFps >= 60) {
             MediaCodecInfo.CodecProfileLevel.AVCLevel42
         } else {
             MediaCodecInfo.CodecProfileLevel.AVCLevel4
         }
+        val safeW = (if (baseWidth > 0) baseWidth else 1920) and 15.inv()
+        val safeH = (if (baseHeight > 0) baseHeight else 1080) and 15.inv()
 
         return camera.prepareVideo(
-            baseWidth,
-            baseHeight,
+            safeW,
+            safeH,
             currentFps,
             currentVideoBitrate,
             iFrameInterval,
@@ -825,17 +911,8 @@ class RootEncoderLiveStreamService(
             MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
             targetLevel
         ) || camera.prepareVideo(
-            baseWidth,
-            baseHeight,
-            currentFps,
-            currentVideoBitrate,
-            iFrameInterval,
-            rotation,
-            MediaCodecInfo.CodecProfileLevel.AVCProfileMain,
-            targetLevel
-        ) || camera.prepareVideo(
-            baseWidth,
-            baseHeight,
+            safeW,
+            safeH,
             currentFps,
             currentVideoBitrate,
             iFrameInterval,
@@ -843,8 +920,8 @@ class RootEncoderLiveStreamService(
             MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
             MediaCodecInfo.CodecProfileLevel.AVCLevel31
         ) || camera.prepareVideo(
-            baseWidth,
-            baseHeight,
+            safeW,
+            safeH,
             currentFps,
             currentVideoBitrate,
             iFrameInterval,
@@ -1179,6 +1256,176 @@ class RootEncoderLiveStreamService(
         }
     }
 
+    /**
+     * Starts hardware MP4 recording using RootEncoder's RecordController.
+     * Single-Encode, Dual-Mux: shares the single running MediaCodec encoder
+     * and OpenGL scoreboard overlay with RTMP stream with zero duplicate CPU/GPU load.
+     */
+    fun startRecord(
+        filePath: String,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        scope.launch {
+            try {
+                executeStartRecordInternal(filePath)
+                onSuccess()
+            } catch (e: Exception) {
+                Log.e(TAG, "startRecord failed: ${e.message}", e)
+                val msg = e.message ?: "Błąd uruchomienia nagrywania lokalnego MP4"
+                onStatusEvent?.invoke("ERROR", mapOf("error" to msg))
+                onError(msg)
+            }
+        }
+    }
+
+    @Synchronized
+    private fun executeStartRecordInternal(filePath: String) {
+        val camera = ensureCameraInstance()
+        val isAlreadyStreaming = camera.isStreaming || isStreamingActive
+
+        if (!isAlreadyStreaming) {
+            detachSharedPreviewIfAttached(camera)
+            if (camera.isRecording) {
+                try {
+                    camera.stopRecord()
+                } catch (_: Exception) {}
+            }
+            if (camera.isOnPreview) {
+                try {
+                    camera.stopPreview()
+                } catch (_: Exception) {}
+            }
+            try {
+                camera.resetVideoEncoder()
+            } catch (_: Exception) {}
+
+            camera.forceCodecType(CodecUtil.CodecType.HARDWARE, CodecUtil.CodecType.HARDWARE)
+            camera.setVideoCodec(VideoCodec.H264)
+            camera.setAudioCodec(AudioCodec.AAC)
+            (camera.glInterface as? GlStreamInterface)?.setAspectRatioMode(AspectRatioMode.Adjust)
+
+            val isPortraitMode = currentHeight > currentWidth
+            val rotation = resolveDeviceRotation(currentWidth, currentHeight, isPortraitMode)
+            val baseWidth = maxOf(currentWidth, currentHeight)
+            val baseHeight = minOf(currentWidth, currentHeight)
+
+            val videoPrepared = prepareVideoEncoderWithZeroLatency(camera, baseWidth, baseHeight, rotation)
+            if (!videoPrepared) {
+                throw IllegalStateException("Sprzętowy enkoder MediaCodec H.264 odrzucił konfigurację ${currentWidth}x${currentHeight}@${currentFps}fps")
+            }
+
+            camera.prepareAudio(
+                currentAudioBitrate,
+                currentAudioSampleRate,
+                true,
+                false,
+                false
+            ) || camera.prepareAudio(
+                128_000,
+                44_100,
+                true,
+                false,
+                false
+            )
+
+            camera.forceFpsLimit(true)
+            val facing = camera.cameraFacing
+            if (!camera.isOnPreview) {
+                try {
+                    camera.startPreview(facing, baseWidth, baseHeight, currentFps, rotation)
+                } catch (e: Exception) {
+                    Log.w(TAG, "startPreview warning: ${e.message}")
+                }
+            }
+            enforceFixedAeFpsRange(currentFps)
+        }
+
+        camera.startRecord(filePath, object : RecordController.Listener {
+            override fun onStatusChange(status: RecordController.Status) {
+                Log.d(TAG, "RecordController status: $status")
+                when (status) {
+                    RecordController.Status.STARTED -> {
+                        isRecordingActive = true
+                        currentRecordPath = filePath
+                        onStatusEvent?.invoke(
+                            "RECORDING_STARTED",
+                            mapOf("path" to filePath)
+                        )
+                    }
+                    RecordController.Status.STOPPED -> {
+                        isRecordingActive = false
+                        val path = currentRecordPath ?: filePath
+                        currentRecordPath = null
+                        onStatusEvent?.invoke(
+                            "RECORDING_STOPPED",
+                            mapOf("path" to path)
+                        )
+                    }
+                    RecordController.Status.RECORDING -> {
+                        isRecordingActive = true
+                    }
+                    RecordController.Status.PAUSED, RecordController.Status.RESUMED -> {}
+                }
+            }
+        })
+
+        isRecordingActive = true
+        currentRecordPath = filePath
+
+        if (!isAlreadyStreaming) {
+            attachSharedPreviewIfPossible(camera)
+            attachAndRefreshScoreboardFilter(camera)
+        }
+
+        Log.i(TAG, "RootEncoder hardware recording started: $filePath")
+        onStatusEvent?.invoke(
+            "RECORDING_STARTED",
+            mapOf("path" to filePath)
+        )
+    }
+
+    fun stopRecord(
+        onSuccess: (String?) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        scope.launch {
+            try {
+                val path = currentRecordPath
+                synchronized(this@RootEncoderLiveStreamService) {
+                    val camera = rtmpCamera2
+                    if (camera?.isRecording == true) {
+                        camera.stopRecord()
+                    }
+                    isRecordingActive = false
+                    currentRecordPath = null
+
+                    if (camera?.isStreaming != true && !isStreamingActive) {
+                        try {
+                            camera?.glInterface?.clearFilters()
+                        } catch (_: Exception) {}
+                        scoreboardFilter = null
+                        detachSharedPreviewIfAttached(camera)
+                        if (camera?.isOnPreview == true) {
+                            try {
+                                camera.stopPreview()
+                            } catch (_: Exception) {}
+                        }
+                    }
+                }
+                onStatusEvent?.invoke(
+                    "RECORDING_STOPPED",
+                    mapOf("path" to (path ?: ""))
+                )
+                onSuccess(path)
+            } catch (e: Exception) {
+                Log.e(TAG, "stopRecord failed: ${e.message}", e)
+                val msg = e.message ?: "Błąd zatrzymania nagrywania"
+                onError(msg)
+            }
+        }
+    }
+
     fun switchCamera() {
         scope.launch {
             try {
@@ -1189,32 +1436,37 @@ class RootEncoderLiveStreamService(
         }
     }
 
-    fun stopStream() {
+    suspend fun stopStream() = withContext(Dispatchers.IO) {
         isUserStopped = true
         isStreamingActive = false
         reconnectJob?.cancel()
         reconnectJob = null
+        bitrateAdapter?.reset()
 
-        scope.launch {
-            synchronized(this@RootEncoderLiveStreamService) {
+        synchronized(this@RootEncoderLiveStreamService) {
+            val isStillRecording = rtmpCamera2?.isRecording == true || isRecordingActive
+            if (!isStillRecording) {
                 try {
                     rtmpCamera2?.glInterface?.clearFilters()
                 } catch (_: Exception) {}
                 scoreboardFilter = null
-                try {
-                    detachSharedPreviewIfAttached(rtmpCamera2)
-                    if (rtmpCamera2?.isStreaming == true) {
-                        rtmpCamera2?.stopStream()
-                    }
-                    if (rtmpCamera2?.isOnPreview == true) {
-                        rtmpCamera2?.stopPreview()
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "stopStream warning: ${e.message}")
-                }
+                detachSharedPreviewIfAttached(rtmpCamera2)
             }
-            onStatusEvent?.invoke("DISCONNECTED", mapOf("details" to "Transmisja zakończona"))
+            try {
+                if (rtmpCamera2?.isStreaming == true) {
+                    rtmpCamera2?.stopStream()
+                }
+                if (!isStillRecording && rtmpCamera2?.isOnPreview == true) {
+                    rtmpCamera2?.stopPreview()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "stopStream warning: ${e.message}")
+            }
         }
+        if (!isRecordingActive && rtmpCamera2?.isRecording != true) {
+            delay(200)
+        }
+        onStatusEvent?.invoke("DISCONNECTED", mapOf("details" to "Transmisja zakończona"))
     }
 
     fun release() {
@@ -1222,7 +1474,20 @@ class RootEncoderLiveStreamService(
             orientationListener?.disable()
             orientationListener = null
         } catch (_: Exception) {}
-        stopStream()
+        synchronized(this) {
+            if (isRecordingActive || rtmpCamera2?.isRecording == true) {
+                try {
+                    rtmpCamera2?.stopRecord()
+                } catch (_: Exception) {}
+                isRecordingActive = false
+                currentRecordPath = null
+            }
+        }
+        scope.launch {
+            try {
+                stopStream()
+            } catch (_: Exception) {}
+        }
         synchronized(this) {
             sharedPreviewSurface?.release()
             sharedPreviewSurface = null
@@ -1256,6 +1521,8 @@ class RootEncoderLiveStreamService(
         Log.i(TAG, "RTMP connection SUCCESS")
         retryCount = 0
         isStreamingActive = true
+        bitrateAdapter?.setMaxBitrate(currentVideoBitrate)
+        bitrateAdapter?.reset()
         onStatusEvent?.invoke(
             "CONNECTED",
             mapOf(
@@ -1313,21 +1580,28 @@ class RootEncoderLiveStreamService(
     }
 
     override fun onNewBitrate(bitrate: Long) {
+        onBitrateRtmp(bitrate)
         if (!isStreamingActive) return
         onStatusEvent?.invoke(
             "BITRATE_UPDATE",
             mapOf(
                 "bitrate" to bitrate.toInt(),
                 "fps" to currentFps,
-                "droppedFrames" to 0,
+                "droppedFrames" to (rtmpCamera2?.streamClient?.getDroppedVideoFrames() ?: 0L),
                 "jitterMs" to 0.5
             )
         )
     }
 
+    fun onBitrateRtmp(bitrate: Long) {
+        val congestion = rtmpCamera2?.streamClient?.hasCongestion() ?: false
+        bitrateAdapter?.adaptBitrate(bitrate, congestion)
+    }
+
     override fun onDisconnect() {
         Log.i(TAG, "RTMP disconnected")
         isStreamingActive = false
+        bitrateAdapter?.reset()
         if (isReconfiguring) {
             Log.i(TAG, "onDisconnect suppressed during reconfigureStream")
             return

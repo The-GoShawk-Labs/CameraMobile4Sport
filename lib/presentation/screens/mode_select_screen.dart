@@ -329,7 +329,13 @@ class ModeSelectScreen extends StatelessWidget {
                           children: [
                             Expanded(
                               child: ElevatedButton.icon(
-                                onPressed: () => context.push(AppRouter.cameraRoute),
+                                onPressed: () {
+                                if (p2p.isSinglePhoneMode) {
+                                  context.push(AppRouter.scorerRoute);
+                                } else {
+                                  context.push(AppRouter.cameraRoute);
+                                }
+                              },
                                 icon: const Icon(Icons.videocam, size: 14),
                                 label: const Text('PODGLĄD KAMERY', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
                                 style: ElevatedButton.styleFrom(
@@ -613,7 +619,7 @@ class ModeSelectScreen extends StatelessWidget {
                             child: ElevatedButton(
                               onPressed: () {
                                 p2p.selectRole(DeviceRole.singlePhoneAllInOne);
-                                context.push(AppRouter.cameraRoute);
+                                context.push(AppRouter.scorerRoute);
                               },
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: AppTheme.cyanAccent,
@@ -626,7 +632,7 @@ class ModeSelectScreen extends StatelessWidget {
                                 children: [
                                   Icon(Icons.camera_alt, size: 15),
                                   SizedBox(height: 2),
-                                  Text('1. KAMERA', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w900)),
+                                  Text('1. KAMERA (SOLO)', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w900)),
                                 ],
                               ),
                             ),

@@ -363,6 +363,18 @@ class P2PConnectionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Bezpieczne przejście z trybu Dual (P2P) na Solo (Single Phone):
+  /// rozłącza gniazdo P2P, czyści bufory wideo i ustawia rolę pojedynczego smartfona.
+  Future<void> switchToSoloMode() async {
+    await disconnect();
+    selectRole(DeviceRole.singlePhoneAllInOne);
+  }
+
+  /// Przejście na tryb Dual (Phone B - Scorer / Pilot):
+  void switchToDualMode({DeviceRole role = DeviceRole.scorerPhoneB}) {
+    selectRole(role);
+  }
+
   @override
   void dispose() {
     _stateSub?.cancel();

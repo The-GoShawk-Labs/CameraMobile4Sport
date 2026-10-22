@@ -119,6 +119,15 @@ class NativeStreamBurnerBridge {
   bool get isPortraitStream => _lastIsPortrait ?? false;
   StreamSubscription? _eventSubscription;
 
+  bool _isRecording = false;
+  bool get isRecording => _isRecording;
+  String? _lastRecordPath;
+  String? get lastRecordPath => _lastRecordPath;
+
+  bool get isStreaming =>
+      _currentStatus == NativeStreamStatus.streaming ||
+      _currentStatus == NativeStreamStatus.connected;
+
   // Auto-reconnect retry configuration
   int _retryAttempt = 0;
   final int _maxRetryAttempts = 3;
@@ -246,6 +255,23 @@ class NativeStreamBurnerBridge {
             telemetry: telemetry,
           ),
         );
+        break;
+
+      case 'RECORDING_STARTED':
+        _isRecording = true;
+        final startPath = map['path'] as String?;
+        if (startPath != null && startPath.isNotEmpty) {
+          _lastRecordPath = startPath;
+        }
+        break;
+
+      case 'RECORDING_STOPPED':
+      case 'RECORDING_SEGMENT_COMPLETED':
+        _isRecording = false;
+        final stopPath = map['path'] as String?;
+        if (stopPath != null && stopPath.isNotEmpty) {
+          _lastRecordPath = stopPath;
+        }
         break;
 
       case 'ERROR':
@@ -428,6 +454,78 @@ class NativeStreamBurnerBridge {
       );
     } on PlatformException catch (e) {
       debugPrint('[NativeStreamBurnerBridge] stopStream error: ${e.message}');
+    }
+  }
+
+  /// Starts hardware MP4 recording using RootEncoder's RecordController.
+  /// Shares single running MediaCodec instance with RTMP streaming (Zero-Overhead / Single-Encode, Dual-Mux).
+  Future<bool> startRecord(String filePath) async {
+    if (kIsWeb || Platform.environment.containsKey('FLUTTER_TEST')) {
+      _isRecording = true;
+      _lastRecordPath = filePath;
+      return true;
+    }
+    try {
+      final bool? success = await _methodChannel.invokeMethod('startRecord', {
+        'filePath': filePath,
+      });
+      if (success == true) {
+        _isRecording = true;
+        _lastRecordPath = filePath;
+        return true;
+      }
+      return false;
+    } on PlatformException catch (e) {
+      debugPrint('[NativeStreamBurnerBridge] startRecord failed: ${e.message}');
+      return false;
+    }
+  }
+
+  /// Stops hardware MP4 recording and returns the final saved file path.
+  Future<String?> stopRecord() async {
+    if (kIsWeb || Platform.environment.containsKey('FLUTTER_TEST')) {
+      _isRecording = false;
+      return _lastRecordPath;
+    }
+    try {
+      final dynamic result = await _methodChannel.invokeMethod('stopRecord');
+      _isRecording = false;
+      if (result is String && result.isNotEmpty) {
+        _lastRecordPath = result;
+        return result;
+      }
+      return _lastRecordPath;
+    } on PlatformException catch (e) {
+      debugPrint('[NativeStreamBurnerBridge] stopRecord failed: ${e.message}');
+      _isRecording = false;
+      return null;
+    }
+  }
+
+  /// Queries native layer for active hardware MP4 recording state.
+  Future<bool> checkIsRecording() async {
+    if (kIsWeb || Platform.environment.containsKey('FLUTTER_TEST')) {
+      return _isRecording;
+    }
+    try {
+      final bool? res = await _methodChannel.invokeMethod('isRecording');
+      if (res != null) _isRecording = res;
+      return _isRecording;
+    } catch (_) {
+      return _isRecording;
+    }
+  }
+
+  /// Queries native layer for active RTMP stream state.
+  Future<bool> checkIsStreaming() async {
+    if (kIsWeb || Platform.environment.containsKey('FLUTTER_TEST')) {
+      return isStreaming;
+    }
+    try {
+      final bool? res = await _methodChannel.invokeMethod('isStreaming');
+      return res ?? isStreaming;
+    } catch (_) {
+      return isStreaming;
     }
   }
 

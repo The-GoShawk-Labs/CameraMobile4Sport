@@ -12,6 +12,7 @@ import 'package:volleylive/domain/models/match_session.dart';
 import 'package:volleylive/domain/models/score_event.dart';
 import 'package:volleylive/domain/models/recording_result.dart';
 import 'package:volleylive/domain/models/streaming_config.dart';
+import 'package:volleylive/domain/services/native_stream_burner_bridge.dart';
 import 'package:volleylive/domain/services/recording_service.dart';
 import 'package:volleylive/domain/services/video_transport_service.dart';
 import 'package:volleylive/presentation/providers/p2p_connection_provider.dart';
@@ -201,11 +202,16 @@ class CameraProvider extends ChangeNotifier {
       try {
         await controller.dispose();
       } catch (_) {}
-      await Future.delayed(const Duration(milliseconds: 150));
+      await Future.delayed(const Duration(milliseconds: 300));
     }
   }
 
   Future<void> initializeCamera() async {
+    final nativeBridge = NativeStreamBurnerBridge();
+    if (nativeBridge.isStreaming || nativeBridge.isRecording) {
+      debugPrint('[CameraProvider] NativeStreamBurnerBridge is currently active (streaming or recording). Skipping CameraX initialization to prevent CameraDevice collision.');
+      return;
+    }
     try {
       _availableCameras = await availableCameras();
       if (_availableCameras.isEmpty) {
@@ -602,10 +608,14 @@ class CameraProvider extends ChangeNotifier {
       _currentSession = matchSession;
     }
 
+    final nativeBridge = NativeStreamBurnerBridge();
+    final isNativeActive = nativeBridge.isStreaming || nativeBridge.isRecording;
+
     if (_recordingService.currentState == RecordingState.recording) {
       notifyListeners();
       await _recordingService.stopRecording(
-        cameraController: _cameraController,
+        cameraController: isNativeActive ? null : _cameraController,
+        nativeStreamBridge: isNativeActive ? nativeBridge : null,
         storageFolder: _settings.storageFolder,
         finalSession: matchSession ?? _currentSession,
         scoreboardStyle: scoreboardStyle ?? ScoreboardThemeStyle.tvProBroadcast,
@@ -624,12 +634,13 @@ class CameraProvider extends ChangeNotifier {
         _recordingService.reset();
       }
 
-      final isSimulation = _isSimulationMode ||
-          _cameraController == null ||
-          !_cameraController!.value.isInitialized ||
-          Platform.environment.containsKey('FLUTTER_TEST');
+      final isSimulation = !isNativeActive &&
+          (_isSimulationMode ||
+              _cameraController == null ||
+              !_cameraController!.value.isInitialized ||
+              Platform.environment.containsKey('FLUTTER_TEST'));
 
-      if (_cameraController != null) {
+      if (!isNativeActive && _cameraController != null) {
         if (_cameraController!.value.isStreamingImages) {
           try {
             await _cameraController!.stopImageStream();
@@ -643,7 +654,8 @@ class CameraProvider extends ChangeNotifier {
       notifyListeners();
       _activeRecordingType = typeToRecord;
       await _recordingService.startMasterRecording(
-        cameraController: isSimulation ? null : _cameraController,
+        cameraController: (isSimulation || isNativeActive) ? null : _cameraController,
+        nativeStreamBridge: isNativeActive ? nativeBridge : null,
         remoteFrameStream: programFrameStream,
         initialFrame: initialProgramFrame,
         rawCameraFrameStream: rawCameraFrameStream,
