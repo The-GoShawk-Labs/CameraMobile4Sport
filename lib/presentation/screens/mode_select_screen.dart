@@ -19,7 +19,7 @@ class ModeSelectScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final match = context.watch<MatchProvider>();
-    final p2p = context.read<P2PConnectionProvider>();
+    final p2p = context.watch<P2PConnectionProvider>();
     final camera = context.watch<CameraProvider>();
 
     return Scaffold(
@@ -204,7 +204,67 @@ class ModeSelectScreen extends StatelessWidget {
                   ),
                 ),
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
+
+                // WSKAŹNIK AKTUALNEGO TRYBU PRACY SYSTEMU (SOLO vs DUAL)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: p2p.isSinglePhoneMode
+                        ? const Color(0xFF0C2433)
+                        : const Color(0xFF0C2B1D),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: p2p.isSinglePhoneMode
+                          ? AppTheme.cyanAccent
+                          : AppTheme.greenLive,
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      PulseDot(
+                        color: p2p.isSinglePhoneMode
+                            ? AppTheme.cyanAccent
+                            : AppTheme.greenLive,
+                        size: 9,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              p2p.isSinglePhoneMode
+                                  ? 'AKTYWNY TRYB: SOLO (1 SMARTFON - ALL-IN-ONE)'
+                                  : 'AKTYWNY TRYB: DUAL (2 SMARTFONY - P2P VOLLEYLIVE)',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w900,
+                                color: p2p.isSinglePhoneMode
+                                    ? AppTheme.cyanAccent
+                                    : AppTheme.greenLive,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              p2p.isSinglePhoneMode
+                                  ? 'Kamera i tablica sędziowska działają na tym samym urządzeniu.'
+                                  : 'Phone A (kamera na statywie) łączy się bezprzewodowo z Phone B (pilotem).',
+                              style: const TextStyle(
+                                fontSize: 9.5,
+                                color: Colors.white70,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 16),
 
                 // SZYBKIE WZNOWIENIE MECZU (QUICK RESUME / CRASH RECOVERY)
                 if (match.session.currentSetPointsA > 0 || match.session.currentSetPointsB > 0 || match.session.setsA > 0 || match.session.setsB > 0) ...[
@@ -269,7 +329,9 @@ class ModeSelectScreen extends StatelessWidget {
                             const SizedBox(width: 8),
                             ElevatedButton(
                               onPressed: () {
-                                p2p.selectRole(DeviceRole.scorerPhoneB);
+                                if (p2p.currentRole == DeviceRole.none) {
+                                  p2p.selectRole(DeviceRole.singlePhoneAllInOne);
+                                }
                                 context.push(AppRouter.scorerRoute);
                               },
                               style: ElevatedButton.styleFrom(

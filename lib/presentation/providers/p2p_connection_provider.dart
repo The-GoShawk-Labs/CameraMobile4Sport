@@ -1,15 +1,17 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:volleylive/core/utils/pairing_scheme_helper.dart';
 import 'package:volleylive/data/models/p2p_message.dart';
 import 'package:volleylive/data/repositories/p2p_connection_repository.dart';
 import 'package:volleylive/domain/models/connection_state.dart';
 
 class P2PConnectionProvider extends ChangeNotifier {
+  static const String _kSelectedRoleKey = 'p2p_selected_device_role';
   final IP2PConnectionRepository _repository;
 
-  DeviceRole _currentRole = DeviceRole.none;
+  DeviceRole _currentRole = DeviceRole.singlePhoneAllInOne;
   CameraConnectionState _connectionState = CameraConnectionState.disconnected;
   StreamHealthMetrics _healthMetrics = const StreamHealthMetrics();
 
@@ -43,6 +45,25 @@ class P2PConnectionProvider extends ChangeNotifier {
   P2PConnectionProvider({IP2PConnectionRepository? repository})
     : _repository = repository ?? P2PConnectionRepository() {
     _initListeners();
+    _loadPersistedRole();
+  }
+
+  Future<void> _loadPersistedRole() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedRoleName = prefs.getString(_kSelectedRoleKey);
+      if (savedRoleName != null && savedRoleName.isNotEmpty) {
+        for (final role in DeviceRole.values) {
+          if (role.name == savedRoleName || role.idName == savedRoleName) {
+            _currentRole = role;
+            notifyListeners();
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[P2PConnectionProvider] Failed to load persisted role: $e');
+    }
   }
 
   DeviceRole get currentRole => _currentRole;
@@ -78,11 +99,19 @@ class P2PConnectionProvider extends ChangeNotifier {
   CameraControlPayload? get lastReceivedCameraControl =>
       _lastReceivedCameraControl;
   bool? get lastReceivedRecorderTrigger => _lastReceivedRecorderTrigger;
-  bool get isSinglePhoneMode => _currentRole == DeviceRole.singlePhoneAllInOne;
+  bool get isSinglePhoneMode =>
+      _currentRole == DeviceRole.singlePhoneAllInOne ||
+      _currentRole == DeviceRole.none;
 
-  void selectRole(DeviceRole role) {
+  Future<void> selectRole(DeviceRole role) async {
     _currentRole = role;
     notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kSelectedRoleKey, role.name);
+    } catch (e) {
+      debugPrint('[P2PConnectionProvider] Failed to persist role: $e');
+    }
   }
 
   void setRemoteDeviceName(String name) {
@@ -367,12 +396,12 @@ class P2PConnectionProvider extends ChangeNotifier {
   /// rozłącza gniazdo P2P, czyści bufory wideo i ustawia rolę pojedynczego smartfona.
   Future<void> switchToSoloMode() async {
     await disconnect();
-    selectRole(DeviceRole.singlePhoneAllInOne);
+    await selectRole(DeviceRole.singlePhoneAllInOne);
   }
 
   /// Przejście na tryb Dual (Phone B - Scorer / Pilot):
-  void switchToDualMode({DeviceRole role = DeviceRole.scorerPhoneB}) {
-    selectRole(role);
+  Future<void> switchToDualMode({DeviceRole role = DeviceRole.scorerPhoneB}) async {
+    await selectRole(role);
   }
 
   @override

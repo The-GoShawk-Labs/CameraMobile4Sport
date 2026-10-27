@@ -58,6 +58,7 @@ class CameraProvider extends ChangeNotifier {
       StreamController<Uint8List>.broadcast();
 
   Timer? _audioSimTimer;
+  bool _isInitializingCamera = false;
 
   CameraProvider({
     bool? enableAudioSim,
@@ -207,12 +208,37 @@ class CameraProvider extends ChangeNotifier {
   }
 
   Future<void> initializeCamera() async {
+    if (_isInitializingCamera) return;
+    if (_isCameraInitialized &&
+        _cameraController != null &&
+        _cameraController!.value.isInitialized) {
+      debugPrint('[CameraProvider] Camera already initialized and healthy. Skipping redundant re-init.');
+      return;
+    }
+
     final nativeBridge = NativeStreamBurnerBridge();
     if (nativeBridge.isStreaming || nativeBridge.isRecording) {
       debugPrint('[CameraProvider] NativeStreamBurnerBridge is currently active (streaming or recording). Skipping CameraX initialization to prevent CameraDevice collision.');
       return;
     }
+
+    _isInitializingCamera = true;
     try {
+      final prev = _cameraController;
+      _cameraController = null;
+      _isCameraInitialized = false;
+      if (prev != null) {
+        if (prev.value.isStreamingImages) {
+          try {
+            await prev.stopImageStream();
+          } catch (_) {}
+        }
+        try {
+          await prev.dispose();
+        } catch (_) {}
+        await Future.delayed(const Duration(milliseconds: 150));
+      }
+
       _availableCameras = await availableCameras();
       if (_availableCameras.isEmpty) {
         _isSimulationMode = true;
@@ -291,6 +317,8 @@ class CameraProvider extends ChangeNotifier {
       _isCameraInitialized = false;
       _cameraErrorMessage = e.toString();
       notifyListeners();
+    } finally {
+      _isInitializingCamera = false;
     }
   }
 

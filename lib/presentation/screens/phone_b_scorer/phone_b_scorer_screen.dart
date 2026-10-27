@@ -1026,6 +1026,14 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
               if (isPortrait)
                 Column(
                   children: [
+                    // 0. GÓRNY PASEK TRYBU PRACY SYSTEMU (SOLO / DUAL)
+                    _buildPermanentModeIndicatorBanner(
+                      context,
+                      p2p,
+                      streamer,
+                      camera,
+                      isOutdoor,
+                    ),
                     // 1. GÓRNY PASEK STATUSU HUD (MENU, LIVE/REC, STATUS PHONE A)
                     _buildTopBroadcastHUD(
                       context,
@@ -1213,13 +1221,26 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                     ],
                   )
                 else
-                  _buildLandscapeSplitView(
-                    context,
-                    match,
-                    streamer,
-                    camera,
-                    p2p,
-                    isOutdoor,
+                  Column(
+                    children: [
+                      _buildPermanentModeIndicatorBanner(
+                        context,
+                        p2p,
+                        streamer,
+                        camera,
+                        isOutdoor,
+                      ),
+                      Expanded(
+                        child: _buildLandscapeSplitView(
+                          context,
+                          match,
+                          streamer,
+                          camera,
+                          p2p,
+                          isOutdoor,
+                        ),
+                      ),
+                    ],
                   ),
 
               // =============================================================
@@ -1234,6 +1255,161 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildPermanentModeIndicatorBanner(
+    BuildContext context,
+    P2PConnectionProvider p2p,
+    StreamerProvider streamer,
+    CameraProvider camera,
+    bool isOutdoor,
+  ) {
+    final bool isSingleMode = p2p.isSinglePhoneMode;
+    final bool isConnected =
+        p2p.connectionState == CameraConnectionState.connected;
+
+    final Color primaryColor = isSingleMode
+        ? AppTheme.cyanAccent
+        : (isConnected ? AppTheme.greenLive : Colors.redAccent);
+
+    final Color bgColor = isSingleMode
+        ? const Color(0xFF0C2433)
+        : (isConnected ? const Color(0xFF0C2B1D) : const Color(0xFF331418));
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: bgColor,
+        border: Border(
+          bottom: BorderSide(
+            color: primaryColor.withValues(alpha: 0.8),
+            width: 1.5,
+          ),
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // Lewa strona: pulsująca kropka + ikona + nazwa trybu
+          InkWell(
+            onTap: () {
+              HapticFeedback.selectionClick();
+              _showModeDetailsModal(
+                context,
+                isSingleMode,
+                p2p,
+                streamer,
+                camera,
+              );
+            },
+            borderRadius: BorderRadius.circular(6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                PulseDot(color: primaryColor, size: 8),
+                const SizedBox(width: 7),
+                Icon(
+                  isSingleMode ? Icons.phone_android : Icons.phonelink,
+                  color: primaryColor,
+                  size: 15,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  isSingleMode
+                      ? 'TRYB SOLO (1 SMARTFON - LOKALNA KAMERA)'
+                      : (isConnected
+                            ? 'TRYB DUAL (ODBIÓR Z PHONE A • ${p2p.healthMetrics.latencyMs}ms)'
+                            : 'TRYB DUAL (BRAK SYGNAŁU Z PHONE A)'),
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w900,
+                    color: primaryColor,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Prawa strona: przyciski akcji trybu
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (!isSingleMode && !isConnected)
+                ElevatedButton.icon(
+                  onPressed: () {
+                    HapticFeedback.mediumImpact();
+                    _showEmergencySwitchToSoloDialog();
+                  },
+                  icon: const Icon(Icons.swap_horiz, size: 13),
+                  label: const Text('AWARYJNE SOLO'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.amberAccent,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    minimumSize: const Size(0, 26),
+                    textStyle: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                )
+              else
+                InkWell(
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    _showModeDetailsModal(
+                      context,
+                      isSingleMode,
+                      p2p,
+                      streamer,
+                      camera,
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(6),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white10,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isSingleMode ? Icons.phonelink : Icons.phone_android,
+                          size: 11,
+                          color: Colors.white70,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          isSingleMode ? 'ZMIEŃ NA DUAL' : 'ZMIEŃ NA SOLO',
+                          style: const TextStyle(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -2401,6 +2577,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
           HapticFeedback.selectionClick();
           setState(() {
             _isControlsHidden = false;
+            _selectedNavIndex = 0;
           });
         }
       },
@@ -4353,7 +4530,7 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
     final items = [
       {'label': 'SCORER', 'icon': Icons.sports_score},
       {
-        'label': p2p.isSinglePhoneMode ? 'KADR / PEŁNY' : 'KAMERA',
+        'label': 'KAMERA',
         'icon': Icons.camera_alt_outlined,
       },
       {'label': 'STATS', 'icon': Icons.analytics_outlined},
@@ -4383,16 +4560,24 @@ class _PhoneBScorerScreenState extends State<PhoneBScorerScreen>
                   _selectedNavIndex = index;
                 });
 
-                if (index == 1) {
-                  // W TRYBIE SOLO: PRZEŁĄCZ PEŁNY KADR / UKRYJ KOKPIT ZAMIAST NIEBEZPIECZNEGO ROUTINGU
-                  if (p2p.isSinglePhoneMode) {
-                    setState(() {
-                      _isControlsHidden = !_isControlsHidden;
-                    });
-                  } else {
-                    // W TRYBIE DUAL: PRZEJDŹ DO EKRANU KAMERY PHONE A CZYSTYM GO
-                    context.go(AppRouter.cameraRoute);
-                  }
+                if (index == 0) {
+                  // SCORER - KOKPIT SĘDZIEGO: przywróć pełny panel sterowania punktami
+                  setState(() {
+                    _selectedNavIndex = 0;
+                    _isControlsHidden = false;
+                    _isLandscapeFullScreenPreview = false;
+                  });
+                } else if (index == 1) {
+                  // KAMERA / KADR: W obu trybach (Solo oraz Dual) przełącz na pełny podgląd kadru
+                  // z minimalistycznymi kontrolkami thumb-zone, BEZ opuszczania ekranu i BEZ
+                  // reinicjalizacji kontrolera kamery, co zapobiega zamrażaniu obrazu!
+                  setState(() {
+                    _selectedNavIndex = 1;
+                    _isControlsHidden = true;
+                    if (MediaQuery.of(context).orientation == Orientation.landscape) {
+                      _isLandscapeFullScreenPreview = true;
+                    }
+                  });
                 } else if (index == 2) {
                   // STATS
                   context.push(AppRouter.statisticianRoute);

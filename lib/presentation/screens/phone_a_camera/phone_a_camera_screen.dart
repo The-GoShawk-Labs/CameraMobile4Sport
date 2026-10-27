@@ -25,6 +25,7 @@ import 'package:volleylive/presentation/widgets/camera_controls_overlay.dart';
 import 'package:volleylive/presentation/widgets/recovery_banner.dart';
 import 'package:volleylive/presentation/widgets/recording_summary_dialog.dart';
 import 'package:volleylive/presentation/widgets/scoreboard_overlay.dart';
+import 'package:volleylive/presentation/widgets/sports_ui_components.dart';
 
 class PhoneACameraScreen extends StatefulWidget {
   const PhoneACameraScreen({super.key});
@@ -1023,9 +1024,35 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
                   ),
                   const SizedBox(width: 8),
 
+                  // WSKAŹNIK TRYBU DUAL DLA PHONE A
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0C2433),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.8), width: 1.2),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const PulseDot(color: AppTheme.cyanAccent, size: 7),
+                        const SizedBox(width: 5),
+                        const Text(
+                          'DUAL: PHONE A (KAMERA STATYW)',
+                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: AppTheme.cyanAccent),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+
                   // PRZEŁĄCZNIK: SĘDZIA
                   InkWell(
-                    onTap: () {
+                    onTap: () async {
+                      if (!camera.isRecording) {
+                        await camera.releaseCameraForExternalStreamer();
+                      }
+                      if (!mounted) return;
                       _showBackgroundRecNotice(context, camera);
                       context.go(AppRouter.scorerRoute);
                     },
@@ -1349,8 +1376,32 @@ class _PhoneACameraScreenState extends State<PhoneACameraScreen> {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0C2433),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppTheme.cyanAccent.withValues(alpha: 0.8), width: 1.2),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const PulseDot(color: AppTheme.cyanAccent, size: 7),
+                      const SizedBox(width: 5),
+                      const Text(
+                        'DUAL: PHONE A',
+                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: AppTheme.cyanAccent),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
                 InkWell(
-                  onTap: () {
+                  onTap: () async {
+                    if (!camera.isRecording) {
+                      await camera.releaseCameraForExternalStreamer();
+                    }
+                    if (!mounted) return;
                     _showBackgroundRecNotice(context, camera);
                     context.go(AppRouter.scorerRoute);
                   },
